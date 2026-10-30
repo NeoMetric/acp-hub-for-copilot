@@ -1,4 +1,5 @@
 node_modules/
+.scratch/
 dist/
 out/
 .vscode-test/

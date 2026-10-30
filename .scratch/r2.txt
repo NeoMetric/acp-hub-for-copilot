@@ -1,2 +1,0 @@
-		const blocks = buildPromptBlocks(messages, startIndex, lastUser, restoreContext, session, this.log);
-		if (blocks.length === 0) {
