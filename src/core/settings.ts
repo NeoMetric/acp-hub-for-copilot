@@ -25,6 +25,9 @@ function isValid(spec: SettingSpec, value: unknown): boolean {
 	if (spec.type === 'boolean') {
 		return typeof value === 'boolean';
 	}
+	if (spec.type === 'string-list') {
+		return Array.isArray(value) && value.every(item => typeof item === 'string');
+	}
 	return typeof value === 'string' && (spec.options ?? []).includes(value);
 }
 

@@ -35,6 +35,14 @@ describe('readAgentSettings', () => {
 		expect(result.warnings[0]).toContain('acpHub.agents.demo.timeoutSeconds');
 	});
 
+	it('accepts a list of strings and rejects anything else for a list setting', () => {
+		const listAdapter = { id: 'demo', settings: [{ key: 'args', type: 'string-list', label: 'Args', description: '', default: [] }] } as unknown as AgentAdapter;
+		expect(readAgentSettings(listAdapter, configOf({ 'agents.demo.args': ['--a', 'b'] })).values.args).toEqual(['--a', 'b']);
+		const bad = readAgentSettings(listAdapter, configOf({ 'agents.demo.args': ['--a', 3] }));
+		expect(bad.values.args).toEqual([]);
+		expect(bad.warnings).toHaveLength(1);
+	});
+
 	it('rejects a negative number and an enum value that is not offered', () => {
 		const result = readAgentSettings(adapter, configOf({ 'agents.demo.timeoutSeconds': -5, 'agents.demo.permissionMode': 'bogus' }));
 		expect(result.values).toEqual({ permissionMode: 'default', timeoutSeconds: 120, verbose: false });
