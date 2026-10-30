@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+.vscode-test/
+*.vsix
+.DS_Store
+npm-debug.log*
+Thumbs.db
+Desktop.ini
+.env
+.env.local
