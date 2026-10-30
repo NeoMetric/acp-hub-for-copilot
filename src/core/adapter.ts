@@ -42,7 +42,7 @@ export interface LaunchSpec {
 
 export type AuthMethodSpec =
 	| { kind: 'oauth-browser'; label: string; terminalCommand?: string[] }
-	| { kind: 'api-key'; label: string; envVar: string }
+	| { kind: 'api-key'; label: string; envVar: string; /** Start of a usual key; a key without it only gets a warning. */ keyPrefix?: string }
 	| { kind: 'agent-managed'; label: string };
 
 export interface UsageWindow {
