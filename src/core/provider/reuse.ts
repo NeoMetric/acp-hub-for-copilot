@@ -6,7 +6,7 @@
 import type * as vscode from 'vscode';
 import type { Log } from '../logging';
 import { findForkSource, hashAll, isPrefixOf, mismatchOf, shortHash, toolsHashOf, type ReuseCheck, type SavedSessionStore } from '../sessionStore';
-import { guidanceHashOf } from './keys';
+import { guidanceChangeOf, guidanceHashOf, guidanceLineHashes } from './keys';
 import type { ChatContext, ChatSession, Reuse } from './types';
 
 /**
@@ -23,10 +23,17 @@ export function findReusable(saved: SavedSessionStore, key: string, fingerprints
 
 	const own = all.find(entry => entry.key === key);
 	if (own) {
-		const reason = mismatchOf(own, check) ?? (isPrefixOf(own.history, incoming) ? undefined : `the chat no longer starts with the ${own.history.length} saved message(s)`);
+		const reason = mismatchOf(own, check, { ignoreGuidance: true }) ?? (isPrefixOf(own.history, incoming) ? undefined : `the chat no longer starts with the ${own.history.length} saved message(s)`);
 		if (!reason) {
 			log(`[reuse] Saved session ${own.sessionId} matches this chat (${own.history.length} message(s) already in it); resuming it.`);
-			return { kind: 'resume', saved: own, history: fingerprints.slice(0, own.history.length) };
+			const history = fingerprints.slice(0, own.history.length);
+			if (own.guidanceHash === check.guidanceHash) {
+				return { kind: 'resume', saved: own, history };
+			}
+			const guidanceChange = guidanceChangeOf(own.guidanceLines, context.guidance);
+			const preview = guidanceChange.added.join(' | ').slice(0, 600);
+			log(`[reuse] The workspace guidance differs from the saved one (${own.guidanceHash} -> ${check.guidanceHash}): ${guidanceChange.added.length} line(s) new, ${guidanceChange.removed} gone. Resuming anyway and sending the change. New: ${preview}`, 'warn');
+			return { kind: 'resume', saved: own, history, guidanceChange };
 		}
 		log(`[reuse] Saved session ${own.sessionId} found under this key but not usable: ${reason}.`, 'warn');
 	} else {
@@ -65,6 +72,7 @@ export function rememberSession(saved: SavedSessionStore, key: string, session: 
 		toolsHash: session.toolsHash,
 		guidanceHash: session.guidanceHash,
 		promptHash: session.promptHash,
+		guidanceLines: guidanceLineHashes(session.context.guidance),
 		savedAt: Date.now(),
 	});
 	log(`[reuse] Saved session ${session.acp.sessionId} for ${key}: ${fingerprints.length} message(s).`, 'debug');

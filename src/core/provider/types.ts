@@ -96,10 +96,20 @@ export interface ChatContext {
 	readonly guidance: string | undefined;
 }
 
+/** How the guidance of a chat differs from the one its saved session was given. */
+export interface GuidanceChange {
+	/** Lines the saved session never saw. */
+	readonly added: readonly string[];
+	/** How many lines it saw that are gone. */
+	readonly removed: number;
+}
+
 /** A stored conversation that a request can continue instead of starting over. */
 export interface Reuse {
 	readonly kind: 'resume' | 'fork';
 	readonly saved: SavedSession;
+	/** Set when the chat resumes its own session although the guidance differs; the change is sent with the next prompt. */
+	readonly guidanceChange?: GuidanceChange;
 	/** The messages of the request that the stored conversation already holds. */
 	readonly history: readonly string[];
 }
@@ -122,6 +132,8 @@ export interface ChatSession {
 	readonly promptHash: string;
 	/** Hash of the user and mode instructions the agent was last given, so each change is sent once. */
 	instructionsHash?: string;
+	/** Guidance the resumed session has not been told about yet; the next prompt carries it. */
+	guidanceChange?: GuidanceChange;
 	/** Set when the session continues a stored conversation. Its first model call logs whether the cache served it. */
 	reused?: { readonly how: 'resumed' | 'forked'; readonly from: string; logged: boolean };
 	/** How the chat is listed by whoever shows per-chat figures. */

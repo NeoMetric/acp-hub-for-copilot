@@ -26,6 +26,8 @@ export interface SavedSession {
 	readonly toolsHash: string;
 	readonly guidanceHash: string;
 	readonly promptHash: string;
+	/** Hashes of the lines of the guidance, so a later window can tell what changed when the guidance hash differs. */
+	readonly guidanceLines?: readonly string[];
 	readonly savedAt: number;
 }
 
@@ -52,15 +54,20 @@ export interface ReuseCheck {
 	readonly guidanceHash: string;
 }
 
-/** Why a saved session cannot serve a request, or undefined when it can. */
-export function mismatchOf(saved: SavedSession, check: ReuseCheck): string | undefined {
+/**
+ * Why a saved session cannot serve a request, or undefined when it can.
+ * `ignoreGuidance` leaves the guidance out, for a chat resuming its own session:
+ * the host renders its prompt differently from one window to the next, and the
+ * conversation is worth more than the old wording of that prompt.
+ */
+export function mismatchOf(saved: SavedSession, check: ReuseCheck, options?: { readonly ignoreGuidance?: boolean }): string | undefined {
 	if (saved.cwd !== check.cwd) {
 		return `folder changed (${saved.cwd} -> ${check.cwd})`;
 	}
 	if (saved.toolsHash !== check.toolsHash) {
 		return 'the offered tools changed';
 	}
-	if (saved.guidanceHash !== check.guidanceHash) {
+	if (!options?.ignoreGuidance && saved.guidanceHash !== check.guidanceHash) {
 		return 'the workspace guidance changed';
 	}
 	return undefined;

@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as vscode from 'vscode';
+import { guidanceChangeOf, guidanceLineHashes } from '../../src/core/provider';
 import { findForkSource, hashAll, isPrefixOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/core/sessionStore';
 
 const check: ReuseCheck = { cwd: '/work', toolsHash: toolsHashOf(['a', 'b']), guidanceHash: 'g1' };
@@ -34,6 +35,24 @@ describe('mismatchOf', () => {
 		expect(mismatchOf(saved('k', ['u1'], { cwd: '/other' }), check)).toContain('folder');
 		expect(mismatchOf(saved('k', ['u1'], { toolsHash: 'x' }), check)).toContain('tools');
 		expect(mismatchOf(saved('k', ['u1'], { guidanceHash: 'x' }), check)).toContain('guidance');
+	});
+
+	it('can leave the guidance out while still checking the rest', () => {
+		expect(mismatchOf(saved('k', ['u1'], { guidanceHash: 'x' }), check, { ignoreGuidance: true })).toBeUndefined();
+		expect(mismatchOf(saved('k', ['u1'], { guidanceHash: 'x', toolsHash: 'y' }), check, { ignoreGuidance: true })).toContain('tools');
+	});
+});
+
+describe('guidanceChangeOf', () => {
+	const before = guidanceLineHashes('Rules\n\nUse tabs\nSkills: a, b');
+
+	it('reports the lines gained and lost', () => {
+		expect(guidanceChangeOf(before, 'Rules\nUse tabs\nSkills: a, b, c')).toEqual({ added: ['Skills: a, b, c'], removed: 1 });
+		expect(guidanceChangeOf(before, 'rules\n  USE TABS  \nSkills: a, b')).toEqual({ added: [], removed: 0 });
+	});
+
+	it('treats everything as new when the saved lines are unknown', () => {
+		expect(guidanceChangeOf(undefined, 'a\nb')).toEqual({ added: ['a', 'b'], removed: 0 });
 	});
 });
 

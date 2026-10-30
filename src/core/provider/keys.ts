@@ -9,7 +9,7 @@ import { fingerprint, isSystemMessage, textOf } from '../convert';
 import { conversationIdOf, resolveCwd, systemGuidanceOf, workspaceFoldersOf } from '../requestContext';
 import { RpcConnectionClosedError } from '../rpc';
 import { shortHash } from '../sessionStore';
-import type { ChatContext } from './types';
+import type { ChatContext, GuidanceChange } from './types';
 
 /** Failed turns in a row after which a session is replaced, so a broken one cannot trap a chat. */
 export const MAX_TURN_FAILURES = 3;
@@ -51,6 +51,39 @@ export function guidanceDiffers(before: string | undefined, after: string | unde
 
 export function guidanceHashOf(guidance: string | undefined): string {
 	return shortHash(squashGuidance(guidance));
+}
+
+/** The distinct non-empty lines of the guidance, each with the hash it is compared by. */
+function guidanceLines(guidance: string | undefined): Array<{ text: string; hash: string }> {
+	const seen = new Set<string>();
+	const lines: Array<{ text: string; hash: string }> = [];
+	for (const raw of (guidance ?? '').split(/\r?\n/)) {
+		const text = raw.trim();
+		const hash = shortHash(squashGuidance(text));
+		if (text && !seen.has(hash)) {
+			seen.add(hash);
+			lines.push({ text, hash });
+		}
+	}
+	return lines;
+}
+
+export function guidanceLineHashes(guidance: string | undefined): string[] {
+	return guidanceLines(guidance).map(line => line.hash);
+}
+
+/**
+ * What the guidance gained and lost since a session was saved. A session saved
+ * without its line hashes cannot say, so all of the current guidance counts as new.
+ */
+export function guidanceChangeOf(savedLines: readonly string[] | undefined, guidance: string | undefined): GuidanceChange {
+	const current = guidanceLines(guidance);
+	const before = new Set(savedLines);
+	const now = new Set(current.map(line => line.hash));
+	return {
+		added: current.filter(line => !before.has(line.hash)).map(line => line.text),
+		removed: savedLines ? savedLines.filter(hash => !now.has(hash)).length : 0,
+	};
 }
 
 function squashGuidance(text: string | undefined): string {

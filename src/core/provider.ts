@@ -28,7 +28,7 @@ import type { AgentApi, ChatContext, ChatSession, FinishedTurn, ProviderDeps, Re
 import { CHARS_PER_TOKEN } from './provider/usageReport';
 import { bridgeServer, WarmSession } from './provider/warmSession';
 
-export { chatIdOf, chatLabelOf, guidanceDiffers, keepsSessionAfterFailure, sessionKey, toolsDiffer } from './provider/keys';
+export { chatIdOf, chatLabelOf, guidanceChangeOf, guidanceDiffers, guidanceLineHashes, keepsSessionAfterFailure, sessionKey, toolsDiffer } from './provider/keys';
 export type { AgentApi, FinishedTurn, ProviderDeps } from './provider/types';
 
 /** Per-process nonce, so call ids from an earlier run in a chat's history never match a new call. */
@@ -48,6 +48,10 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	private readonly turnEmitter = new vscode.EventEmitter<FinishedTurn>();
 	/** Fires after a chat turn ended successfully, which spends plan limits. */
 	readonly onDidFinishTurn = this.turnEmitter.event;
+
+	private readonly signInEmitter = new vscode.EventEmitter<void>();
+	/** Fires when the agent refused a request for lack of credentials, so the account is known to be signed out. */
+	readonly onDidRequireSignIn = this.signInEmitter.event;
 
 	private readonly requestEmitter = new vscode.EventEmitter<RequestMeasurement>();
 	/** Fires after each model call of a running turn, for agents that report each call. */
@@ -410,6 +414,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		this.clientListener?.dispose();
 		this.changeEmitter.dispose();
 		this.turnEmitter.dispose();
+		this.signInEmitter.dispose();
 		this.requestEmitter.dispose();
 		void this.closeAllSessions();
 		this.warm.release();
@@ -537,6 +542,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 				guidanceHash: guidanceHashOf(context.guidance),
 				promptHash,
 				reused,
+				guidanceChange: reused ? reuse?.guidanceChange : undefined,
 			};
 			this.sessions.set(key, session);
 			// The agent ignores the model it was asked for when it opens or reopens a
@@ -669,6 +675,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	}
 
 	private promptSignIn(): void {
+		this.signInEmitter.fire();
 		if (this.signInWarningShown) {
 			return;
 		}
