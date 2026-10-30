@@ -99,19 +99,6 @@
 					"default": false,
 					"type": "boolean"
 				},
-				"acpHub.agents.claude.permissionMode": {
-					"description": "How the extension answers permission requests coming from the Claude agent. Tools that run through Copilot Chat still go through Copilot's own confirmations either way.",
-					"default": "auto",
-					"type": "string",
-					"enum": [
-						"auto",
-						"ask"
-					],
-					"enumDescriptions": [
-						"Approve the permission requests of the agent automatically.",
-						"Show the options the agent offers and decline the request unless you pick one."
-					]
-				},
 				"acpHub.agents.claude.authPreference": {
 					"description": "Which credentials the Claude agent uses when both an API key and a signed-in account (OAuth) are available. Changing it restarts the agent.",
 					"default": "auto",
@@ -148,19 +135,6 @@
 					"description": "Write each request Copilot sends to a JSON file in the extension's storage folder. The files hold the whole prompt, so keep this off unless you are debugging.",
 					"default": false,
 					"type": "boolean"
-				},
-				"acpHub.agents.codex.permissionMode": {
-					"description": "How the extension answers permission requests coming from the Codex agent. Tools that run through Copilot Chat still go through Copilot's own confirmations either way.",
-					"default": "auto",
-					"type": "string",
-					"enum": [
-						"auto",
-						"ask"
-					],
-					"enumDescriptions": [
-						"Approve the permission requests of the agent automatically.",
-						"Show the options the agent offers and decline the request unless you pick one."
-					]
 				},
 				"acpHub.agents.codex.authPreference": {
 					"description": "Which credentials the Codex agent uses when both an OpenAI API key and a ChatGPT account are available. Changing it restarts the agent.",
@@ -217,21 +191,8 @@
 						"type": "string"
 					}
 				},
-				"acpHub.agents.google.permissionMode": {
-					"description": "How the extension answers permission requests coming from the Google agent. Tools that run through Copilot Chat still go through Copilot's own confirmations either way.",
-					"default": "auto",
-					"type": "string",
-					"enum": [
-						"auto",
-						"ask"
-					],
-					"enumDescriptions": [
-						"Approve the permission requests of the agent automatically.",
-						"Show the options the agent offers and decline the request unless you pick one."
-					]
-				},
 				"acpHub.agents.google.useAgentBuiltInTools": {
-					"description": "Let the Google agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them and declines their permission requests, so the tools of your Copilot chat do the work. Antigravity may still run built-in tools that never ask for permission.",
+					"description": "Let the Google agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them so Copilot chat tools can do the work. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.",
 					"default": false,
 					"type": "boolean"
 				},

@@ -9,7 +9,6 @@
 			"id": "claude",
 			"displayName": "Claude Agent",
 			"settings": [
-				{ "key": "permissionMode", "type": "enum", "label": "Permission mode", "description": "How the extension answers permission requests coming from the Claude agent. Tools that run through Copilot Chat still go through Copilot's own confirmations either way.", "default": "auto", "options": ["auto", "ask"], "optionDescriptions": ["Approve the permission requests of the agent automatically.", "Show the options the agent offers and decline the request unless you pick one."] },
 				{ "key": "authPreference", "type": "enum", "label": "Auth preference", "description": "Which credentials the Claude agent uses when both an API key and a signed-in account (OAuth) are available. Changing it restarts the agent.", "default": "auto", "options": ["auto", "apiKey", "oauth"], "optionDescriptions": ["Use the saved API key when there is one, otherwise the signed-in account.", "Use the saved API key. Without one, the agent falls back to its signed-in account.", "Always use the signed-in account and ignore the saved API key and the key environment variables."] }
 			]
 		},
@@ -17,7 +16,6 @@
 			"id": "codex",
 			"displayName": "Codex Agent",
 			"settings": [
-				{ "key": "permissionMode", "type": "enum", "label": "Permission mode", "description": "How the extension answers permission requests coming from the Codex agent. Tools that run through Copilot Chat still go through Copilot's own confirmations either way.", "default": "auto", "options": ["auto", "ask"], "optionDescriptions": ["Approve the permission requests of the agent automatically.", "Show the options the agent offers and decline the request unless you pick one."] },
 				{ "key": "authPreference", "type": "enum", "label": "Auth preference", "description": "Which credentials the Codex agent uses when both an OpenAI API key and a ChatGPT account are available. Changing it restarts the agent.", "default": "auto", "options": ["auto", "apiKey", "chatgpt"], "optionDescriptions": ["Use the saved OpenAI API key when there is one, otherwise the ChatGPT account.","Use the saved OpenAI API key. Without one, the agent falls back to its ChatGPT account.","Always use the ChatGPT account: the saved API key is ignored and CODEX_API_KEY and OPENAI_API_KEY are withheld from the agent."] },
 				{ "key": "maxContextWindow", "type": "boolean", "label": "Largest context window", "description": "Ask Codex for the largest context window each model allows instead of its default. Models that cannot be raised keep their default. A larger window delays compaction, so long chats re-send more history on every turn and use up your plan limits faster. Changing it restarts the agent.", "default": false }
 			]
@@ -28,8 +26,7 @@
 			"settings": [
 				{ "key": "command", "type": "string", "label": "Agent command", "description": "Program that starts the ACP server. Leave empty to use the Antigravity server (agy_acp_server) the extension downloads.", "default": "" },
 				{ "key": "args", "type": "string-list", "label": "Agent arguments", "description": "Arguments for the program. Leave empty for the default (none).", "default": [] },
-				{ "key": "permissionMode", "type": "enum", "label": "Permission mode", "description": "How the extension answers permission requests coming from the Google agent. Tools that run through Copilot Chat still go through Copilot's own confirmations either way.", "default": "auto", "options": ["auto", "ask"], "optionDescriptions": ["Approve the permission requests of the agent automatically.", "Show the options the agent offers and decline the request unless you pick one."] },
-				{ "key": "useAgentBuiltInTools", "type": "boolean", "label": "Use the agent's built-in tools", "description": "Let the Google agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them and declines their permission requests, so the tools of your Copilot chat do the work. Antigravity may still run built-in tools that never ask for permission.", "default": false },
+				{ "key": "useAgentBuiltInTools", "type": "boolean", "label": "Use the agent's built-in tools", "description": "Let the Google agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them so Copilot chat tools can do the work. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.", "default": false },
 				{ "key": "authPreference", "type": "enum", "label": "Auth preference", "description": "Which credentials the agent uses when both a Gemini API key and a signed-in account are available. Changing it restarts the agent.", "default": "auto", "options": ["auto", "apiKey", "oauth"], "optionDescriptions": ["Use the saved API key when there is one, otherwise the signed-in account.", "Use the saved API key. Without one, the agent falls back to its signed-in account.", "Always use the signed-in account and ignore the saved API key and the key environment variables."] }
 			]
 		}

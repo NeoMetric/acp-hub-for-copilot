@@ -37,6 +37,7 @@ export interface AgentCardState {
 	signedIn: SignedInView;
 	hasSavedKey: boolean;
 	enabled: boolean;
+	visible: boolean;
 	settings: SettingView[];
 	usage: UsageView;
 	/** Text for the operation in progress, such as "Signing in..." */
@@ -49,5 +50,6 @@ export type ToWebview = { type: 'state'; agents: AgentCardState[] };
 export type FromWebview =
 	| { type: 'ready' }
 	| { type: 'install' | 'signIn' | 'signOut' | 'refreshUsage'; agentId: string }
+	| { type: 'addAgent' | 'removeAgent'; agentId: string }
 	| { type: 'setEnabled'; agentId: string; enabled: boolean }
 	| { type: 'setSetting'; agentId: string; key: string; value: SettingValue };

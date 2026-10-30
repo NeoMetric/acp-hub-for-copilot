@@ -27,6 +27,12 @@ h2 {
 	margin-bottom: 8px;
 }
 
+.actions progress {
+	width: 100%;
+	max-width: 120px;
+	accent-color: var(--vscode-progressBar-background);
+}
+
 .actions {
 	display: flex;
 	align-items: center;
@@ -117,8 +123,66 @@ button:disabled {
 	margin: 6px 0;
 }
 
-.setting input[type="checkbox"] {
-	align-self: flex-start;
+.setting.setting-checkbox {
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+}
+
+.setting-checkbox input[type="checkbox"] {
+	margin: 0;
+}
+
+.setting-heading {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.setting-info {
+	display: inline-block;
+	position: relative;
+	color: var(--vscode-descriptionForeground);
+}
+
+.setting-info summary {
+	cursor: pointer;
+	list-style: none;
+}
+
+.setting-info summary::-webkit-details-marker {
+	display: none;
+}
+
+.setting-help {
+	display: none;
+	position: absolute;
+	z-index: 1;
+	left: 0;
+	top: 100%;
+	width: 220px;
+	padding: 6px;
+	color: var(--vscode-editorHoverWidget-foreground);
+	background: var(--vscode-editorHoverWidget-background);
+	border: 1px solid var(--vscode-editorHoverWidget-border);
+}
+
+.setting-info[open] .setting-help {
+	display: block;
+}
+
+.add-agent summary {
+	cursor: pointer;
+}
+
+.add-choice {
+	display: block;
+	margin-top: 8px;
+}
+
+.remove-agent {
+	margin-bottom: 8px;
+	font-size: 0.9em;
 }
 
 input[type="text"],

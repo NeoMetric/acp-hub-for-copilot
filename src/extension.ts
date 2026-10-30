@@ -74,10 +74,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				log: scopedLog(output, adapter.id),
 				storageDir: path.join(storageDir, adapter.id),
 				clientVersion: String(context.extension.packageJSON.version),
-				askPermission: async (message, labels) => {
-					const picked = await vscode.window.showQuickPick(labels, { title: message });
-					return picked === undefined ? undefined : labels.indexOf(picked);
-				},
+
 			},
 			requestDumpDir: context.globalStorageUri,
 			profilePromptsDir: path.join(path.dirname(path.dirname(storageDir)), 'prompts'),
@@ -87,6 +84,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		providers.set(adapter.id, provider);
 		context.subscriptions.push(
 			provider,
+			provider.onDidMeasureRequest(measurement => usage.recordRequest(adapter.id, measurement)),
 			provider.onDidFinishTurn(turn => {
 				usage.recordTurn(adapter.id, turn.usage, turn.background);
 				if (!turn.background && adapter.usage) { void refreshUsage(adapter.id, false); }
@@ -97,8 +95,10 @@ export function activate(context: vscode.ExtensionContext): void {
 	}
 	const sidebar = new SidebarHost({
 		listAdapters: () => ADAPTERS,
+		getVisibleAgents: () => context.globalState.get<string[]>('sidebar.visibleAgents'),
+		saveVisibleAgents: async ids => { await context.globalState.update('sidebar.visibleAgents', ids); },
 		getInstallState: id => getInstallState(adapterFor(id), { ...installEnv, settings: settingsFor(adapterFor(id)) }),
-		install: async id => { await installAgent(adapterFor(id), installEnv); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
+		install: async (id, onProgress) => { await installAgent(adapterFor(id), installEnv, update => { if (update.state === 'progress') { onProgress(update.message); } }); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
 		isSignedIn: async id => (await secrets.get(id)) ? true : providers.get(id)?.signInState(),
 		hasSavedKey: async id => Boolean(await secrets.get(id)),
 		signIn: chooseSignIn,
@@ -107,7 +107,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		writeSetting: async (id, key, value) => { await vscode.workspace.getConfiguration('acpHub').update(settingKey(id, key), value, vscode.ConfigurationTarget.Global); },
 		isEnabled: id => vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(id, 'enabled'), true),
 		setEnabled: async (id, enabled) => { await vscode.workspace.getConfiguration('acpHub').update(settingKey(id, 'enabled'), enabled, vscode.ConfigurationTarget.Global); providers.get(id)?.refresh(); },
-		getUsage: id => adapterFor(id).usage ? usage.get(id) : { status: 'unsupported', extraWindows: [] },
+		getUsage: id => adapterFor(id).usage ? usage.get(id) : { ...usage.get(id), status: 'unsupported' },
 		refreshUsage,
 		onUsageChange: listener => ({ dispose: usage.onDidChange(listener) }),
 		assetUri: relative => vscode.Uri.joinPath(context.extensionUri, relative),

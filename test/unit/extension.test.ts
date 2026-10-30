@@ -18,7 +18,7 @@ vi.mock('vscode', () => ({
   Uri: { joinPath: (...parts: unknown[]) => parts[0] },
 }));
 vi.mock('../../src/core/provider', () => ({
-  AcpProvider: class { constructor(_adapter: unknown, deps: { isEnabled: () => boolean }) { mocks.providerDeps.push(deps); } onDidFinishTurn() { return { dispose() {} }; } publishModels() { return Promise.resolve(); } dispose() {} },
+  AcpProvider: class { constructor(_adapter: unknown, deps: { isEnabled: () => boolean }) { mocks.providerDeps.push(deps); } onDidMeasureRequest() { return { dispose() {} }; } onDidFinishTurn() { return { dispose() {} }; } publishModels() { return Promise.resolve(); } dispose() {} },
 }));
 vi.mock('../../src/core/bridge', () => ({
   McpBridge: class { dispose() {} },

@@ -1,7 +1,7 @@
 import type { AgentAdapter, UsageContext, UsageReading, UsageWindow } from './adapter';
 import type { Log } from './logging';
 import type { AcpTokenUsage } from './agentClient';
-import { CacheTracker } from './cache';
+import { CacheTracker, type CacheStats, type RequestMeasurement } from './cache';
 
 /** A reading younger than this is reused instead of asking the agent again. */
 export const FRESH_MS = 60_000;
@@ -16,6 +16,8 @@ export interface UsageState {
 	fetchedAt?: number;
 	/** Windows the provider measured itself, such as the prompt cache hit rate. */
 	extraWindows: UsageWindow[];
+	/** Latest measured model call, preferring chat calls over background requests. */
+	lastModelCall?: CacheStats;
 }
 
 export type UsageListener = (agentId: string) => void;
@@ -48,7 +50,20 @@ export class UsageStore {
 		let cache = this.caches.get(agentId);
 		if (!cache) { cache = new CacheTracker(); this.caches.set(agentId, cache); }
 		if (cache.record(tokens, background) && cache.overall) {
-			this.setExtraWindows(agentId, [{ label: 'Cache hit rate', usedPercent: cache.overall.hitRate }]);
+			const finished = cache.finished;
+			this.setExtraWindows(agentId, [
+				{ label: 'Cumulative cache hit rate', usedPercent: cache.overall.hitRate },
+				...(finished ? [{ label: finished.background ? 'Last background request cache hit rate' : 'Last chat turn cache hit rate', usedPercent: finished.hitRate }] : []),
+			]);
+		}
+	}
+
+	/** Records an individual model call without adding it to finished-turn totals. */
+	recordRequest(agentId: string, measurement: RequestMeasurement): void {
+		let cache = this.caches.get(agentId);
+		if (!cache) { cache = new CacheTracker(); this.caches.set(agentId, cache); }
+		if (cache.recordRequest(measurement)) {
+			this.update(agentId, { lastModelCall: cache.latestRequest });
 		}
 	}
 

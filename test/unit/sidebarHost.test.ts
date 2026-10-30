@@ -21,6 +21,8 @@ function setup(overrides: Partial<SidebarDeps> = {}) {
 	const installed = new Map<string, InstallState>([['a', 'not-installed'], ['b', 'not-installed']]);
 	const deps: SidebarDeps = {
 		listAdapters: () => [fakeAdapter('a'), fakeAdapter('b')],
+		getVisibleAgents: () => ['a', 'b'],
+		saveVisibleAgents: async () => { },
 		getInstallState: async id => installed.get(id) ?? 'not-installed',
 		install: vi.fn(async (id: string) => { installed.set(id, 'installed'); }),
 		isSignedIn: async () => undefined,
@@ -69,6 +71,22 @@ describe('SidebarHost', () => {
 		expect(last()[0].settings[0].value).toBe('low');
 	});
 
+	it('initially shows installed agents and persists additions and removals', async () => {
+		const save = vi.fn(async (_ids: string[]) => { });
+		const { host, last } = setup({
+			getVisibleAgents: () => undefined,
+			saveVisibleAgents: save,
+			getInstallState: async id => id === 'a' ? 'installed' : 'not-installed',
+		});
+		await host.handleMessage({ type: 'ready' });
+		expect(last().filter(item => item.visible).map(item => item.id)).toEqual(['a']);
+		await host.handleMessage({ type: 'addAgent', agentId: 'b' });
+		expect(save).toHaveBeenLastCalledWith(['a', 'b']);
+		await host.handleMessage({ type: 'removeAgent', agentId: 'a' });
+		expect(save).toHaveBeenLastCalledWith(['b']);
+		expect(last().filter(item => item.visible).map(item => item.id)).toEqual(['b']);
+	});
+
 	it('installs once and posts busy then installed', async () => {
 		const { host, deps, posted, card } = setup();
 		await host.handleMessage({ type: 'install', agentId: 'a' });
@@ -99,6 +117,39 @@ describe('SidebarHost', () => {
 		finish();
 		await first;
 		expect(install).toHaveBeenCalledTimes(1);
+	});
+
+	it('serializes rapid enable changes so the last choice wins', async () => {
+		let finish: () => void = () => { };
+		let enabled = true;
+		const setEnabled = vi.fn(async (_id: string, value: boolean) => {
+			if (!value) { await new Promise<void>(resolve => { finish = resolve; }); }
+			enabled = value;
+		});
+		const { host, card } = setup({ setEnabled, isEnabled: () => enabled });
+		const first = host.handleMessage({ type: 'setEnabled', agentId: 'a', enabled: false });
+		await vi.waitFor(() => expect(setEnabled).toHaveBeenCalledTimes(1));
+		const second = host.handleMessage({ type: 'setEnabled', agentId: 'a', enabled: true });
+		expect(setEnabled).toHaveBeenCalledTimes(1);
+		finish();
+		await Promise.all([first, second]);
+		expect(enabled).toBe(true);
+		expect(card('a').enabled).toBe(true);
+	});
+
+	it('discards an older sidebar refresh that finishes late', async () => {
+		let finish: () => void = () => { };
+		let calls = 0;
+		const { host, posted } = setup({ isSignedIn: async () => {
+			if (++calls === 1) { await new Promise<void>(resolve => { finish = resolve; }); }
+			return true;
+		} });
+		const first = host.handleMessage({ type: 'ready' });
+		await vi.waitFor(() => expect(calls).toBe(1));
+		await host.handleMessage({ type: 'ready' });
+		finish();
+		await first;
+		expect(posted).toHaveLength(1);
 	});
 
 	it('writes a changed setting through', async () => {

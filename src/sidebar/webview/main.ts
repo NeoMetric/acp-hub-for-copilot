@@ -34,7 +34,7 @@ root.addEventListener('click', event => {
 	}
 	const action = target.dataset.action;
 	const agentId = target.dataset.agent ?? '';
-	if (action === 'install' || action === 'signIn' || action === 'signOut' || action === 'refreshUsage') {
+	if (action === 'install' || action === 'signIn' || action === 'signOut' || action === 'refreshUsage' || action === 'addAgent' || action === 'removeAgent') {
 		vscode.postMessage({ type: action, agentId });
 	}
 });

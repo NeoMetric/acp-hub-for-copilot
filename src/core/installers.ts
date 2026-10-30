@@ -22,7 +22,15 @@ export interface InstallResult {
 	installDir: string;
 }
 
-function npmInstallerFor(adapter: AgentAdapter, env: InstallEnvironment): NpmInstaller | undefined {
+/** Updates for one install invocation, delivered in order to its caller. */
+export type InstallProgress =
+	| { agentId: string; state: 'started' | 'completed' }
+	| { agentId: string; state: 'progress'; message: string }
+	| { agentId: string; state: 'failed'; error: unknown };
+
+export type InstallProgressReporter = (update: InstallProgress) => void;
+
+function npmInstallerFor(adapter: AgentAdapter, env: InstallEnvironment, progress?: (message: string) => void): NpmInstaller | undefined {
 	const spec = adapter.install;
 	if (spec.kind !== 'npm') {
 		return undefined;
@@ -34,6 +42,7 @@ function npmInstallerFor(adapter: AgentAdapter, env: InstallEnvironment): NpmIns
 		spec.version,
 		env.log,
 		spec.entry,
+		progress,
 	);
 }
 
@@ -84,11 +93,30 @@ export async function getInstallState(adapter: AgentAdapter, env: InstallEnviron
 }
 
 /** Installs the agent unless it is already there. An existing CLI cannot be installed from here. */
-export async function installAgent(adapter: AgentAdapter, env: InstallEnvironment): Promise<InstallResult> {
+export async function installAgent(adapter: AgentAdapter, env: InstallEnvironment, report?: InstallProgressReporter): Promise<InstallResult> {
+	const emit = (update: InstallProgress) => {
+		try { report?.(update); } catch { /* Observers must not affect installation. */ }
+	};
+	const progress = (message: string) => {
+		env.progress(message);
+		emit({ agentId: adapter.id, state: 'progress', message });
+	};
+	emit({ agentId: adapter.id, state: 'started' });
+	try {
+		const result = await performInstall(adapter, { ...env, progress });
+		emit({ agentId: adapter.id, state: 'completed' });
+		return result;
+	} catch (error) {
+		emit({ agentId: adapter.id, state: 'failed', error });
+		throw error;
+	}
+}
+
+async function performInstall(adapter: AgentAdapter, env: InstallEnvironment): Promise<InstallResult> {
 	const spec = adapter.install;
 
 	if (spec.kind === 'npm') {
-		const installer = npmInstallerFor(adapter, env);
+		const installer = npmInstallerFor(adapter, env, env.progress);
 		if (!installer) {
 			throw new Error('No npm installer for this agent.');
 		}

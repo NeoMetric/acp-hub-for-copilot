@@ -31,7 +31,7 @@ describe('claudeAdapter', () => {
 			manifestDirectory: 'adapters/claude',
 		});
 		expect(claudeAdapter.usage).toBe(claudeUsage);
-		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'permissionMode', 'authPreference']);
+		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference']);
 	});
 
 	it('lists its sign-in methods', () => {

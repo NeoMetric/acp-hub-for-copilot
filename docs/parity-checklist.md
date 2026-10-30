@@ -10,7 +10,7 @@ Run for each of Claude, Codex, and Google, comparing against the old extension o
 - [ ] Long chat: session reuse and fork on edited history behave as before; Google: expired session rebuilds from transcript.
 - [ ] Idle: process exits after the idle timeout; next message restarts it.
 - [ ] Usage: Claude 5h + weekly + cache ratio; Codex rate limits; Google shows "not supported".
-- [ ] Settings changes in the sidebar take effect (permissionMode, authPreference, timeouts, Codex maxContextWindow, Google command/args).
+- [ ] Settings changes in the sidebar take effect (authPreference, timeouts, Codex maxContextWindow, Google command/args).
 - [ ] Failure modes: wrong API key, offline install, kill the agent process mid-reply: readable error, next message works.
 - [ ] Windows path with spaces/non-ASCII as workspace folder.
 - [ ] Old and new extensions installed together: no setting or vendor collisions.

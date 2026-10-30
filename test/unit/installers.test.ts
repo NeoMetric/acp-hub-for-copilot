@@ -61,6 +61,50 @@ describe('configured commands', () => {
 	});
 });
 
+describe('installation progress', () => {
+	it('reports npm progress and completion, including an already installed agent', async () => {
+		fakeNpmCi({ withEntry: true });
+		const report = vi.fn();
+		await installAgent(npmAdapter(), env, report);
+		expect(report.mock.calls.map(([update]) => update)).toEqual([
+			{ agentId: 'demo', state: 'started' },
+			{ agentId: 'demo', state: 'progress', message: 'Installing @scope/demo-acp@1.0.0' },
+			{ agentId: 'demo', state: 'completed' },
+		]);
+		report.mockClear();
+		await installAgent(npmAdapter(), env, report);
+		expect(report.mock.calls.map(([update]) => update.state)).toEqual(['started', 'completed']);
+	});
+
+	it('forwards download messages and reports failures without changing the thrown error', async () => {
+		const failure = new Error('offline');
+		const report = vi.fn();
+		const progress = vi.fn();
+		const adapter = {
+			id: 'dl', displayName: 'Dl',
+			install: { kind: 'download', version: '1', find: async () => undefined, install: async (ctx: { progress(message: string): void }) => { ctx.progress('Downloading'); throw failure; } },
+		} as unknown as AgentAdapter;
+		await expect(installAgent(adapter, { ...env, progress }, report)).rejects.toBe(failure);
+		expect(progress).toHaveBeenCalledWith('Downloading');
+		expect(report.mock.calls.map(([update]) => update)).toEqual([
+			{ agentId: 'dl', state: 'started' },
+			{ agentId: 'dl', state: 'progress', message: 'Downloading' },
+			{ agentId: 'dl', state: 'failed', error: failure },
+		]);
+	});
+
+	it('reports fallback to a previous installation as successful', async () => {
+		fakeNpmCi({ withEntry: true });
+		await installAgent(npmAdapter(), env);
+		fs.writeFileSync(path.join(env.extensionDir, 'adapters', 'demo', 'package-lock.json'), '{"lock":2}');
+		runNpm.mockRejectedValue(new Error('offline'));
+		const report = vi.fn();
+		await installAgent(npmAdapter(), env, report);
+		expect(report.mock.calls.map(([update]) => update)).toContainEqual({ agentId: 'demo', state: 'progress', message: 'Installation failed; using the previously installed adapter.' });
+		expect(report.mock.calls.at(-1)?.[0].state).toBe('completed');
+	});
+});
+
 describe('npm agents', () => {
 	it('is not installed before installing', async () => {
 		expect(await getInstallState(npmAdapter(), env)).toBe('not-installed');

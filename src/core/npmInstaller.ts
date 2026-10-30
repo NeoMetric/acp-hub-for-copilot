@@ -35,6 +35,7 @@ export class NpmInstaller {
 		private readonly version: string,
 		private readonly log: Log,
 		private readonly entry?: string,
+		private readonly progress?: (message: string) => void,
 	) { }
 
 	/** The adapter's entry point when the current version is installed, else `undefined`. */
@@ -80,6 +81,7 @@ export class NpmInstaller {
 				if (!fallback) {
 					throw error;
 				}
+				this.progress?.('Installation failed; using the previously installed adapter.');
 				this.log(`Could not install ${this.packageName}@${this.version}; using the previously installed adapter instead.`, 'warn');
 				this.log(`Could not install ${this.packageName}@${this.version} (${error instanceof Error ? error.message : String(error)}); using the previously installed adapter ${fallback}`, 'debug');
 				return fallback;
@@ -99,6 +101,7 @@ export class NpmInstaller {
 			throw new Error(`The extension is missing ${path.join(this.manifestDirectory, 'package-lock.json')}; reinstall the extension.`);
 		}
 		const directory = versionDirectory(this.root, marker);
+		this.progress?.(`Installing ${this.packageName}@${this.version}`);
 		this.log(`Installing ${this.packageName}@${this.version} into the extension's storage folder`);
 		this.log(`Installing ${this.packageName}@${this.version} into ${directory}`, 'debug');
 

@@ -15,6 +15,7 @@ function card(overrides: Partial<AgentCardState> = {}): AgentCardState {
 		signedIn: 'yes',
 		hasSavedKey: false,
 		enabled: true,
+		visible: true,
 		settings: [],
 		usage: { status: 'unsupported', windows: [] },
 		...overrides,
@@ -28,10 +29,27 @@ describe('renderCards', () => {
 		expect(html).toContain('Agent One');
 	});
 
+	it('shows an indeterminate progress bar during installation', () => {
+		const html = renderCards([card({ install: 'installing' })]);
+		expect(html).toContain('<progress aria-label="Installing agent">');
+	});
+
 	it('does not offer API key removal as browser account sign-out', () => {
 		const html = renderCards([card({ signedIn: 'yes', hasSavedKey: false })]);
 		expect(html).toContain('Signed in');
 		expect(html).not.toContain('data-action="signOut"');
+	});
+
+	it('shows an unknown account status without assuming the agent is signed out', () => {
+		const html = renderCards([card({ signedIn: 'unknown' })]);
+		expect(html).toContain('Account status unknown');
+		expect(html).toContain('Manage sign-in');
+		expect(html).not.toContain('>Sign in</button>');
+	});
+
+	it('offers sign-in when the agent reports it is signed out', () => {
+		const html = renderCards([card({ signedIn: 'no' })]);
+		expect(html).toContain('>Sign in</button>');
 	});
 
 	it('offers API key removal when a key is saved', () => {
@@ -72,7 +90,32 @@ describe('renderCards', () => {
 		expect(html).toContain('value="x, y"');
 	});
 
-	it('mentions the registry in the add agent section', () => {
-		expect(renderCards([])).toContain('More agents from the ACP registry come in a future release.');
+	it('places boolean settings inline and provides timeout explanations', () => {
+		const html = renderCards([card({ settings: [
+			{ key: 'dumpRequests', label: 'Dump requests', description: 'Debug', type: 'boolean', value: false },
+			{ key: 'idleTimeoutSeconds', label: 'Idle session timeout', description: 'Session lifetime', type: 'number', value: 120 },
+		] })]);
+		expect(html).toContain('class="setting setting-checkbox"');
+		expect(html).toContain('aria-label="About Dump requests"');
+		expect(html).toContain('aria-label="About Idle session timeout"');
+		expect(html).toContain('Session lifetime');
+	});
+
+	it('explains cache metrics and authentication options', () => {
+		const html = renderCards([card({
+			settings: [{ key: 'authPreference', label: 'Auth preference', description: 'Choose credentials.', type: 'enum', value: 'auto', options: ['auto'], optionDescriptions: ['Use the available account.'] }],
+			usage: { status: 'ok', windows: [{ label: 'Cumulative cache hit rate', usedPercent: 50 }] },
+		})]);
+		expect(html).toContain('aria-label="About Auth preference"');
+		expect(html).toContain('auto: Use the available account.');
+		expect(html).toContain('aria-label="About Cumulative cache hit rate"');
+		expect(html).toContain('token-weighted cache hit rate');
+	});
+
+	it('offers hidden supported agents for adding', () => {
+		const html = renderCards([card({ visible: false })]);
+		expect(html).toContain('+ Add agent');
+		expect(html).toContain('data-action="addAgent"');
+		expect(html).not.toContain('class="card"');
 	});
 });

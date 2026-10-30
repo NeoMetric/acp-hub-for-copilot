@@ -23,8 +23,6 @@ const SET_CONFIG_TIMEOUT_MS = 30_000;
 const CLOSE_SESSION_TIMEOUT_MS = 10_000;
 const AUTHENTICATE_TIMEOUT_MS = 5 * 60_000;
 
-/** How long a permission prompt waits for the user before the tool is declined. */
-const PERMISSION_TIMEOUT_MS = 5 * 60_000;
 
 /** An agent that exits sooner than this after it started counts as failing to start. */
 const FAST_EXIT_MS = 10_000;
@@ -159,8 +157,6 @@ export interface AgentClientDeps {
 	/** Folder for the record of running agents and the console-hiding helper. */
 	storageDir: string;
 	clientVersion: string;
-	/** Shows a permission prompt and resolves with the index of the chosen label, or `undefined` when dismissed. */
-	askPermission?(message: string, labels: string[]): Promise<number | undefined>;
 }
 
 /** Thrown when the agent has not been installed, so there is nothing to start. */
@@ -251,8 +247,6 @@ export class AgentClient implements vscode.Disposable {
 	private readonly usageSinks = new Map<string, (usage: AcpTokenUsage) => void>();
 	private readonly seenCalls = new Set<string>();
 	private readonly backgroundTasks = new Map<string, Set<string>>();
-	/** Resolvers of the permission prompts that are open, by ACP session. */
-	private readonly openPermissions = new Map<string, Set<() => void>>();
 	private authMethods: readonly AcpAuthMethod[] = [];
 	private authStatus: unknown;
 	private signInRequired = false;
@@ -449,7 +443,6 @@ export class AgentClient implements vscode.Disposable {
 
 	/** Releases an agent-side session; best effort, as the method is an ACP extension. */
 	async closeSession(sessionId: string): Promise<void> {
-		this.cancelOpenPermissions(sessionId);
 		this.backgroundTasks.delete(sessionId);
 		const rpc = this.rpc;
 		if (!rpc) {
@@ -487,8 +480,6 @@ export class AgentClient implements vscode.Disposable {
 
 	/** Asks the agent to stop the current turn of a session. */
 	cancel(sessionId: string): void {
-		// ACP requires a cancelled turn to answer its open permission requests.
-		this.cancelOpenPermissions(sessionId);
 		this.rpc?.notify('session/cancel', { sessionId });
 	}
 
@@ -793,9 +784,6 @@ export class AgentClient implements vscode.Disposable {
 		this.usageSinks.clear();
 		this.seenCalls.clear();
 		this.backgroundTasks.clear();
-		for (const sessionId of [...this.openPermissions.keys()]) {
-			this.cancelOpenPermissions(sessionId);
-		}
 		rpc?.dispose(reason);
 		return { child, rpc };
 	}
@@ -891,72 +879,15 @@ export class AgentClient implements vscode.Disposable {
 
 		this.log(`Permission requested for "${title}"; options: ${offered}`, 'debug');
 
-		const mode = stringSetting(this.ctx.settings, 'permissionMode', 'auto');
-		if (mode === 'auto') {
-			const choice = options.find(option => option.kind === 'allow_once')
-				?? options.find(option => option.kind === 'allow_always')
-				?? options.find(option => option.kind.startsWith('allow'));
-			if (choice) {
-				this.log(`Auto-approving a permission request with ${choice.optionId}`);
-				return { outcome: { outcome: 'selected', optionId: choice.optionId } };
-			}
-			this.log('No allow option was offered for a permission request; declining', 'warn');
-			return { outcome: { outcome: 'cancelled' } };
+		const choice = options.find(option => option.kind === 'allow_once')
+			?? options.find(option => option.kind === 'allow_always')
+			?? options.find(option => option.kind.startsWith('allow'));
+		if (choice) {
+			this.log(`Auto-approving a permission request with ${choice.optionId}`);
+			return { outcome: { outcome: 'selected', optionId: choice.optionId } };
 		}
-
-		const picked = await this.askPermission(request.sessionId, `${this.adapter.displayName} wants to run: ${title}. Offered options: ${offered}.`, options);
-		if (!picked) {
-			this.log('A permission request was not granted; declining', 'warn');
-			return { outcome: { outcome: 'cancelled' } };
-		}
-		this.log(`User chose ${picked.optionId} for a permission request`);
-		return { outcome: { outcome: 'selected', optionId: picked.optionId } };
-	}
-
-	/**
-	 * Shows the permission prompt. Resolves with `undefined` when the user
-	 * dismisses it, when the turn is cancelled, or when nobody answers in time.
-	 */
-	private askPermission(sessionId: string | undefined, message: string, options: readonly PermissionOption[]): Promise<PermissionOption | undefined> {
-		return new Promise<PermissionOption | undefined>(resolve => {
-			let release = () => { };
-			const settle = (choice: PermissionOption | undefined) => {
-				clearTimeout(timer);
-				release();
-				resolve(choice);
-			};
-
-			const timer = setTimeout(() => {
-				this.log('A permission prompt timed out; declining', 'warn');
-				settle(undefined);
-			}, PERMISSION_TIMEOUT_MS);
-
-			if (sessionId) {
-				const waiting = this.openPermissions.get(sessionId) ?? new Set<() => void>();
-				const cancel = () => settle(undefined);
-				waiting.add(cancel);
-				this.openPermissions.set(sessionId, waiting);
-				release = () => {
-					waiting.delete(cancel);
-					if (waiting.size === 0 && this.openPermissions.get(sessionId) === waiting) {
-						this.openPermissions.delete(sessionId);
-					}
-				};
-			}
-
-			if (!this.deps.askPermission) {
-				settle(undefined);
-				return;
-			}
-			this.deps.askPermission(message, options.map(option => option.name))
-				.then(index => settle(index === undefined ? undefined : options[index]), () => settle(undefined));
-		});
-	}
-
-	private cancelOpenPermissions(sessionId: string): void {
-		for (const cancel of [...(this.openPermissions.get(sessionId) ?? [])]) {
-			cancel();
-		}
+		this.log('No allow option was offered for a permission request; declining', 'warn');
+		return { outcome: { outcome: 'cancelled' } };
 	}
 
 	private captureAuthState(error: unknown): void {
@@ -996,11 +927,6 @@ function offersValue(option: AcpConfigOption, value: string): boolean {
 function numberSetting(settings: AgentSettings, key: string, fallback: number): number {
 	const value = settings[key];
 	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
-}
-
-function stringSetting(settings: AgentSettings, key: string, fallback: string): string {
-	const value = settings[key];
-	return typeof value === 'string' ? value : fallback;
 }
 
 function describeError(error: unknown): string {

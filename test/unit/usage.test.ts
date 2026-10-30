@@ -20,8 +20,34 @@ describe('UsageStore', () => {
 		const store = new UsageStore(() => { });
 		store.recordTurn('one', { inputTokens: 25, outputTokens: 0, cachedReadTokens: 75, cachedWriteTokens: 0, totalTokens: 100 }, false);
 		store.recordTurn('one', { inputTokens: 75, outputTokens: 0, cachedReadTokens: 25, cachedWriteTokens: 0, totalTokens: 100 }, false);
-		expect(store.get('one').extraWindows).toEqual([{ label: 'Cache hit rate', usedPercent: 50 }]);
+		expect(store.get('one').extraWindows).toEqual([
+			{ label: 'Cumulative cache hit rate', usedPercent: 50 },
+			{ label: 'Last chat turn cache hit rate', usedPercent: 25 },
+		]);
+		store.recordTurn('one', { inputTokens: 0, outputTokens: 0, cachedReadTokens: 100, cachedWriteTokens: 0, totalTokens: 100 }, true);
+		expect(store.get('one').extraWindows[0].usedPercent).toBeCloseTo(200 / 3);
+		expect(store.get('one').extraWindows[1]).toEqual({ label: 'Last chat turn cache hit rate', usedPercent: 25 });
 		expect(store.get('two').extraWindows).toEqual([]);
+	});
+
+	it('publishes the latest measured chat model call independently of turn totals', () => {
+		const store = new UsageStore(() => { });
+		const seen: string[] = [];
+		store.onDidChange(id => seen.push(id));
+		const call = { inputTokens: 20, outputTokens: 5, cachedReadTokens: 60, cachedWriteTokens: 20, totalTokens: 105 };
+		const turn = { ...call, inputTokens: 100, cachedReadTokens: 300 };
+		store.recordRequest('one', { call, turn, background: false });
+		expect(store.get('one').lastModelCall).toMatchObject({ hitRate: 60, inputTokens: 20, cachedReadTokens: 60, cachedWriteTokens: 20, outputTokens: 5, background: false });
+		expect(store.get('one').extraWindows).toEqual([]);
+		expect(store.get('two').lastModelCall).toBeUndefined();
+		store.recordTurn('one', turn, false);
+		expect(store.get('one').lastModelCall?.hitRate).toBe(60);
+		expect(store.get('one').extraWindows[0].usedPercent).toBeCloseTo(300 / 420 * 100);
+		store.recordRequest('one', { call: { ...call, inputTokens: 100, cachedReadTokens: 0, cachedWriteTokens: 0 }, turn, background: true });
+		expect(store.get('one').lastModelCall?.hitRate).toBe(60);
+		store.recordRequest('two', { call: { ...call, inputTokens: 0, cachedReadTokens: 0, cachedWriteTokens: 0 }, turn, background: false });
+		expect(store.get('two').lastModelCall).toBeUndefined();
+		expect(seen).toEqual(['one', 'one', 'one']);
 	});
 
 	it('stores a good reading', async () => {

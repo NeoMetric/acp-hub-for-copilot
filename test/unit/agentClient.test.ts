@@ -54,8 +54,8 @@ function launchContext(settings: AgentSettings = {}, entryPath = MOCK_AGENT): La
 	return { entryPath, installDir: temp, storageDir: temp, settings, workspaceFolder: temp };
 }
 
-function createClient(adapter: AgentAdapter = testAdapter(), ctx: LaunchContext = launchContext(), askPermission?: (message: string, labels: string[]) => Promise<number | undefined>): AgentClient {
-	client = new AgentClient(adapter, ctx, { log, storageDir: temp, clientVersion: '0.0.0', askPermission });
+function createClient(adapter: AgentAdapter = testAdapter(), ctx: LaunchContext = launchContext()): AgentClient {
+	client = new AgentClient(adapter, ctx, { log, storageDir: temp, clientVersion: '0.0.0' });
 	return client;
 }
 
@@ -242,22 +242,11 @@ describe('AgentClient', () => {
 		});
 	});
 
-	it('approves permission requests by itself in auto mode', async () => {
-		const target = createClient(testAdapter(), launchContext({ permissionMode: 'auto' }));
+	it('approves permission requests without a separate prompt', async () => {
+		const target = createClient();
 		const session = await target.createSession({ cwd: temp, mcpServers: [] });
 
 		expect(await reply(target, session.sessionId, 'permission')).toContain('allow_once');
-	});
-
-	it('asks the user in ask mode and declines when dismissed', async () => {
-		const ask = vi.fn(async () => undefined);
-		const target = createClient(testAdapter(), launchContext({ permissionMode: 'ask' }), ask);
-		const session = await target.createSession({ cwd: temp, mcpServers: [] });
-
-		const text = await reply(target, session.sessionId, 'permission');
-
-		expect(ask).toHaveBeenCalledWith(expect.stringContaining('Write a.txt'), ['Allow', 'Reject']);
-		expect(text).toContain('cancelled');
 	});
 
 	it('restarts a running agent when the launch context changes', async () => {
@@ -266,7 +255,7 @@ describe('AgentClient', () => {
 		target.onDidChange(change => changes.push(change));
 		await target.createSession({ cwd: temp, mcpServers: [] });
 
-		await target.updateContext(launchContext({ permissionMode: 'ask' }));
+		await target.updateContext(launchContext({ idleTimeoutSeconds: 42 }));
 
 		expect(changes).toEqual(['restarted']);
 		expect(target.isRunning).toBe(false);

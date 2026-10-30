@@ -13,9 +13,11 @@ import type { AgentCardState, FromWebview, SettingValue, SettingView, ToWebview 
 /** Everything the sidebar needs from the rest of the extension, as plain functions. */
 export interface SidebarDeps {
 	listAdapters(): AgentAdapter[];
+	getVisibleAgents(): string[] | undefined;
+	saveVisibleAgents(ids: string[]): Promise<void>;
 	getInstallState(adapterId: string): Promise<InstallState>;
 	/** Rejects when the install fails. */
-	install(adapterId: string): Promise<void>;
+	install(adapterId: string, onProgress: (message: string) => void): Promise<void>;
 	isSignedIn(adapterId: string): Promise<boolean | undefined>;
 	hasSavedKey(adapterId: string): Promise<boolean>;
 	signIn(adapterId: string): Promise<{ ok: boolean; message?: string }>;
@@ -40,6 +42,9 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 	private readonly installing = new Set<string>();
 	private readonly busy = new Map<string, string>();
 	private readonly errors = new Map<string, string>();
+	private visibleAgents: Set<string> | undefined;
+	private stateVersion = 0;
+	private readonly enabledWrites = new Map<string, Promise<void>>();
 
 	constructor(private readonly deps: SidebarDeps) {
 		deps.onUsageChange(() => {
@@ -72,6 +77,18 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		}
 
 		switch (message.type) {
+			case 'addAgent':
+			case 'removeAgent': {
+				await this.ensureVisibleAgents();
+				if (message.type === 'addAgent') {
+					this.visibleAgents!.add(adapter.id);
+				} else {
+					this.visibleAgents!.delete(adapter.id);
+				}
+				await this.deps.saveVisibleAgents([...this.visibleAgents!]);
+				await this.postState();
+				return;
+			}
 			case 'install':
 				await this.install(adapter);
 				return;
@@ -84,9 +101,16 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 			case 'refreshUsage':
 				await this.deps.refreshUsage(adapter.id);
 				return;
-			case 'setEnabled':
-				await this.runBusy(adapter, undefined, () => this.deps.setEnabled(adapter.id, message.enabled));
+			case 'setEnabled': {
+				const previous = this.enabledWrites.get(adapter.id) ?? Promise.resolve();
+				const write = previous.then(() => this.runBusy(adapter, undefined, () => this.deps.setEnabled(adapter.id, message.enabled)));
+				this.enabledWrites.set(adapter.id, write);
+				await write;
+				if (this.enabledWrites.get(adapter.id) === write) {
+					this.enabledWrites.delete(adapter.id);
+				}
 				return;
+			}
 			case 'setSetting':
 				await this.runBusy(adapter, undefined, () => this.deps.writeSetting(adapter.id, message.key, message.value));
 				return;
@@ -102,7 +126,10 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		this.busy.set(adapter.id, 'Installing...');
 		await this.postState();
 		try {
-			await this.deps.install(adapter.id);
+			await this.deps.install(adapter.id, message => {
+				this.busy.set(adapter.id, message);
+				void this.postState();
+			});
 		} catch (error) {
 			this.errors.set(adapter.id, `Install failed: ${errorText(error)}`);
 		}
@@ -160,10 +187,12 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 			signedIn: signedIn === undefined ? 'unknown' : signedIn ? 'yes' : 'no',
 			hasSavedKey,
 			enabled: this.deps.isEnabled(adapter.id),
+			visible: this.visibleAgents!.has(adapter.id),
 			settings: settingViews,
 			usage: {
 				status: usage.status,
-				windows: [...(usage.reading?.windows ?? []), ...usage.extraWindows],
+				windows: [...(usage.reading?.windows ?? []), ...usage.extraWindows,
+					...(usage.lastModelCall ? [{ label: 'Last model call cache hit rate', usedPercent: usage.lastModelCall.hitRate }] : [])],
 				plan: usage.reading?.plan,
 				note: usage.reading?.note,
 				error: usage.error,
@@ -174,13 +203,37 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		};
 	}
 
+	private async ensureVisibleAgents(): Promise<void> {
+		if (this.visibleAgents) {
+			return;
+		}
+		const saved = this.deps.getVisibleAgents();
+		if (saved) {
+			this.visibleAgents = new Set(saved);
+			return;
+		}
+		const installed: string[] = [];
+		for (const adapter of this.deps.listAdapters()) {
+			if (await this.deps.getInstallState(adapter.id) === 'installed') {
+				installed.push(adapter.id);
+			}
+		}
+		this.visibleAgents ??= new Set(installed);
+		await this.deps.saveVisibleAgents([...this.visibleAgents]);
+	}
+
 	private async postState(): Promise<void> {
 		if (!this.view) {
 			return;
 		}
+		const version = ++this.stateVersion;
+		await this.ensureVisibleAgents();
 		const agents: AgentCardState[] = [];
 		for (const adapter of this.deps.listAdapters()) {
 			agents.push(await this.buildCard(adapter));
+		}
+		if (version !== this.stateVersion || !this.view) {
+			return;
 		}
 		const message: ToWebview = { type: 'state', agents };
 		await this.view.webview.postMessage(message);
