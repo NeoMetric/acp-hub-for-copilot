@@ -5,12 +5,13 @@ import type { AgentAdapter, LaunchContext } from './core/adapter';
 import { signIn, signOut, terminalMethodsFrom } from './core/auth';
 import { pickSignInChoice, runInVsCodeTerminal } from './core/authPrompts';
 import { McpBridge } from './core/bridge';
-import { findInstalled, getInstallState, installAgent } from './core/installers';
+import { findInstalled, getInstallState, installAgent, uninstallAgent } from './core/installers';
 import { scopedLog } from './core/logging';
 import { killAllChildren, killStrayAgents } from './core/processes';
 import { AcpProvider } from './core/provider';
 import { AgentSecretStore } from './core/secrets';
 import { readAgentSettings, settingKey } from './core/settings';
+import { recordStoragePath } from './core/storageCleanup';
 import { UsageStore } from './core/usage';
 import { SidebarHost } from './sidebar/host';
 
@@ -23,6 +24,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	const providers = new Map<string, AcpProvider>();
 	const storageDir = context.globalStorageUri.fsPath;
 	const installEnv = { storageDir, extensionDir: context.extensionUri.fsPath, log, progress: (message: string) => log(message) };
+	recordStoragePath(installEnv.extensionDir, storageDir);
 	for (const adapter of ADAPTERS) { killStrayAgents(path.join(storageDir, adapter.id, 'agents')); }
 
 	function adapterFor(id: string): AgentAdapter {
@@ -99,6 +101,22 @@ export function activate(context: vscode.ExtensionContext): void {
 		saveVisibleAgents: async ids => { await context.globalState.update('sidebar.visibleAgents', ids); },
 		getInstallState: id => getInstallState(adapterFor(id), { ...installEnv, settings: settingsFor(adapterFor(id)) }),
 		install: async (id, onProgress) => { await installAgent(adapterFor(id), installEnv, update => { if (update.state === 'progress') { onProgress(update.message); } }); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
+		uninstall: async id => {
+			const adapter = adapterFor(id);
+			const confirmed = await vscode.window.showWarningMessage(
+				`Uninstall ${adapter.displayName}?`,
+				{ modal: true, detail: 'This deletes the agent and the data the extension keeps for it. Your sign-in, saved API key and settings are kept.' },
+				'Uninstall',
+			);
+			if (confirmed !== 'Uninstall') { return false; }
+			const provider = providers.get(id);
+			await provider?.closeAllSessions();
+			await provider?.restart();
+			await uninstallAgent(adapter, installEnv);
+			provider?.refresh();
+			await provider?.publishModels();
+			return true;
+		},
 		isSignedIn: async id => (await secrets.get(id)) ? true : providers.get(id)?.signInState(),
 		hasSavedKey: async id => Boolean(await secrets.get(id)),
 		signIn: chooseSignIn,

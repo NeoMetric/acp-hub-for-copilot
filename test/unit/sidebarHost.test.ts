@@ -13,6 +13,7 @@ function fakeAdapter(id: string): AgentAdapter {
 	return {
 		id,
 		displayName: `Agent ${id}`,
+		install: { kind: 'npm' },
 		settings: [{ key: 'level', type: 'string', label: 'Level', description: '', default: 'low' }],
 	} as unknown as AgentAdapter;
 }
@@ -25,6 +26,7 @@ function setup(overrides: Partial<SidebarDeps> = {}) {
 		saveVisibleAgents: async () => { },
 		getInstallState: async id => installed.get(id) ?? 'not-installed',
 		install: vi.fn(async (id: string) => { installed.set(id, 'installed'); }),
+		uninstall: vi.fn(async (id: string) => { installed.set(id, 'not-installed'); return true; }),
 		isSignedIn: async () => undefined,
 		hasSavedKey: async () => false,
 		signIn: async () => ({ ok: true }),
@@ -96,6 +98,23 @@ describe('SidebarHost', () => {
 		expect(posted[0].find(item => item.id === 'a')!.busy).toBeTruthy();
 		expect(card('a').install).toBe('installed');
 		expect(card('a').busy).toBeUndefined();
+	});
+
+	it('uninstalls an agent and shows it as not installed', async () => {
+		const { host, deps, card } = setup();
+		await host.handleMessage({ type: 'install', agentId: 'a' });
+		expect(card('a').removable).toBe(true);
+		await host.handleMessage({ type: 'uninstall', agentId: 'a' });
+		expect(deps.uninstall).toHaveBeenCalledWith('a');
+		expect(card('a').install).toBe('not-installed');
+		expect(card('a').busy).toBeUndefined();
+	});
+
+	it('shows an uninstall failure on that card only', async () => {
+		const { host, card } = setup({ uninstall: async () => { throw new Error('file in use'); } });
+		await host.handleMessage({ type: 'uninstall', agentId: 'a' });
+		expect(card('a').error).toContain('file in use');
+		expect(card('b').error).toBeUndefined();
 	});
 
 	it('shows an install failure on that card only', async () => {

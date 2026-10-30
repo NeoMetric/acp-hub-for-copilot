@@ -27,6 +27,36 @@ h2 {
 	margin-bottom: 8px;
 }
 
+.card-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+button.icon-button {
+	padding: 0 4px;
+	color: var(--vscode-icon-foreground, var(--vscode-foreground));
+	background: none;
+	border: none;
+	font-size: 1.2em;
+	line-height: 1.2;
+}
+
+button.icon-button:hover:not(:disabled),
+button.icon-button[aria-expanded="true"] {
+	background: var(--vscode-toolbar-hoverBackground);
+}
+
+.settings {
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+}
+
+.uninstall {
+	margin-top: 8px;
+}
+
 .actions progress {
 	width: 100%;
 	max-width: 120px;
@@ -178,11 +208,6 @@ button:disabled {
 .add-choice {
 	display: block;
 	margin-top: 8px;
-}
-
-.remove-agent {
-	margin-bottom: 8px;
-	font-size: 0.9em;
 }
 
 input[type="text"],

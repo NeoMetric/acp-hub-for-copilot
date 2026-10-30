@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../../src/core/adapter';
-import { findInstalled, findOnPath, getInstallState, installAgent, type InstallEnvironment } from '../../src/core/installers';
+import { canUninstall, findInstalled, findOnPath, getInstallState, installAgent, uninstallAgent, type InstallEnvironment } from '../../src/core/installers';
 
 const { runNpm } = vi.hoisted(() => ({ runNpm: vi.fn() }));
 vi.mock('../../src/core/npm', async importOriginal => ({
@@ -48,6 +48,32 @@ function fakeNpmCi(options: { withEntry: boolean }) {
 		return Promise.resolve();
 	});
 }
+
+describe('uninstallAgent', () => {
+	it('deletes the agent folder and leaves the other agents alone', async () => {
+		fakeNpmCi({ withEntry: true });
+		await installAgent(npmAdapter(), env);
+		const other = path.join(env.storageDir, 'other');
+		fs.mkdirSync(other, { recursive: true });
+		expect(await getInstallState(npmAdapter(), env)).toBe('installed');
+
+		await uninstallAgent(npmAdapter(), env);
+
+		expect(fs.existsSync(path.join(env.storageDir, 'demo'))).toBe(false);
+		expect(fs.existsSync(other)).toBe(true);
+		expect(await getInstallState(npmAdapter(), env)).toBe('not-installed');
+	});
+
+	it('succeeds when nothing is installed', async () => {
+		await expect(uninstallAgent(npmAdapter(), env)).resolves.toBeUndefined();
+	});
+
+	it('refuses to remove a CLI the extension did not install', async () => {
+		const cli = { id: 'cli', displayName: 'Cli', install: { kind: 'existing-cli', command: 'cli' } } as unknown as AgentAdapter;
+		expect(canUninstall(cli)).toBe(false);
+		await expect(uninstallAgent(cli, env)).rejects.toThrow('not installed by this extension');
+	});
+});
 
 describe('configured commands', () => {
 	it('uses an adapter command override before looking for its downloaded server', async () => {

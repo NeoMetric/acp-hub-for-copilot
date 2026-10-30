@@ -6,7 +6,7 @@
 import { randomBytes } from 'crypto';
 import type * as vscode from 'vscode';
 import type { AgentAdapter, AgentSettings } from '../core/adapter';
-import type { InstallState } from '../core/installers';
+import { canUninstall, type InstallState } from '../core/installers';
 import type { UsageState } from '../core/usage';
 import type { AgentCardState, FromWebview, SettingValue, SettingView, ToWebview } from './messages';
 
@@ -18,6 +18,8 @@ export interface SidebarDeps {
 	getInstallState(adapterId: string): Promise<InstallState>;
 	/** Rejects when the install fails. */
 	install(adapterId: string, onProgress: (message: string) => void): Promise<void>;
+	/** Asks the user to confirm, stops the agent and deletes its files; resolves to false when the user declines. */
+	uninstall(adapterId: string): Promise<boolean>;
 	isSignedIn(adapterId: string): Promise<boolean | undefined>;
 	hasSavedKey(adapterId: string): Promise<boolean>;
 	signIn(adapterId: string): Promise<{ ok: boolean; message?: string }>;
@@ -91,6 +93,11 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 			}
 			case 'install':
 				await this.install(adapter);
+				return;
+			case 'uninstall':
+				if (!this.installing.has(adapter.id)) {
+					await this.runBusy(adapter, 'Uninstalling...', async () => { await this.deps.uninstall(adapter.id); });
+				}
 				return;
 			case 'signIn':
 				await this.signIn(adapter);
@@ -184,6 +191,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 			id: adapter.id,
 			displayName: adapter.displayName,
 			install: this.installing.has(adapter.id) ? 'installing' : installState,
+			removable: canUninstall(adapter),
 			signedIn: signedIn === undefined ? 'unknown' : signedIn ? 'yes' : 'no',
 			hasSavedKey,
 			enabled: this.deps.isEnabled(adapter.id),

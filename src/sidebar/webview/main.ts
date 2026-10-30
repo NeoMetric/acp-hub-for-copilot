@@ -5,13 +5,19 @@
 
 /// <reference lib="dom" />
 
-import type { FromWebview, SettingValue, ToWebview } from '../messages';
+import type { AgentCardState, FromWebview, SettingValue, ToWebview } from '../messages';
 import { renderCards } from '../render';
 
 declare function acquireVsCodeApi(): { postMessage(message: FromWebview): void };
 
 const vscode = acquireVsCodeApi();
 const root = document.getElementById('root') as HTMLElement;
+const openSettings = new Set<string>();
+let agents: AgentCardState[] = [];
+
+function draw(): void {
+	root.innerHTML = renderCards(agents, openSettings);
+}
 
 function readSettingValue(input: HTMLInputElement | HTMLSelectElement): SettingValue {
 	const type = input.dataset.type;
@@ -34,7 +40,14 @@ root.addEventListener('click', event => {
 	}
 	const action = target.dataset.action;
 	const agentId = target.dataset.agent ?? '';
-	if (action === 'install' || action === 'signIn' || action === 'signOut' || action === 'refreshUsage' || action === 'addAgent' || action === 'removeAgent') {
+	if (action === 'toggleSettings') {
+		if (!openSettings.delete(agentId)) {
+			openSettings.add(agentId);
+		}
+		draw();
+		return;
+	}
+	if (action === 'install' || action === 'uninstall' || action === 'signIn' || action === 'signOut' || action === 'refreshUsage' || action === 'addAgent' || action === 'removeAgent') {
 		vscode.postMessage({ type: action, agentId });
 	}
 });
@@ -58,7 +71,8 @@ root.addEventListener('change', event => {
 window.addEventListener('message', event => {
 	const message = event.data as ToWebview;
 	if (message.type === 'state') {
-		root.innerHTML = renderCards(message.agents);
+		agents = message.agents;
+		draw();
 	}
 });
 

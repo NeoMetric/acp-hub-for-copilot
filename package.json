@@ -216,6 +216,7 @@
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
+		"vscode:uninstall": "node ./dist/uninstall.js",
 		"compile": "npm run typecheck && node esbuild.js",
 		"typecheck": "tsc -p . --noEmit",
 		"watch": "node esbuild.js --watch",

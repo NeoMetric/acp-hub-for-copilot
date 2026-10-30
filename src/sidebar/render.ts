@@ -127,27 +127,35 @@ function renderAccount(agent: AgentCardState): string {
 	return `<button data-action="signIn" data-agent="${id}"${disabled}>Sign in</button>`;
 }
 
-function renderCard(agent: AgentCardState): string {
+function renderSettingsPanel(agent: AgentCardState): string {
+	const settings = agent.settings.map(setting => renderSetting(agent.id, setting)).join('');
+	const disabled = agent.busy ? ' disabled' : '';
+	const uninstall = agent.removable && agent.install === 'installed'
+		? `<button class="secondary uninstall" data-action="uninstall" data-agent="${escapeHtml(agent.id)}"${disabled}>Uninstall agent</button>`
+		: '';
+	return `<div class="settings">${settings}${uninstall}</div>`;
+}
+
+function renderCard(agent: AgentCardState, settingsOpen: boolean): string {
 	const id = escapeHtml(agent.id);
 	const checked = agent.enabled ? ' checked' : '';
 	const busy = agent.busy ? `<div class="note">${escapeHtml(agent.busy)}</div>` : '';
 	const error = agent.error ? `<div class="error">${escapeHtml(agent.error)}</div>` : '';
-	const settings = agent.settings.map(setting => renderSetting(agent.id, setting)).join('');
+	const gear = `<button class="icon-button" data-action="toggleSettings" data-agent="${id}" aria-label="Settings for ${escapeHtml(agent.displayName)}" aria-expanded="${settingsOpen}" title="Settings">⚙</button>`;
 
 	return `<section class="card" data-agent="${id}">`
 		+ `<div class="card-head"><h2>${escapeHtml(agent.displayName)}</h2>`
-		+ `<label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${id}"${checked}> Enabled</label></div>`
-		+ `<button class="link remove-agent" data-action="removeAgent" data-agent="${id}">Remove from sidebar</button>`
+		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${id}"${checked}> Enabled</label>${gear}</div></div>`
 		+ `<div class="actions">${renderInstall(agent)}${renderAccount(agent)}</div>`
 		+ busy
 		+ error
 		+ renderUsage(agent)
-		+ (settings ? `<div class="settings">${settings}</div>` : '')
+		+ (settingsOpen ? renderSettingsPanel(agent) : '')
 		+ `</section>`;
 }
 
-export function renderCards(agents: AgentCardState[]): string {
-	const cards = agents.filter(agent => agent.visible).map(renderCard).join('');
+export function renderCards(agents: AgentCardState[], openSettings: ReadonlySet<string> = new Set()): string {
+	const cards = agents.filter(agent => agent.visible).map(agent => renderCard(agent, openSettings.has(agent.id))).join('');
 	const available = agents.filter(agent => !agent.visible);
 	const choices = available.map(agent => `<button class="secondary add-choice" data-action="addAgent" data-agent="${escapeHtml(agent.id)}">${escapeHtml(agent.displayName)}</button>`).join('');
 	const addAgent = available.length ? `<details class="add-agent"><summary>+ Add agent</summary>${choices}</details>` : '';

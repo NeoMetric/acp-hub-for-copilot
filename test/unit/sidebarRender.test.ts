@@ -12,6 +12,7 @@ function card(overrides: Partial<AgentCardState> = {}): AgentCardState {
 		id: 'one',
 		displayName: 'Agent One',
 		install: 'installed',
+		removable: true,
 		signedIn: 'yes',
 		hasSavedKey: false,
 		enabled: true,
@@ -22,7 +23,29 @@ function card(overrides: Partial<AgentCardState> = {}): AgentCardState {
 	};
 }
 
+const open = new Set(['one']);
+
 describe('renderCards', () => {
+	it('keeps settings out of the card until its settings button is opened', () => {
+		const settings = [{ key: 'idleTimeoutSeconds', label: 'Idle session timeout', description: '', type: 'number' as const, value: 120 }];
+		const closed = renderCards([card({ settings })]);
+		expect(closed).toContain('data-action="toggleSettings"');
+		expect(closed).toContain('aria-expanded="false"');
+		expect(closed).not.toContain('Idle session timeout');
+
+		const expanded = renderCards([card({ settings })], open);
+		expect(expanded).toContain('aria-expanded="true"');
+		expect(expanded).toContain('Idle session timeout');
+	});
+
+	it('offers uninstall in the settings panel only for an installed agent the extension installed', () => {
+		expect(renderCards([card()])).not.toContain('data-action="uninstall"');
+		expect(renderCards([card()], open)).toContain('data-action="uninstall"');
+		expect(renderCards([card({ removable: false })], open)).not.toContain('data-action="uninstall"');
+		expect(renderCards([card({ install: 'not-installed' })], open)).not.toContain('data-action="uninstall"');
+		expect(renderCards([card({ busy: 'Uninstalling...' })], open)).toMatch(/data-action="uninstall"[^>]*disabled/);
+	});
+
 	it('shows an install button for a not-installed agent', () => {
 		const html = renderCards([card({ install: 'not-installed' })]);
 		expect(html).toContain('data-action="install"');
@@ -84,7 +107,7 @@ describe('renderCards', () => {
 				{ key: 'mode', label: 'Mode', description: '', type: 'enum', value: 'b', options: ['a', 'b'] },
 				{ key: 'list', label: 'List', description: '', type: 'string-list', value: ['x', 'y'] },
 			],
-		})]);
+		})], open);
 		expect(html).toContain('type="checkbox" data-agent="one" data-key="flag"');
 		expect(html).toContain('<option value="b" selected>');
 		expect(html).toContain('value="x, y"');
@@ -94,7 +117,7 @@ describe('renderCards', () => {
 		const html = renderCards([card({ settings: [
 			{ key: 'dumpRequests', label: 'Dump requests', description: 'Debug', type: 'boolean', value: false },
 			{ key: 'idleTimeoutSeconds', label: 'Idle session timeout', description: 'Session lifetime', type: 'number', value: 120 },
-		] })]);
+		] })], open);
 		expect(html).toContain('class="setting setting-checkbox"');
 		expect(html).toContain('aria-label="About Dump requests"');
 		expect(html).toContain('aria-label="About Idle session timeout"');
@@ -105,7 +128,7 @@ describe('renderCards', () => {
 		const html = renderCards([card({
 			settings: [{ key: 'authPreference', label: 'Auth preference', description: 'Choose credentials.', type: 'enum', value: 'auto', options: ['auto'], optionDescriptions: ['Use the available account.'] }],
 			usage: { status: 'ok', windows: [{ label: 'Cumulative cache hit rate', usedPercent: 50 }] },
-		})]);
+		})], open);
 		expect(html).toContain('aria-label="About Auth preference"');
 		expect(html).toContain('auto: Use the available account.');
 		expect(html).toContain('aria-label="About Cumulative cache hit rate"');

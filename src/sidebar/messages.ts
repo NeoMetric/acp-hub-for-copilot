@@ -34,6 +34,8 @@ export interface AgentCardState {
 	id: string;
 	displayName: string;
 	install: InstallView;
+	/** Whether the extension installed the agent and so can uninstall it. */
+	removable: boolean;
 	signedIn: SignedInView;
 	hasSavedKey: boolean;
 	enabled: boolean;
@@ -49,7 +51,7 @@ export type ToWebview = { type: 'state'; agents: AgentCardState[] };
 
 export type FromWebview =
 	| { type: 'ready' }
-	| { type: 'install' | 'signIn' | 'signOut' | 'refreshUsage'; agentId: string }
+	| { type: 'install' | 'uninstall' | 'signIn' | 'signOut' | 'refreshUsage'; agentId: string }
 	| { type: 'addAgent' | 'removeAgent'; agentId: string }
 	| { type: 'setEnabled'; agentId: string; enabled: boolean }
 	| { type: 'setSetting'; agentId: string; key: string; value: SettingValue };

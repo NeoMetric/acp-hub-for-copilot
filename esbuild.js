@@ -34,6 +34,12 @@ const builds = tests
 		outfile: "dist/extension.js",
 		minify: !watch
 	}, {
+		// VS Code runs this once after the extension is uninstalled.
+		...shared,
+		entryPoints: ["src/uninstall.ts"],
+		outfile: "dist/uninstall.js",
+		minify: !watch
+	}, {
 		// The sidebar page runs in a webview, not in node.
 		...shared,
 		platform: "browser",

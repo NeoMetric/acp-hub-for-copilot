@@ -92,6 +92,21 @@ export async function getInstallState(adapter: AgentAdapter, env: InstallEnviron
 	return (await findInstalled(adapter, env)) ? 'installed' : 'not-installed';
 }
 
+/** Whether the extension put the agent on the machine, so it can take it off again. An existing CLI is not ours to remove. */
+export function canUninstall(adapter: AgentAdapter): boolean {
+	return adapter.install.kind !== 'existing-cli';
+}
+
+/** Deletes the agent's folder in the extension's global storage, including its state. The caller stops the agent first. */
+export async function uninstallAgent(adapter: AgentAdapter, env: InstallEnvironment): Promise<void> {
+	if (!canUninstall(adapter)) {
+		throw new Error(`${adapter.displayName} was not installed by this extension.`);
+	}
+	// Windows keeps a program's files locked for a moment after it exits.
+	await fs.promises.rm(path.join(env.storageDir, adapter.id), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+	env.log(`Uninstalled ${adapter.displayName}`);
+}
+
 /** Installs the agent unless it is already there. An existing CLI cannot be installed from here. */
 export async function installAgent(adapter: AgentAdapter, env: InstallEnvironment, report?: InstallProgressReporter): Promise<InstallResult> {
 	const emit = (update: InstallProgress) => {
