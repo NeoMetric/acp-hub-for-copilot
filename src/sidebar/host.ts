@@ -17,6 +17,7 @@ export interface SidebarDeps {
 	/** Rejects when the install fails. */
 	install(adapterId: string): Promise<void>;
 	isSignedIn(adapterId: string): Promise<boolean | undefined>;
+	hasSavedKey(adapterId: string): Promise<boolean>;
 	signIn(adapterId: string): Promise<{ ok: boolean; message?: string }>;
 	signOut(adapterId: string): Promise<void>;
 	readSettings(adapterId: string): AgentSettings;
@@ -138,6 +139,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 	private async buildCard(adapter: AgentAdapter): Promise<AgentCardState> {
 		const installState = await this.deps.getInstallState(adapter.id);
 		const signedIn = await this.deps.isSignedIn(adapter.id);
+		const hasSavedKey = await this.deps.hasSavedKey(adapter.id);
 		const usage = this.deps.getUsage(adapter.id);
 		const settings = this.deps.readSettings(adapter.id);
 
@@ -156,6 +158,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 			displayName: adapter.displayName,
 			install: this.installing.has(adapter.id) ? 'installing' : installState,
 			signedIn: signedIn === undefined ? 'unknown' : signedIn ? 'yes' : 'no',
+			hasSavedKey,
 			enabled: this.deps.isEnabled(adapter.id),
 			settings: settingViews,
 			usage: {

@@ -101,8 +101,11 @@ function renderInstall(agent: AgentCardState): string {
 function renderAccount(agent: AgentCardState): string {
 	const id = escapeHtml(agent.id);
 	const disabled = agent.install !== 'installed' || agent.busy ? ' disabled' : '';
+	if (agent.hasSavedKey) {
+		return `<button class="secondary" data-action="signOut" data-agent="${id}"${disabled}>Remove API key</button>`;
+	}
 	if (agent.signedIn === 'yes') {
-		return `<button class="secondary" data-action="signOut" data-agent="${id}"${disabled}>Sign out</button>`;
+		return '<span class="badge">Signed in</span>';
 	}
 	return `<button data-action="signIn" data-agent="${id}"${disabled}>Sign in</button>`;
 }

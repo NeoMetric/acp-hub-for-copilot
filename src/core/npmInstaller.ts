@@ -51,6 +51,11 @@ export class NpmInstaller {
 		return findAdapterEntry(directory, this.packageName, this.entry);
 	}
 
+	/** Finds the current version or a previously completed installation. */
+	async findUsable(): Promise<string | undefined> {
+		return await this.findInstalled() ?? await this.findPreviousInstall();
+	}
+
 	/** Installs the adapter unless the current version is already there. */
 	async install(): Promise<string> {
 		const existing = await this.findInstalled();

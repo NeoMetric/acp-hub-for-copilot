@@ -27,6 +27,7 @@ if (process.env.MOCK_ACP_FAIL_FILE && fs.existsSync(process.env.MOCK_ACP_FAIL_FI
 	process.exit(1);
 }
 
+let authenticated = false;
 let sessions = 0;
 let newRequests = 0;
 let permissionRequests = 0;
@@ -125,11 +126,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 			agentInfo: { name: 'mock-acp-agent', title: 'Mock agent', version: '0.0.0' },
 		});
 	} else if (message.method === 'authenticate') {
-		if (message.params.methodId === 'mock-login') { reply(message.id, {}); }
+		if (message.params.methodId === 'mock-login' && (mode !== 'key-auth' || process.env.MOCK_API_KEY === 'fixture-key')) { authenticated = true; reply(message.id, {}); }
 		else { fail(message.id, -32602, 'Unknown authentication method'); }
 	} else if (message.method === 'session/new') {
 		newRequests++;
-		if (mode === 'auth-required') {
+		if (mode === 'auth-required' || (mode === 'key-auth' && !authenticated)) {
 			fail(message.id, -32000, 'Authentication required');
 			return;
 		}

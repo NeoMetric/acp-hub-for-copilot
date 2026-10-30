@@ -79,6 +79,15 @@ describe('npm agents', () => {
 		expect(await getInstallState(npmAdapter(), env)).toBe('installed');
 	});
 
+	it('finds the previous installation after an upgrade fails', async () => {
+		fakeNpmCi({ withEntry: true });
+		const previous = await installAgent(npmAdapter(), env);
+		fs.writeFileSync(path.join(env.extensionDir, 'adapters', 'demo', 'package-lock.json'), '{"lock":2}');
+		runNpm.mockRejectedValue(new Error('offline'));
+		expect((await installAgent(npmAdapter(), env)).entryPath).toBe(previous.entryPath);
+		expect((await findInstalled(npmAdapter(), env))?.entryPath).toBe(previous.entryPath);
+	});
+
 	it('stays not installed when npm fails', async () => {
 		runNpm.mockRejectedValue(new Error('offline'));
 		await expect(installAgent(npmAdapter(), env)).rejects.toThrow('offline');

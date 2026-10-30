@@ -67,7 +67,7 @@ export async function findInstalled(adapter: AgentAdapter, env: InstallEnvironme
 
 	if (spec.kind === 'npm') {
 		const installer = npmInstallerFor(adapter, env);
-		const entry = await installer?.findInstalled();
+		const entry = await installer?.findUsable();
 		return entry && installer ? { entryPath: entry, installDir: installer.root } : undefined;
 	}
 	if (spec.kind === 'download') {

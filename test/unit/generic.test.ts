@@ -39,9 +39,10 @@ it('starts a registry-only agent and streams its reply', async () => {
 	const adapter = manifestToAdapter({
 		id: 'fixture', displayName: 'Fixture', settings: [],
 		install: { kind: 'existing-cli', command: process.execPath },
-		launch: { args: [script], env: { MOCK_ACP_MODE: 'normal' } }, auth: [],
+		launch: { args: [script], env: { MOCK_ACP_MODE: 'key-auth' } },
+		auth: [{ kind: 'api-key', label: 'Fixture key', envVar: 'MOCK_API_KEY', agentMethodId: 'mock-login' }],
 	});
-	const ctx = { entryPath: process.execPath, installDir: '', storageDir: temp, workspaceFolder: temp, settings: {} };
+	const ctx = { entryPath: process.execPath, installDir: '', storageDir: temp, workspaceFolder: temp, settings: {}, apiKey: 'fixture-key' };
 	const client = new AgentClient(adapter, ctx, { log: () => {}, storageDir: temp, clientVersion: '1' });
 	try {
 		const session = await client.createSession({ cwd: temp, mcpServers: [] });
@@ -50,6 +51,7 @@ it('starts a registry-only agent and streams its reply', async () => {
 		expect(adapter.vendor).toBe('acphub-fixture');
 		expect(response).toBe('hello');
 	} finally {
+		await client.restart();
 		client.dispose();
 		fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	}

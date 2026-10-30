@@ -24,6 +24,7 @@ function setup(overrides: Partial<SidebarDeps> = {}) {
 		getInstallState: async id => installed.get(id) ?? 'not-installed',
 		install: vi.fn(async (id: string) => { installed.set(id, 'installed'); }),
 		isSignedIn: async () => undefined,
+		hasSavedKey: async () => false,
 		signIn: async () => ({ ok: true }),
 		signOut: async () => { },
 		readSettings: () => ({}),

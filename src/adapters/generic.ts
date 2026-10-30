@@ -31,6 +31,15 @@ export function manifestToAdapter(entry: ManifestEntry): AgentAdapter {
 			return { command: ctx.entryPath, args: [...entry.launch.args], env };
 		},
 		auth: entry.auth,
+		authenticate: (methods, apiKey) => {
+			if (!apiKey) { return undefined; }
+			for (const method of entry.auth) {
+				if (method.kind !== 'api-key') { continue; }
+				const methodId = method.agentMethodId ?? 'api-key';
+				if (methods.some(advertised => advertised.id === methodId)) { return { methodId }; }
+			}
+			return undefined;
+		},
 		settings: entry.settings,
 		modelPolicy: {
 			detail: entry.displayName,

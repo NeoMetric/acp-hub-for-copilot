@@ -15,7 +15,7 @@ import type { SavedSession } from '../sessionStore';
 export type AgentApi = Pick<AgentClient,
 	'ensureStarted' | 'createSession' | 'resumeSession' | 'forkSession' | 'closeSession' | 'setConfigOption' | 'setSessionModel'
 	| 'prompt' | 'cancel' | 'restart' | 'stopWhenIdle' | 'hasBackgroundTasks' | 'isRunning' | 'requiresSignIn' | 'onDidChange'
-	| 'updateContext' | 'signInWithMethod' | 'dispose'>;
+	| 'updateContext' | 'lastAuthStatus' | 'signInWithMethod' | 'dispose'>;
 
 /** Everything the provider needs from the extension that hosts it. */
 export interface ProviderDeps {

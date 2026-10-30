@@ -35,6 +35,7 @@ export interface AgentCardState {
 	displayName: string;
 	install: InstallView;
 	signedIn: SignedInView;
+	hasSavedKey: boolean;
 	enabled: boolean;
 	settings: SettingView[];
 	usage: UsageView;

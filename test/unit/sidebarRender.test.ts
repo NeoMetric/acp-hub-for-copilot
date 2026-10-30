@@ -13,6 +13,7 @@ function card(overrides: Partial<AgentCardState> = {}): AgentCardState {
 		displayName: 'Agent One',
 		install: 'installed',
 		signedIn: 'yes',
+		hasSavedKey: false,
 		enabled: true,
 		settings: [],
 		usage: { status: 'unsupported', windows: [] },
@@ -25,6 +26,18 @@ describe('renderCards', () => {
 		const html = renderCards([card({ install: 'not-installed' })]);
 		expect(html).toContain('data-action="install"');
 		expect(html).toContain('Agent One');
+	});
+
+	it('does not offer API key removal as browser account sign-out', () => {
+		const html = renderCards([card({ signedIn: 'yes', hasSavedKey: false })]);
+		expect(html).toContain('Signed in');
+		expect(html).not.toContain('data-action="signOut"');
+	});
+
+	it('offers API key removal when a key is saved', () => {
+		const html = renderCards([card({ signedIn: 'yes', hasSavedKey: true })]);
+		expect(html).toContain('Remove API key');
+		expect(html).toContain('data-action="signOut"');
 	});
 
 	it('explains when usage is unsupported', () => {
