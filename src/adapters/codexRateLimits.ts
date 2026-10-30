@@ -42,6 +42,8 @@ export interface RateLimitOptions {
 	readonly log?: Log;
 	/** `NODE_OPTIONS` for the app server process, such as the hidden-console preload. */
 	readonly nodeOptions?: string;
+	/** The version of the installed adapter, which the handshake reports. */
+	readonly adapterVersion: string;
 	/** The `CODEX_HOME` the agent runs in, so the read asks the account the agent is signed in with. */
 	readonly codexHome?: string;
 }

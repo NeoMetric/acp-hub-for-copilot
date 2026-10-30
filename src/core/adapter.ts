@@ -26,6 +26,8 @@ export interface LaunchContext {
 	entryPath: string;
 	/** The folder holding the install; empty for an existing CLI. */
 	installDir: string;
+	/** A folder of the agent's own in the extension's global storage, for state that must survive updates. */
+	storageDir: string;
 	settings: AgentSettings;
 	apiKey?: string;
 	workspaceFolder: string;

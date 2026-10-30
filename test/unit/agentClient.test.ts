@@ -50,7 +50,7 @@ function testAdapter(overrides: Partial<AgentAdapter> = {}): AgentAdapter {
 }
 
 function launchContext(settings: AgentSettings = {}, entryPath = MOCK_AGENT): LaunchContext {
-	return { entryPath, installDir: temp, settings, workspaceFolder: temp };
+	return { entryPath, installDir: temp, storageDir: temp, settings, workspaceFolder: temp };
 }
 
 function createClient(adapter: AgentAdapter = testAdapter(), ctx: LaunchContext = launchContext(), askPermission?: (message: string, labels: string[]) => Promise<number | undefined>): AgentClient {

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { findAdapter } from '../../src/core/agents';
@@ -22,13 +22,10 @@ function tsFilesUnder(dir: string): string[] {
 describe('core stays agent-neutral', () => {
 	for (const dir of ['src/core', 'src/sidebar']) {
 		it(`${dir} never names an agent`, () => {
-			let files: string[] = [];
-			try {
-				files = tsFilesUnder(dir);
-			} catch {
+			if (!existsSync(dir)) {
 				return;
 			}
-			for (const file of files) {
+			for (const file of tsFilesUnder(dir)) {
 				const text = readFileSync(file, 'utf8');
 				expect(AGENT_LITERAL.test(text), `${file} names an agent`).toBe(false);
 				expect(VENDOR_COMPARE.test(text), `${file} compares a vendor id`).toBe(false);
