@@ -1,0 +1,9 @@
+{
+	"name": "codex-acp-adapter-runtime",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Pinned install manifest for the Codex ACP adapter that the extension installs on first use. Do not edit by hand: bump the version here and in src/adapter.ts together.",
+	"dependencies": {
+		"@agentclientprotocol/codex-acp": "2.3.0"
+	}
+}

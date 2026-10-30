@@ -9,12 +9,21 @@ export interface InstallContext {
 	progress(message: string): void;
 }
 
+/**
+ * How an agent gets onto the machine. `npm` installs from the lockfile in
+ * `manifestDirectory` (relative to the extension folder) and finds the
+ * package's `bin` entry. `download` returns the path of the program it put in
+ * place. `existing-cli` expects `command` on the PATH.
+ */
 export type InstallSpec =
-	| { kind: 'npm'; packageName: string; version: string; entryFile?: string }
-	| { kind: 'download'; download: (ctx: InstallContext) => Promise<string> }
+	| { kind: 'npm'; packageName: string; version: string; manifestDirectory: string }
+	| { kind: 'download'; version: string; find(ctx: InstallContext): Promise<string | undefined>; install(ctx: InstallContext): Promise<string> }
 	| { kind: 'existing-cli'; command: string };
 
 export interface LaunchContext {
+	/** What the install produced: the adapter's entry file, the downloaded program, or the CLI command. */
+	entryPath: string;
+	/** The folder holding the install; empty for an existing CLI. */
 	installDir: string;
 	settings: AgentSettings;
 	apiKey?: string;
