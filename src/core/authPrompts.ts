@@ -40,6 +40,9 @@ export async function pickSignInChoice(adapter: AgentAdapter, terminalMethods: A
 		items.push({ label: method.label, description: 'browser sign-in', choice: method });
 	}
 	for (const method of adapter.auth) {
+		if (method.kind === 'oauth-browser' && !method.terminalCommand) {
+			items.push({ label: method.label, description: 'browser sign-in', choice: method });
+		}
 		if (method.kind === 'api-key') {
 			keyPrefix = method.keyPrefix;
 			items.push({ label: method.label, description: 'pay per token', choice: 'api-key' });
@@ -55,6 +58,9 @@ export async function pickSignInChoice(adapter: AgentAdapter, terminalMethods: A
 		return undefined;
 	}
 	if (picked.choice !== 'api-key') {
+		if (picked.choice.kind === 'oauth-browser' && !picked.choice.terminalCommand) {
+			return { kind: 'browser', method: picked.choice };
+		}
 		return { kind: 'terminal', method: picked.choice };
 	}
 

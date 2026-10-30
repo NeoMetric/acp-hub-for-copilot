@@ -49,6 +49,18 @@ function fakeNpmCi(options: { withEntry: boolean }) {
 	});
 }
 
+describe('configured commands', () => {
+	it('uses an adapter command override before looking for its downloaded server', async () => {
+		const agent = {
+			id: 'demo', displayName: 'Demo',
+			install: { kind: 'download', version: '1', find: vi.fn().mockResolvedValue(undefined), install: vi.fn() },
+			findCommandOverride: (settings: { command?: string }) => settings.command,
+		} as unknown as AgentAdapter;
+		const result = await findInstalled(agent, { ...env, settings: { command: 'custom-server' } });
+		expect(result?.entryPath).toBe('custom-server');
+	});
+});
+
 describe('npm agents', () => {
 	it('is not installed before installing', async () => {
 		expect(await getInstallState(npmAdapter(), env)).toBe('not-installed');

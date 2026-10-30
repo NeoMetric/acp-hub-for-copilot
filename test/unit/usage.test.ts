@@ -16,6 +16,14 @@ describe('UsageStore', () => {
 		expect(store.get('plain').status).toBe('unsupported');
 	});
 
+	it('keeps a token-weighted cache rate separately for each agent', () => {
+		const store = new UsageStore(() => { });
+		store.recordTurn('one', { inputTokens: 25, outputTokens: 0, cachedReadTokens: 75, cachedWriteTokens: 0, totalTokens: 100 }, false);
+		store.recordTurn('one', { inputTokens: 75, outputTokens: 0, cachedReadTokens: 25, cachedWriteTokens: 0, totalTokens: 100 }, false);
+		expect(store.get('one').extraWindows).toEqual([{ label: 'Cache hit rate', usedPercent: 50 }]);
+		expect(store.get('two').extraWindows).toEqual([]);
+	});
+
 	it('stores a good reading', async () => {
 		const store = new UsageStore(() => { }, () => 1000);
 		await store.refresh(adapterWith(() => Promise.resolve(reading)), ctx);

@@ -160,8 +160,8 @@ function mergeConfig(settings: AgentSettings, env: Record<string, string>): Reco
  * The key in the child's environment is not a credential the adapter reads on
  * its own, so the API-key method has to be selected as well, before any session work.
  */
-function authenticate(_methods: AcpAuthMethod[], apiKey: string | undefined): AuthenticateRequest | undefined {
-	if (!apiKey) {
+function authenticate(_methods: AcpAuthMethod[], apiKey: string | undefined, settings: AgentSettings = {}): AuthenticateRequest | undefined {
+	if (!apiKey || usesChatGptOnly(settings)) {
 		return undefined;
 	}
 	return { methodId: 'api-key', _meta: { 'api-key': { apiKey } } };
@@ -225,7 +225,7 @@ export const codexAdapter: AgentAdapter = {
 	launch,
 	auth: [
 		// The agent runs this sign-in itself (`authenticate` with its `chat-gpt` method).
-		{ kind: 'oauth-browser', label: 'ChatGPT account' },
+		{ kind: 'oauth-browser', label: 'ChatGPT account', agentMethodId: 'chat-gpt', browserAuthPreference: 'chatgpt' },
 		{ kind: 'api-key', label: 'OpenAI API key', envVar: 'CODEX_API_KEY', keyPrefix: 'sk-' },
 	],
 	settings: [...REGISTRY.commonSettings, ...registry.settings],

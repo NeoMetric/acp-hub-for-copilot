@@ -1,9 +1,13 @@
 import type { SettingSpec } from './adapter';
+import type { ManifestEntry } from '../adapters/generic';
 
 export interface RegistryAgent {
 	id: string;
 	displayName: string;
 	settings: SettingSpec[];
+	install?: ManifestEntry['install'];
+	launch?: ManifestEntry['launch'];
+	auth?: ManifestEntry['auth'];
 }
 
 export interface RegistryFile {

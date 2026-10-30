@@ -24,6 +24,24 @@
 	],
 	"main": "./dist/extension.js",
 	"contributes": {
+		"commands": [
+			{
+				"command": "acpHub.showLogs",
+				"title": "ACP Hub: Show Logs"
+			},
+			{
+				"command": "acpHub.signIn",
+				"title": "ACP Hub: Sign In"
+			},
+			{
+				"command": "acpHub.install",
+				"title": "ACP Hub: Install Agent"
+			},
+			{
+				"command": "acpHub.refreshUsage",
+				"title": "ACP Hub: Refresh Usage"
+			}
+		],
 		"viewsContainers": {
 			"activitybar": [
 				{

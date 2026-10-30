@@ -124,6 +124,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 			authMethods: [{ id: 'mock-login', name: 'Mock login' }],
 			agentInfo: { name: 'mock-acp-agent', title: 'Mock agent', version: '0.0.0' },
 		});
+	} else if (message.method === 'authenticate') {
+		if (message.params.methodId === 'mock-login') { reply(message.id, {}); }
+		else { fail(message.id, -32602, 'Unknown authentication method'); }
 	} else if (message.method === 'session/new') {
 		newRequests++;
 		if (mode === 'auth-required') {

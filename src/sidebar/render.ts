@@ -63,7 +63,7 @@ function renderWindow(window: UsageWindow): string {
 function renderUsage(agent: AgentCardState): string {
 	const usage = agent.usage;
 	if (usage.status === 'unsupported') {
-		return '';
+		return '<div class="usage note">Usage is not supported for this agent.</div>';
 	}
 
 	const parts: string[] = [];

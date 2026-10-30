@@ -133,8 +133,8 @@ export function authenticateMethodFor(advertised: readonly AcpAuthMethod[], hasA
 	return ids.find(id => id !== 'gemini-api-key') ?? ids[0];
 }
 
-function authenticate(methods: AcpAuthMethod[], apiKey: string | undefined): { methodId: string } | undefined {
-	const methodId = authenticateMethodFor(methods, apiKey !== undefined);
+function authenticate(methods: AcpAuthMethod[], apiKey: string | undefined, settings: AgentSettings = {}): { methodId: string } | undefined {
+	const methodId = authenticateMethodFor(methods, apiKey !== undefined && !usesSignedInAccountOnly(settings));
 	return methodId ? { methodId } : undefined;
 }
 
@@ -183,8 +183,9 @@ export const googleAdapter: AgentAdapter = {
 	vendor: vendorOf(ID),
 	install: { kind: 'download', version: SERVER_VERSION, find: findServer, install: installServer },
 	launch,
+	findCommandOverride: settings => stringSetting(settings, 'command').trim() || undefined,
 	auth: [
-		{ kind: 'oauth-browser', label: 'Google account' },
+		{ kind: 'oauth-browser', label: 'Google account', browserAuthPreference: 'oauth' },
 		{ kind: 'api-key', label: 'Gemini API key', envVar: 'GEMINI_API_KEY', keyPrefix: 'AIza' },
 	],
 	settings: [...REGISTRY.commonSettings, ...registry.settings],

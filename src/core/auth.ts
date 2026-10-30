@@ -21,6 +21,7 @@ export interface SignInDeps {
 	store: KeyStore;
 	ctx: LaunchContext;
 	runTerminal: TerminalRunner;
+	startAgent?(methodId?: string): Promise<boolean>;
 }
 
 export interface SignInStateDeps {
@@ -31,7 +32,8 @@ export interface SignInStateDeps {
 
 export type SignInChoice =
 	| { kind: 'api-key'; key: string }
-	| { kind: 'terminal'; method: AuthMethodSpec };
+	| { kind: 'terminal'; method: AuthMethodSpec }
+	| { kind: 'browser'; method: AuthMethodSpec };
 
 export type SignInResult = { ok: true } | { ok: false; message: string };
 
@@ -159,6 +161,17 @@ export async function signIn(adapter: AgentAdapter, choice: SignInChoice, deps: 
 			return { ok: false, message: `${adapter.displayName} does not sign in with an API key.` };
 		}
 		return signInWithApiKey(adapter.id, choice.key, deps.store);
+	}
+	if (choice.kind === 'browser') {
+		const declared = adapter.auth.some(method => method.kind === 'oauth-browser' && !method.terminalCommand && method.label === choice.method.label);
+		if (!declared || !deps.startAgent) { return { ok: false, message: 'This browser sign-in is not available.' }; }
+		const method = adapter.auth.find(item => item.kind === 'oauth-browser' && item.label === choice.method.label);
+		const methodId = method?.kind === 'oauth-browser' ? method.agentMethodId : undefined;
+		const preference = method?.kind === 'oauth-browser' ? method.browserAuthPreference : undefined;
+		if (deps.ctx.apiKey && preference && deps.ctx.settings.authPreference !== preference) {
+			return { ok: false, message: `A saved API key takes precedence. Remove it or set authPreference to ${preference} before signing in.` };
+		}
+		return await deps.startAgent(methodId) ? { ok: true } : { ok: false, message: 'Sign-in did not complete.' };
 	}
 	return signInWithTerminal(adapter, choice.method, deps.ctx, deps);
 }

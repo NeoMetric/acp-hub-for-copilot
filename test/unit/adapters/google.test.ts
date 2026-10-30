@@ -48,7 +48,7 @@ describe('googleAdapter', () => {
 
 	it('lists its sign-in methods', () => {
 		expect(googleAdapter.auth).toEqual([
-			{ kind: 'oauth-browser', label: 'Google account' },
+			{ kind: 'oauth-browser', label: 'Google account', browserAuthPreference: 'oauth' },
 			{ kind: 'api-key', label: 'Gemini API key', envVar: 'GEMINI_API_KEY', keyPrefix: 'AIza' },
 		]);
 	});
@@ -209,6 +209,7 @@ describe('google hooks', () => {
 		expect(authenticateMethodFor(methods, false)).toBe('oauth-personal');
 		expect(authenticateMethodFor([], false)).toBeUndefined();
 		expect(googleAdapter.authenticate?.(methods, 'AIza')).toEqual({ methodId: 'gemini-api-key' });
+		expect(googleAdapter.authenticate?.(methods, 'AIza', { authPreference: 'oauth' })).toEqual({ methodId: 'oauth-personal' });
 		expect(googleAdapter.authenticate?.([], undefined)).toBeUndefined();
 	});
 });

@@ -1,5 +1,7 @@
 import type { AgentAdapter, UsageContext, UsageReading, UsageWindow } from './adapter';
 import type { Log } from './logging';
+import type { AcpTokenUsage } from './agentClient';
+import { CacheTracker } from './cache';
 
 /** A reading younger than this is reused instead of asking the agent again. */
 export const FRESH_MS = 60_000;
@@ -21,6 +23,7 @@ export type UsageListener = (agentId: string) => void;
 /** Keeps the usage of every agent for the sidebar. */
 export class UsageStore {
 	private readonly states = new Map<string, UsageState>();
+	private readonly caches = new Map<string, CacheTracker>();
 	private readonly inFlight = new Map<string, Promise<void>>();
 	private readonly listeners: UsageListener[] = [];
 
@@ -39,6 +42,14 @@ export class UsageStore {
 				this.listeners.splice(index, 1);
 			}
 		};
+	}
+
+	recordTurn(agentId: string, tokens: AcpTokenUsage | undefined, background: boolean): void {
+		let cache = this.caches.get(agentId);
+		if (!cache) { cache = new CacheTracker(); this.caches.set(agentId, cache); }
+		if (cache.record(tokens, background) && cache.overall) {
+			this.setExtraWindows(agentId, [{ label: 'Cache hit rate', usedPercent: cache.overall.hitRate }]);
+		}
 	}
 
 	setExtraWindows(agentId: string, windows: UsageWindow[]): void {

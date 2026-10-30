@@ -17,7 +17,7 @@ export interface InstallContext {
  * place. `existing-cli` expects `command` on the PATH.
  */
 export type InstallSpec =
-	| { kind: 'npm'; packageName: string; version: string; manifestDirectory: string }
+	| { kind: 'npm'; packageName: string; version: string; manifestDirectory: string; entry?: string }
 	| { kind: 'download'; version: string; find(ctx: InstallContext): Promise<string | undefined>; install(ctx: InstallContext): Promise<string> }
 	| { kind: 'existing-cli'; command: string };
 
@@ -41,7 +41,7 @@ export interface LaunchSpec {
 }
 
 export type AuthMethodSpec =
-	| { kind: 'oauth-browser'; label: string; terminalCommand?: string[] }
+	| { kind: 'oauth-browser'; label: string; terminalCommand?: string[]; agentMethodId?: string; browserAuthPreference?: string }
 	| { kind: 'api-key'; label: string; envVar: string; /** Start of a usual key; a key without it only gets a warning. */ keyPrefix?: string }
 	| { kind: 'agent-managed'; label: string };
 
@@ -141,6 +141,7 @@ export interface AgentAdapter {
 	vendor: string;
 	install: InstallSpec;
 	launch(ctx: LaunchContext): LaunchSpec;
+	findCommandOverride?(settings: AgentSettings): string | undefined;
 	auth: AuthMethodSpec[];
 	settings: SettingSpec[];
 	modelPolicy: ModelPolicy;
@@ -168,7 +169,7 @@ export interface AgentAdapter {
 	/** Merged into `clientCapabilities` of `initialize`. */
 	clientCapabilities?: Record<string, unknown>;
 	/** Picks the `authenticate` call to make after `initialize`, or `undefined` for none. */
-	authenticate?(methods: AcpAuthMethod[], apiKey: string | undefined): AuthenticateRequest | undefined;
+	authenticate?(methods: AcpAuthMethod[], apiKey: string | undefined, settings?: AgentSettings): AuthenticateRequest | undefined;
 	/**
 	 * Reads the usage of one model call from an agent-specific notification; called for every notification
 	 * the client does not know. Returns `undefined` when the notification is not the adapter's, otherwise the

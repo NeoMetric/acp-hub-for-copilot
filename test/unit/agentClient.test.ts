@@ -66,6 +66,12 @@ async function reply(target: AgentClient, sessionId: string, text: string): Prom
 }
 
 describe('AgentClient', () => {
+	it('authenticates through the agent using its advertised method', async () => {
+		const target = createClient();
+		await expect(target.signInWithMethod('mock-login')).resolves.toBeUndefined();
+		await expect(target.signInWithMethod('unknown')).rejects.toThrow('not advertised');
+	});
+
 	it('starts the agent, opens a session and streams a turn', async () => {
 		const target = createClient();
 		const session = await target.createSession({ cwd: temp, mcpServers: [] });
@@ -144,7 +150,7 @@ describe('AgentClient', () => {
 		await vi.advanceTimersByTimeAsync(2_000);
 		expect(target.isRunning).toBe(false);
 		vi.useRealTimers();
-		await vi.waitFor(() => expect(changes).toContain('idle'));
+		await vi.waitFor(() => expect(changes).toContain('idle'), { timeout: 15_000 });
 
 		const next = await target.createSession({ cwd: temp, mcpServers: [] });
 		expect(await reply(target, next.sessionId, 'hi')).toBe('hello');

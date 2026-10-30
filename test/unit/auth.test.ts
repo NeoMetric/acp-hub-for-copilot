@@ -54,6 +54,29 @@ describe('terminalMethodsFrom', () => {
 	});
 });
 
+describe('agent browser sign in', () => {
+	it('does not claim browser sign-in while a saved key takes precedence', async () => {
+		const browser = { kind: 'oauth-browser', label: 'Account', browserAuthPreference: 'oauth' } as const;
+		const startAgent = vi.fn();
+		const result = await signIn(makeAdapter('browser', [browser]), { kind: 'browser', method: browser }, {
+			store: makeStore(), ctx: { ...ctx, apiKey: 'saved', settings: { authPreference: 'auto' } }, runTerminal: vi.fn(), startAgent,
+		});
+		expect(result.ok).toBe(false);
+		expect(startAgent).not.toHaveBeenCalled();
+	});
+
+	it('starts the agent for a declared browser login without a terminal command', async () => {
+		const browser = { kind: 'oauth-browser', label: 'Google account' } as const;
+		const agent = makeAdapter('browser', [browser]);
+		const startAgent = vi.fn().mockResolvedValue(true);
+		const result = await signIn(agent, { kind: 'browser', method: browser }, {
+			store: makeStore(), ctx, runTerminal: vi.fn(), startAgent,
+		});
+		expect(startAgent).toHaveBeenCalledOnce();
+		expect(result).toEqual({ ok: true });
+	});
+});
+
 describe('validateApiKey', () => {
 	it('rejects empty or whitespace-containing input', () => {
 		expect(validateApiKey('')?.severity).toBe('error');

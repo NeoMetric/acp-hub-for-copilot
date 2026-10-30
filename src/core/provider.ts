@@ -161,6 +161,9 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	}
 
 	provideLanguageModelChatInformation(options: vscode.PrepareLanguageModelChatModelOptions, token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
+		if (this.deps.isEnabled?.() === false) {
+			return Promise.resolve([]);
+		}
 		return this.models.provide(options, token);
 	}
 
@@ -317,6 +320,18 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	async provideTokenCount(_model: vscode.LanguageModelChatInformation, value: string | vscode.LanguageModelChatRequestMessage, _token: vscode.CancellationToken): Promise<number> {
 		const characters = typeof value === 'string' ? value.length : characterCountOf(value);
 		return Math.ceil(characters / CHARS_PER_TOKEN);
+	}
+
+	/** Starts the agent to let its own browser sign-in flow run. */
+	async startForSignIn(methodId?: string): Promise<boolean> {
+		const agent = await this.agentClient();
+		await agent.restart();
+		if (methodId) {
+			await agent.signInWithMethod(methodId);
+		} else {
+			await agent.ensureStarted();
+		}
+		return !agent.requiresSignIn;
 	}
 
 	/** Restarts the agent process; the provider's caches are reset with it. */

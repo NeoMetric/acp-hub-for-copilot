@@ -1,41 +1,133 @@
+import * as path from 'node:path';
 import * as vscode from 'vscode';
-
-const SPIKE_VENDORS = ['acphub-claude', 'acphub-codex', 'acphub-google'];
-
-class SpikeProvider implements vscode.LanguageModelChatProvider {
-	constructor(private readonly vendor: string) { }
-
-	provideLanguageModelChatInformation(): vscode.LanguageModelChatInformation[] {
-		return [{
-			id: `${this.vendor}-spike`,
-			name: `${this.vendor} spike`,
-			family: this.vendor,
-			version: '1',
-			maxInputTokens: 100_000,
-			maxOutputTokens: 4_000,
-			capabilities: { toolCalling: false },
-		}];
-	}
-
-	provideLanguageModelChatResponse(
-		_model: vscode.LanguageModelChatInformation,
-		_messages: readonly vscode.LanguageModelChatRequestMessage[],
-		_options: vscode.ProvideLanguageModelChatResponseOptions,
-		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
-	): Promise<void> {
-		progress.report(new vscode.LanguageModelTextPart('spike ok'));
-		return Promise.resolve();
-	}
-
-	provideTokenCount(_model: vscode.LanguageModelChatInformation, value: string | vscode.LanguageModelChatRequestMessage): Promise<number> {
-		return Promise.resolve(typeof value === 'string' ? Math.ceil(value.length / 4) : 1);
-	}
-}
+import { ADAPTERS, findAdapter } from './core/agents';
+import type { AgentAdapter, LaunchContext } from './core/adapter';
+import { signIn, signOut, terminalMethodsFrom } from './core/auth';
+import { pickSignInChoice, runInVsCodeTerminal } from './core/authPrompts';
+import { McpBridge } from './core/bridge';
+import { findInstalled, getInstallState, installAgent } from './core/installers';
+import { scopedLog } from './core/logging';
+import { killAllChildren, killStrayAgents } from './core/processes';
+import { AcpProvider } from './core/provider';
+import { AgentSecretStore } from './core/secrets';
+import { readAgentSettings, settingKey } from './core/settings';
+import { UsageStore } from './core/usage';
+import { SidebarHost } from './sidebar/host';
 
 export function activate(context: vscode.ExtensionContext): void {
-	for (const vendor of SPIKE_VENDORS) {
-		context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider(vendor, new SpikeProvider(vendor)));
+	const output = vscode.window.createOutputChannel('ACP Hub', { log: true });
+	const log = scopedLog(output);
+	const bridge = new McpBridge(log);
+	const secrets = new AgentSecretStore(context.secrets);
+	const usage = new UsageStore(log);
+	const providers = new Map<string, AcpProvider>();
+	const storageDir = context.globalStorageUri.fsPath;
+	const installEnv = { storageDir, extensionDir: context.extensionUri.fsPath, log, progress: (message: string) => log(message) };
+	for (const adapter of ADAPTERS) { killStrayAgents(path.join(storageDir, adapter.id, 'agents')); }
+
+	function adapterFor(id: string): AgentAdapter {
+		const adapter = findAdapter(id);
+		if (!adapter) { throw new Error(`Unknown agent: ${id}`); }
+		return adapter;
 	}
+	function settingsFor(adapter: AgentAdapter) {
+		const result = readAgentSettings(adapter, vscode.workspace.getConfiguration('acpHub'));
+		for (const warning of result.warnings) { log(warning, 'warn'); }
+		return result.values;
+	}
+	async function resolveLaunch(adapter: AgentAdapter): Promise<LaunchContext | undefined> {
+		const installed = await findInstalled(adapter, { ...installEnv, settings: settingsFor(adapter) });
+		if (!installed) { return undefined; }
+		return {
+			...installed,
+			storageDir: path.join(storageDir, adapter.id),
+			settings: settingsFor(adapter),
+			apiKey: await secrets.get(adapter.id),
+			workspaceFolder: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? storageDir,
+		};
+	}
+	async function chooseSignIn(id: string): Promise<{ ok: boolean; message?: string }> {
+		const adapter = adapterFor(id);
+		const choice = await pickSignInChoice(adapter, terminalMethodsFrom(adapter, []));
+		if (!choice) { return { ok: false, message: 'Sign-in was cancelled.' }; }
+		const launch = await resolveLaunch(adapter);
+		if (!launch) { return { ok: false, message: 'Install the agent first.' }; }
+		const result = await signIn(adapter, choice, {
+			store: secrets, ctx: launch, runTerminal: runInVsCodeTerminal,
+			startAgent: methodId => providers.get(id)?.startForSignIn(methodId) ?? Promise.resolve(false),
+		});
+		if (result.ok) { await providers.get(id)?.restart(); providers.get(id)?.refresh(); }
+		return result;
+	}
+	async function refreshUsage(id: string, force = true): Promise<void> {
+		const adapter = adapterFor(id);
+		const launch = await resolveLaunch(adapter);
+		if (!launch) { return; }
+		await usage.refresh(adapter, { launch, askAgent: prompt => providers.get(id)?.askAgent(prompt) ?? Promise.resolve(undefined) }, force);
+	}
+	for (const adapter of ADAPTERS) {
+		const provider = new AcpProvider(adapter, {
+			log: scopedLog(output, adapter.id), bridge, state: context.globalState,
+			resolveLaunch: () => resolveLaunch(adapter),
+			isEnabled: () => vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(adapter.id, 'enabled'), true),
+			client: {
+				log: scopedLog(output, adapter.id),
+				storageDir: path.join(storageDir, adapter.id),
+				clientVersion: String(context.extension.packageJSON.version),
+				askPermission: async (message, labels) => {
+					const picked = await vscode.window.showQuickPick(labels, { title: message });
+					return picked === undefined ? undefined : labels.indexOf(picked);
+				},
+			},
+			requestDumpDir: context.globalStorageUri,
+			profilePromptsDir: path.join(path.dirname(path.dirname(storageDir)), 'prompts'),
+			signIn: id => { void chooseSignIn(id); },
+			showOutput: () => output.show(),
+		});
+		providers.set(adapter.id, provider);
+		context.subscriptions.push(
+			provider,
+			provider.onDidFinishTurn(turn => {
+				usage.recordTurn(adapter.id, turn.usage, turn.background);
+				if (!turn.background && adapter.usage) { void refreshUsage(adapter.id, false); }
+			}),
+			vscode.lm.registerLanguageModelChatProvider(adapter.vendor, provider),
+		);
+		void provider.publishModels();
+	}
+	const sidebar = new SidebarHost({
+		listAdapters: () => ADAPTERS,
+		getInstallState: id => getInstallState(adapterFor(id), { ...installEnv, settings: settingsFor(adapterFor(id)) }),
+		install: async id => { await installAgent(adapterFor(id), installEnv); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
+		isSignedIn: async id => (await secrets.get(id)) ? true : undefined,
+		signIn: chooseSignIn,
+		signOut: async id => { await signOut(id, secrets); await providers.get(id)?.restart(); providers.get(id)?.refresh(); },
+		readSettings: id => settingsFor(adapterFor(id)),
+		writeSetting: async (id, key, value) => { await vscode.workspace.getConfiguration('acpHub').update(settingKey(id, key), value, vscode.ConfigurationTarget.Global); },
+		isEnabled: id => vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(id, 'enabled'), true),
+		setEnabled: async (id, enabled) => { await vscode.workspace.getConfiguration('acpHub').update(settingKey(id, 'enabled'), enabled, vscode.ConfigurationTarget.Global); providers.get(id)?.refresh(); },
+		getUsage: id => adapterFor(id).usage ? usage.get(id) : { status: 'unsupported', extraWindows: [] },
+		refreshUsage,
+		onUsageChange: listener => ({ dispose: usage.onDidChange(listener) }),
+		assetUri: relative => vscode.Uri.joinPath(context.extensionUri, relative),
+	});
+	context.subscriptions.push(
+		output, bridge, secrets,
+		vscode.window.registerWebviewViewProvider('acpHub.agents', sidebar),
+		vscode.commands.registerCommand('acpHub.showLogs', () => output.show()),
+		vscode.commands.registerCommand('acpHub.signIn', async () => {
+			const picked = await vscode.window.showQuickPick(ADAPTERS.map(adapter => ({ label: adapter.displayName, id: adapter.id })));
+			if (picked) { await chooseSignIn(picked.id); }
+		}),
+		vscode.commands.registerCommand('acpHub.install', () => vscode.commands.executeCommand('acpHub.agents.focus')),
+		vscode.commands.registerCommand('acpHub.refreshUsage', async () => { for (const adapter of ADAPTERS) { await refreshUsage(adapter.id); } }),
+		vscode.workspace.onDidChangeConfiguration(event => {
+			for (const adapter of ADAPTERS) {
+				if (event.affectsConfiguration(`acpHub.agents.${adapter.id}`)) { void providers.get(adapter.id)?.restart(); providers.get(adapter.id)?.refresh(); }
+			}
+		}),
+		secrets.onDidChange(id => { void providers.get(id)?.restart(); providers.get(id)?.refresh(); }),
+	);
 }
 
-export function deactivate(): void { }
+export function deactivate(): void { killAllChildren(); }

@@ -49,7 +49,7 @@ describe('codexAdapter', () => {
 
 	it('lists its sign-in methods', () => {
 		expect(codexAdapter.auth).toEqual([
-			{ kind: 'oauth-browser', label: 'ChatGPT account' },
+			{ kind: 'oauth-browser', label: 'ChatGPT account', agentMethodId: 'chat-gpt', browserAuthPreference: 'chatgpt' },
 			{ kind: 'api-key', label: 'OpenAI API key', envVar: 'CODEX_API_KEY', keyPrefix: 'sk-' },
 		]);
 	});
@@ -145,6 +145,7 @@ describe('codex mergeConfig', () => {
 describe('codex hooks', () => {
 	it('authenticates with the API key method only when a key is saved', () => {
 		expect(codexAdapter.authenticate?.([], 'sk-1')).toEqual({ methodId: 'api-key', _meta: { 'api-key': { apiKey: 'sk-1' } } });
+		expect(codexAdapter.authenticate?.([], 'sk-1', { authPreference: 'chatgpt' })).toBeUndefined();
 		expect(codexAdapter.authenticate?.([{ id: 'chat-gpt' }], undefined)).toBeUndefined();
 	});
 

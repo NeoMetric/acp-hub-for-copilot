@@ -34,6 +34,7 @@ export class NpmInstaller {
 		private readonly packageName: string,
 		private readonly version: string,
 		private readonly log: Log,
+		private readonly entry?: string,
 	) { }
 
 	/** The adapter's entry point when the current version is installed, else `undefined`. */
@@ -47,7 +48,7 @@ export class NpmInstaller {
 		if (marker?.trim() !== expected) {
 			return undefined;
 		}
-		return findAdapterEntry(directory, this.packageName);
+		return findAdapterEntry(directory, this.packageName, this.entry);
 	}
 
 	/** Installs the adapter unless the current version is already there. */
@@ -109,7 +110,7 @@ export class NpmInstaller {
 			log: this.log,
 		});
 
-		const entry = await findAdapterEntry(directory, this.packageName);
+		const entry = await findAdapterEntry(directory, this.packageName, this.entry);
 		if (!entry) {
 			throw new Error(`The ACP adapter was installed but no entry point was found in ${path.join(directory, 'node_modules')}.`);
 		}
@@ -136,7 +137,7 @@ export class NpmInstaller {
 			if (await readTextIfExists(path.join(directory, MARKER_FILE)) === undefined) {
 				continue;
 			}
-			const entry = await findAdapterEntry(directory, this.packageName);
+			const entry = await findAdapterEntry(directory, this.packageName, this.entry);
 			if (entry) {
 				return entry;
 			}
@@ -218,7 +219,7 @@ function versionDirectory(root: string, marker: string): string {
 }
 
 /** Resolves the adapter's `bin` entry point from its installed package.json. */
-export async function findAdapterEntry(root: string, packageName: string): Promise<string | undefined> {
+export async function findAdapterEntry(root: string, packageName: string, explicitEntry?: string): Promise<string | undefined> {
 	const packageDir = path.join(root, 'node_modules', ...packageName.split('/'));
 
 	let manifest: { bin?: string | Record<string, string> };
@@ -228,10 +229,10 @@ export async function findAdapterEntry(root: string, packageName: string): Promi
 		return undefined;
 	}
 
-	let relative: string | undefined;
-	if (typeof manifest.bin === 'string') {
+	let relative: string | undefined = explicitEntry;
+	if (!relative && typeof manifest.bin === 'string') {
 		relative = manifest.bin;
-	} else if (manifest.bin && typeof manifest.bin === 'object') {
+	} else if (!relative && manifest.bin && typeof manifest.bin === 'object') {
 		relative = Object.values(manifest.bin)[0];
 	}
 	if (!relative) {
@@ -239,6 +240,8 @@ export async function findAdapterEntry(root: string, packageName: string): Promi
 	}
 
 	const entry = path.resolve(packageDir, relative);
+	const withinPackage = path.relative(packageDir, entry);
+	if (withinPackage === '..' || withinPackage.startsWith(`..${path.sep}`) || path.isAbsolute(withinPackage)) { return undefined; }
 	try {
 		await fs.promises.access(entry);
 		return entry;

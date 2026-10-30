@@ -15,7 +15,7 @@ import type { SavedSession } from '../sessionStore';
 export type AgentApi = Pick<AgentClient,
 	'ensureStarted' | 'createSession' | 'resumeSession' | 'forkSession' | 'closeSession' | 'setConfigOption' | 'setSessionModel'
 	| 'prompt' | 'cancel' | 'restart' | 'stopWhenIdle' | 'hasBackgroundTasks' | 'isRunning' | 'requiresSignIn' | 'onDidChange'
-	| 'updateContext' | 'dispose'>;
+	| 'updateContext' | 'signInWithMethod' | 'dispose'>;
 
 /** Everything the provider needs from the extension that hosts it. */
 export interface ProviderDeps {
@@ -25,6 +25,7 @@ export interface ProviderDeps {
 	state: vscode.Memento | undefined;
 	/** The launch context of the installed agent, or `undefined` when it is not installed. */
 	resolveLaunch(): Promise<LaunchContext | undefined>;
+	isEnabled?(): boolean;
 	/** What the agent client needs besides the launch context. */
 	client: AgentClientDeps;
 	/** Folder for the request dumps; they are written only when the agent's `dumpRequests` setting is on. */

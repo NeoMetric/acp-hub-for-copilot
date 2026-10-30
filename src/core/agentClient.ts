@@ -539,6 +539,16 @@ export class AgentClient implements vscode.Disposable {
 		}
 	}
 
+	/** Starts an interactive authentication method advertised by the agent. */
+	async signInWithMethod(methodId: string): Promise<void> {
+		const rpc = await this.ensureStarted();
+		if (!this.authMethods.some(method => method.id === methodId)) {
+			throw new Error(`Authentication method ${methodId} was not advertised by the agent.`);
+		}
+		await rpc.request('authenticate', { methodId }, { timeoutMs: 5 * 60_000 });
+		this.signInRequired = false;
+	}
+
 	/** Kills the agent process, drops every session and notifies listeners. */
 	async restart(): Promise<void> {
 		this.log(`Restarting the ${this.adapter.displayName} agent`);
@@ -732,7 +742,7 @@ export class AgentClient implements vscode.Disposable {
 
 	/** Some agents refuse sessions until a sign-in method was chosen; the adapter says which call to make. */
 	private async authenticate(rpc: JsonRpcConnection): Promise<void> {
-		const request = this.adapter.authenticate?.([...this.authMethods], this.ctx.apiKey);
+		const request = this.adapter.authenticate?.([...this.authMethods], this.ctx.apiKey, this.ctx.settings);
 		if (!request) {
 			return;
 		}

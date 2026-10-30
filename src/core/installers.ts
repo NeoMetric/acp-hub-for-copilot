@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { AgentAdapter, InstallContext } from './adapter';
+import type { AgentAdapter, AgentSettings, InstallContext } from './adapter';
 import type { Log } from './logging';
 import { NpmInstaller } from './npmInstaller';
 
@@ -12,6 +12,7 @@ export interface InstallEnvironment {
 	storageDir: string;
 	/** The folder the extension is installed in. */
 	extensionDir: string;
+	settings?: AgentSettings;
 	log: Log;
 	progress(message: string): void;
 }
@@ -32,6 +33,7 @@ function npmInstallerFor(adapter: AgentAdapter, env: InstallEnvironment): NpmIns
 		spec.packageName,
 		spec.version,
 		env.log,
+		spec.entry,
 	);
 }
 
@@ -59,6 +61,8 @@ export function findOnPath(command: string, pathVariable = process.env.PATH ?? '
 
 /** The entry of an installed agent, or `undefined` when it is not installed. */
 export async function findInstalled(adapter: AgentAdapter, env: InstallEnvironment): Promise<InstallResult | undefined> {
+	const override = adapter.findCommandOverride?.(env.settings ?? {});
+	if (override) { return { entryPath: override, installDir: '' }; }
 	const spec = adapter.install;
 
 	if (spec.kind === 'npm') {

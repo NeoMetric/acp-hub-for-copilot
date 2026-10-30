@@ -27,6 +27,10 @@ describe('renderCards', () => {
 		expect(html).toContain('Agent One');
 	});
 
+	it('explains when usage is unsupported', () => {
+		expect(renderCards([card()])).toContain('Usage is not supported');
+	});
+
 	it('draws a usage bar as wide as the used percent', () => {
 		const html = renderCards([card({
 			usage: { status: 'ok', windows: [{ label: '5h', usedPercent: 40, resets: 'in 2h' }], plan: 'Pro' },
