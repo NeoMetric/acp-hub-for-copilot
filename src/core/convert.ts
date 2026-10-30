@@ -311,12 +311,59 @@ export function carriesToolResults(messages: readonly vscode.LanguageModelChatRe
 /** Upper bound for the restored conversation, so a long chat cannot swamp the new turn. */
 export const TRANSCRIPT_MAX_CHARACTERS = 40_000;
 
+/** Upper bound for one tool result in a `full` transcript, so a single file read cannot crowd out the rest. */
+export const TRANSCRIPT_MAX_TOOL_RESULT_CHARACTERS = 4_000;
+
+/** Upper bound for the arguments of one tool call in a `full` transcript. */
+const TRANSCRIPT_MAX_TOOL_INPUT_CHARACTERS = 1_000;
+
+export interface TranscriptOptions {
+	/** `compact` names the tools that ran; `full` also includes their arguments and results as text. */
+	readonly detail: 'compact' | 'full';
+	readonly maxCharacters: number;
+	readonly maxToolResultCharacters: number;
+}
+
+export const DEFAULT_TRANSCRIPT_OPTIONS: TranscriptOptions = {
+	detail: 'compact',
+	maxCharacters: TRANSCRIPT_MAX_CHARACTERS,
+	maxToolResultCharacters: TRANSCRIPT_MAX_TOOL_RESULT_CHARACTERS,
+};
+
+/** The transcript settings (`acpHub.resume.*`), which apply to every agent. */
+export function readTranscriptOptions(): TranscriptOptions {
+	const config = vscode.workspace.getConfiguration('acpHub');
+	const positive = (key: string, fallback: number): number => {
+		const value = config.get<number>(key, fallback);
+		return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+	};
+
+	return {
+		detail: config.get<string>('resume.transcriptDetail', DEFAULT_TRANSCRIPT_OPTIONS.detail) === 'full' ? 'full' : 'compact',
+		maxCharacters: positive('resume.transcriptMaxCharacters', DEFAULT_TRANSCRIPT_OPTIONS.maxCharacters),
+		maxToolResultCharacters: positive('resume.transcriptMaxToolResultCharacters', DEFAULT_TRANSCRIPT_OPTIONS.maxToolResultCharacters),
+	};
+}
+
+function clip(text: string, limit: number): string {
+	return text.length > limit ? `${text.slice(0, limit)}… [${text.length - limit} more character(s) cut]` : text;
+}
+
+function toolResultText(part: vscode.LanguageModelToolResultPart): string {
+	return (part.content as readonly unknown[])
+		.map(item => item instanceof vscode.LanguageModelTextPart ? item.value : '')
+		.filter(text => text.length > 0)
+		.join('\n');
+}
+
 /**
  * Renders earlier messages as one text block, for an ACP session that did not
  * live through them: after a window reload, an agent restart, or an edit that
  * rewrote the history. The newest messages win when the budget runs out.
  */
-export function toTranscriptBlock(messages: readonly vscode.LanguageModelChatRequestMessage[], maxCharacters = TRANSCRIPT_MAX_CHARACTERS): AcpTextBlock | undefined {
+export function toTranscriptBlock(messages: readonly vscode.LanguageModelChatRequestMessage[], options: TranscriptOptions = DEFAULT_TRANSCRIPT_OPTIONS): AcpTextBlock | undefined {
+	const { maxCharacters } = options;
+	const full = options.detail === 'full';
 	const entries: string[] = [];
 
 	// Copilot's system prompt comes ahead of the first user message, and the role
@@ -333,14 +380,23 @@ export function toTranscriptBlock(messages: readonly vscode.LanguageModelChatReq
 			lines.push(text);
 		}
 
-		const calledTools = message.content
-			.filter((part): part is vscode.LanguageModelToolCallPart => part instanceof vscode.LanguageModelToolCallPart)
-			.map(part => part.name);
-		if (calledTools.length > 0) {
-			lines.push(`[called tools: ${calledTools.join(', ')}]`);
-		}
-		if (message.content.some(part => part instanceof vscode.LanguageModelToolResultPart)) {
-			lines.push("[tool results omitted]");
+		const calls = message.content.filter((part): part is vscode.LanguageModelToolCallPart => part instanceof vscode.LanguageModelToolCallPart);
+		const results = message.content.filter((part): part is vscode.LanguageModelToolResultPart => part instanceof vscode.LanguageModelToolResultPart);
+		if (full) {
+			for (const call of calls) {
+				lines.push(`[tool call ${call.name}: ${clip(JSON.stringify(call.input ?? {}), TRANSCRIPT_MAX_TOOL_INPUT_CHARACTERS)}]`);
+			}
+			for (const result of results) {
+				const output = toolResultText(result).trim();
+				lines.push(output.length > 0 ? `[tool result: ${clip(output, options.maxToolResultCharacters)}]` : '[tool result: no text]');
+			}
+		} else {
+			if (calls.length > 0) {
+				lines.push(`[called tools: ${calls.map(call => call.name).join(', ')}]`);
+			}
+			if (results.length > 0) {
+				lines.push("[tool results omitted]");
+			}
 		}
 		const images = imageBlocksOf(message).length;
 		if (images > 0) {

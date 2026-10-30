@@ -4,8 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { carriesToolResults, characterCountOf, chatContextBlock, customInstructionsBlock, diverged, fingerprint, firstMessageAfterReply, imageFingerprint, lastUserMessageIndex, textOf, toAcpContentBlocks, toTranscriptBlock, userWordsAfterReply } from '../../src/core/convert';
+import { DEFAULT_TRANSCRIPT_OPTIONS, carriesToolResults, characterCountOf, chatContextBlock, customInstructionsBlock, diverged, fingerprint, firstMessageAfterReply, imageFingerprint, lastUserMessageIndex, textOf, toAcpContentBlocks, toTranscriptBlock, userWordsAfterReply } from '../../src/core/convert';
 import { assistant, image, system, toolCall, toolResult, user } from './messages';
+import { LanguageModelTextPart, LanguageModelToolCallPart, LanguageModelToolResultPart } from './vscode-mock';
 
 describe('textOf', () => {
 	it('joins text parts and ignores the rest', () => {
@@ -368,17 +369,46 @@ describe('toTranscriptBlock', () => {
 	});
 
 	it('keeps the newest messages when over budget', () => {
-		const block = toTranscriptBlock([user('OLDEST ' + 'x'.repeat(200)), assistant('middle ' + 'y'.repeat(200)), user('NEWEST')], 60);
+		const block = toTranscriptBlock([user('OLDEST ' + 'x'.repeat(200)), assistant('middle ' + 'y'.repeat(200)), user('NEWEST')], { ...DEFAULT_TRANSCRIPT_OPTIONS, maxCharacters: 60 });
 
 		expect(block!.text).toContain('User: NEWEST');
 		expect(block!.text).not.toContain('OLDEST');
 	});
 
 	it('truncates a single oversized message from the front', () => {
-		const block = toTranscriptBlock([user('BEGIN ' + 'z'.repeat(500) + ' END')], 50);
+		const block = toTranscriptBlock([user('BEGIN ' + 'z'.repeat(500) + ' END')], { ...DEFAULT_TRANSCRIPT_OPTIONS, maxCharacters: 50 });
 
 		expect(block!.text).toContain('END');
 		expect(block!.text).not.toContain('BEGIN');
 		expect(block!.text).toContain('…');
+	});
+
+	describe('full detail', () => {
+		const full = { ...DEFAULT_TRANSCRIPT_OPTIONS, detail: 'full' as const };
+		const call = new LanguageModelToolCallPart('1', 'read_file', { path: 'a.ts' });
+		const result = (text: string) => new LanguageModelToolResultPart('1', [new LanguageModelTextPart(text)]);
+
+		it('includes tool arguments and results', () => {
+			const block = toTranscriptBlock([user('q'), assistant('looking', call), user(result('file body')), assistant('done')], full);
+
+			expect(block!.text).toContain('[tool call read_file: {"path":"a.ts"}]');
+			expect(block!.text).toContain('[tool result: file body]');
+			expect(block!.text).not.toContain('omitted');
+		});
+
+		it('cuts a tool result to the per-result limit', () => {
+			const block = toTranscriptBlock([user('q'), assistant('x', call), user(result('A'.repeat(500)))], { ...full, maxToolResultCharacters: 100 });
+
+			expect(block!.text).toContain('A'.repeat(100));
+			expect(block!.text).not.toContain('A'.repeat(101));
+			expect(block!.text).toContain('400 more character(s) cut');
+		});
+
+		it('still keeps the newest messages when over budget', () => {
+			const block = toTranscriptBlock([user('OLDEST'), assistant('x', call), user(result('B'.repeat(300))), user('NEWEST')], { ...full, maxCharacters: 40 });
+
+			expect(block!.text).toContain('NEWEST');
+			expect(block!.text).not.toContain('OLDEST');
+		});
 	});
 });

@@ -4,10 +4,28 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type * as vscode from 'vscode';
-import { chatContextBlock, customInstructionsBlock, toAcpContentBlocks, toTranscriptBlock, type AcpContentBlock } from '../convert';
+import { chatContextBlock, customInstructionsBlock, readTranscriptOptions, toAcpContentBlocks, toTranscriptBlock, type AcpContentBlock } from '../convert';
 import type { Log } from '../logging';
 import { shortHash } from '../sessionStore';
-import type { ChatSession } from './types';
+import type { ChatSession, GuidanceChange } from './types';
+
+const GUIDANCE_CHANGE_MAX_CHARACTERS = 8_000;
+
+/** Tells a resumed session how the host's guidance has changed since the session was opened. */
+function guidanceChangeBlock(change: GuidanceChange): AcpContentBlock {
+	const added = change.added.join('\n');
+	const shown = added.length > GUIDANCE_CHANGE_MAX_CHARACTERS ? `${added.slice(0, GUIDANCE_CHANGE_MAX_CHARACTERS)}\n…` : added;
+	return {
+		type: 'text',
+		text: [
+			'The workspace guidance for this conversation changed since your session was opened. These lines are new or reworded, and they take precedence over the earlier guidance:',
+			'<guidance_update>',
+			shown,
+			'</guidance_update>',
+			...(change.removed > 0 ? [`${change.removed} line(s) of the earlier guidance no longer apply.`] : []),
+		].join('\n'),
+	};
+}
 
 /**
  * The prompt for one turn: the messages the agent has not seen, preceded by
@@ -25,6 +43,11 @@ export function buildPromptBlocks(messages: readonly vscode.LanguageModelChatReq
 			preamble.push(chatContext);
 		}
 	}
+	if (session.guidanceChange) {
+		log(`Forwarding the guidance change: ${session.guidanceChange.added.length} new line(s), ${session.guidanceChange.removed} gone.`, 'debug');
+		preamble.push(guidanceChangeBlock(session.guidanceChange));
+		session.guidanceChange = undefined;
+	}
 	const instructions = customInstructionsBlock(messages);
 	const instructionsHash = instructions ? shortHash(instructions.text) : undefined;
 	if (instructions && instructionsHash !== session.instructionsHash) {
@@ -34,7 +57,7 @@ export function buildPromptBlocks(messages: readonly vscode.LanguageModelChatReq
 	}
 	if (restoreContext && lastUser > 0) {
 		log(`Roles of the first messages being restored: ${messages.slice(0, 3).map(message => message.role).join(', ')}`, 'debug');
-		const transcript = toTranscriptBlock(messages.slice(0, lastUser));
+		const transcript = toTranscriptBlock(messages.slice(0, lastUser), readTranscriptOptions());
 		if (transcript) {
 			log(`Restoring ${lastUser} earlier message(s) into the new ACP session.`);
 			preamble.push(transcript);
