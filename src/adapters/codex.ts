@@ -21,9 +21,6 @@ const ADAPTER_VERSION = '2.3.0';
  */
 const SESSION_MODE = 'agent-full-access';
 
-/** Codex takes the timeout of a bridged server in seconds; a call waits for Copilot, which can wait on the user. */
-const TOOL_CALL_TIMEOUT_SEC = 24 * 60 * 60;
-
 /**
  * Codex has no single switch for its own tools, so each feature that registers
  * one is turned off. Copilot's tools reach Codex only through the bridge; a
@@ -110,17 +107,21 @@ function readUserConfig(existing: string | undefined): Record<string, unknown> {
 }
 
 /**
- * Adds this extension's MCP tool timeout to the `CODEX_CONFIG` the user may have
- * set, and keeps every other key. Codex allows a bridged server 60 seconds
- * otherwise, but a Copilot tool call can wait on the user.
+ * Adds this extension's own settings to the `CODEX_CONFIG` the user may have set,
+ * and keeps every other key.
+ *
+ * `mcp_servers` is left alone on purpose. The bridge is handed to the agent as a
+ * session's MCP server, and the adapter turns that into Codex's `mcp_servers.vscode`
+ * entry, which carries no `tool_timeout_sec`. Naming the server here does not add a
+ * timeout to it: Codex refuses a `mcp_servers` entry with no transport ("invalid
+ * transport"), so `session/new` fails and the agent offers no models at all, and the
+ * adapter skips a session's server whose name the config already defines.
  */
 export function mergeCodexConfig(existing: string | undefined, maxContextWindow: boolean): string {
 	const config = readUserConfig(existing);
 	if (maxContextWindow) {
 		config.model_context_window = RAISED_CONTEXT_WINDOW;
 	}
-	const servers = asRecord(config.mcp_servers);
-	config.mcp_servers = { ...servers, vscode: { ...asRecord(servers.vscode), tool_timeout_sec: TOOL_CALL_TIMEOUT_SEC } };
 	const features = { ...asRecord(config.features), ...DISABLED_BUILT_IN_FEATURES };
 	// Code mode stays on: it is the only way the model reaches the bridge's tools.
 	features.code_mode = { ...asRecord(features.code_mode), enabled: true, excluded_tool_namespaces: EXCLUDED_CODE_MODE_NAMESPACES };

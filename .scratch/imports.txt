@@ -1,0 +1,25 @@
+import { randomBytes } from 'crypto';
+import * as vscode from 'vscode';
+import type { AgentAdapter, AgentSettings, LaunchContext } from './adapter';
+import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentSession, type CreateSessionOptions } from './agentClient';
+import type { McpToolResult } from './bridge';
+import type { RequestMeasurement } from './cache';
+import { carriesToolResults, characterCountOf, diverged, fingerprint, lastUserMessageIndex, userWordsAfterReply } from './convert';
+import type { Log } from './logging';
+import { acpModelValue, effortOf } from './models';
+import { createRequestDump, summarizeRequest } from './requestDump';
+import { isAuthRequiredError } from './rpc';
+import { SavedSessionStore, toolsHashOf } from './sessionStore';
+import { createSessionPrompt } from './systemPrompt';
+import { buildPromptBlocks } from './provider/assemble';
+import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './provider/heldCalls';
+import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESSION_IDLE_MS } from './provider/idle';
+import { chatContextOf, chatIdOf, chatLabelOf, guidanceDiffers, guidanceHashOf, sessionKey, toolsDiffer } from './provider/keys';
+import { ModelList } from './provider/modelList';
+import { findReusable, promptHashOf } from './provider/reuse';
+import { applyEffort, applyModel, describe, switchModelInPlace } from './provider/sessionOptions';
+import { TurnRunner } from './provider/turns';
+import type { AgentApi, ChatContext, ChatSession, FinishedTurn, ProviderDeps, Reuse } from './provider/types';
+import { CHARS_PER_TOKEN } from './provider/usageReport';
+import { bridgeServer, WarmSession } from './provider/warmSession';
+

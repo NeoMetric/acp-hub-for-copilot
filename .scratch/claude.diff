@@ -1,0 +1,621 @@
+diff --git "a/codex-acp-for-copilot\\src\\provider.ts" "b/claude-acp-for-copilot\\src\\provider.ts"
+index d11df52..08fc623 100644
+--- "a/codex-acp-for-copilot\\src\\provider.ts"
++++ "b/claude-acp-for-copilot\\src\\provider.ts"
+@@ -9,13 +9,12 @@ import { type AcpSessionUpdate, type AcpTokenUsage, AdapterNotInstalledError, ty
+ import { type McpBridge, type McpServerEndpoint, type McpToolResult } from './bridge';
+-import { hitRateOf, type ChatIdentity } from './cache';
++import { hitRateOf, sameInput, type ChatIdentity, type RequestMeasurement } from './cache';
+ import { carriesToolResults, characterCountOf, chatContextBlock, customInstructionsBlock, diverged, fingerprint, isSystemMessage, lastUserMessageIndex, textOf, toAcpContentBlocks, toTranscriptBlock, userWordsAfterReply, type AcpContentBlock } from './convert';
+ import { scopedLog, type Log, type LogLevel } from './logging';
+-import type { CatalogWindow } from './modelCatalog';
+-import { acpModelValue, effortLevelsFromModels, effortLevelsOf, effortOf, findEffortOption, findModelOption, flattenChoices, MAX_OUTPUT_TOKENS, toModelVariants } from './models';
++import { acpModelValue, effortLevelsOf, effortOf, findEffortOption, findModelOption, flattenChoices, toModelVariants } from './models';
+ import { conversationIdOf, resolveCwd, systemGuidanceOf, workspaceFoldersOf } from './requestContext';
+ import { summarizeRequest } from './requestDump';
+-import { isAuthRequiredError, RpcConnectionClosedError, RpcError } from './rpc';
++import { isAuthRequiredError, RpcConnectionClosedError } from './rpc';
+ import { findForkSource, hashAll, isPrefixOf, mismatchOf, SavedSessionStore, shortHash, toolsHashOf, type ReuseCheck, type SavedSession } from './sessionStore';
+ 
+-export const VENDOR = 'codex-acp';
++export const VENDOR = 'claude-acp';
+ 
+@@ -24,3 +23,3 @@ const CHARS_PER_TOKEN = 4;
+ /** Per-process nonce, so call ids from an earlier run in a chat's history never match a new call. */
+-const TOOL_CALL_ID_PREFIX = `codex-acp-${randomBytes(4).toString('hex')}-`;
++const TOOL_CALL_ID_PREFIX = `claude-acp-${randomBytes(4).toString('hex')}-`;
+ 
+@@ -30,8 +29,8 @@ const MAX_CHAT_SESSIONS = 8;
+ /**
+- * A chat that is not being used gives its agent session back after this long.
+- * The conversation stays on disk and the next message resumes it. Settable;
+- * 0 keeps sessions until evicted.
++ * Every agent session is a Claude Code process of its own, so a chat that is not
++ * being used gives its process back after this long. The conversation stays on
++ * disk and the next message resumes it. Settable; 0 keeps sessions until evicted.
+  */
+ const DEFAULT_IDLE_TIMEOUT_SECONDS = 120;
+-/** How long the session that reads the models lives after its last use. */
++/** How long the session that reads the models and the usage lives after its last use. */
+ const WARM_SESSION_IDLE_MS = 30_000;
+@@ -40,4 +39,4 @@ const IDLE_SWEEP_MS = 15_000;
+  * With no chat session left, the agent process itself is stopped after this long,
+- * which also takes down the helper processes it started per session. The next
+- * request starts it again. Settable; 0 keeps the agent for the whole window.
++ * which also takes down whatever the agent started under it. The next request
++ * starts it again. Settable; 0 keeps the agent for the whole window.
+  */
+@@ -56,5 +55,2 @@ const MAX_TURN_FAILURES = 3;
+ 
+-/** What a chat is told when the agent needs credentials, both on a turn and when a session cannot open. */
+-const NEEDS_CREDENTIALS = "Codex ACP needs credentials. Run \"Codex ACP: Sign In\" to sign in or to use an API key, then try again.";
+-
+ /** One tool call handed to Copilot, settled when its result comes back. */
+@@ -97,2 +93,4 @@ interface ActiveTurn {
+ 	contextSize?: number;
++	/** Token counts of the model calls this turn has made so far, added up. */
++	requestUsage?: AcpTokenUsage;
+ 	/** Completion tokens already reported to Copilot. */
+@@ -138,3 +136,3 @@ interface ChatSession {
+ 	instructionsHash?: string;
+-	/** Set when the session continues a stored conversation. Its first turn logs whether the cache served it. */
++	/** Set when the session continues a stored conversation; the first model call after it shows whether the cache served it. */
+ 	reused?: { readonly how: 'resumed' | 'forked'; readonly from: string; logged: boolean };
+@@ -146,6 +144,3 @@ interface ChatSession {
+ 	lastActive: number;
+-	/** The `model|effort` pair the adapter already refused, so the warning is said once. */
+-	effortFailure?: string;
+-	/** The context the agent last reported. Codex reports it only when a model call completes, after it has started the tools of that call, so the first response of a turn would otherwise report none. */
+-	contextUsed?: number;
++	effort?: string;
+ 	turn?: ActiveTurn;
+@@ -153,3 +148,3 @@ interface ChatSession {
+ 
+-const MODELS_KEY = 'codexAcp.models';
++const MODELS_KEY = 'claudeAcp.models';
+ const MODEL_RETRY_BASE_MS = 5_000;
+@@ -159,6 +154,6 @@ const MODEL_RETRY_LIMIT = 6;
+ /**
+- * Publishes the models of the local Codex agent to Copilot Chat and drives
++ * Publishes the models of the local Claude agent to Copilot Chat and drives
+  * one ACP session per chat.
+  */
+-export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode.LanguageModelChatInformation>, vscode.Disposable {
++export class ClaudeAcpProvider implements vscode.LanguageModelChatProvider<vscode.LanguageModelChatInformation>, vscode.Disposable {
+ 
+@@ -168,6 +163,9 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 	private readonly turnEmitter = new vscode.EventEmitter<FinishedTurn>();
+-
+-	/** Fires after a chat turn ended successfully, which spends plan limits and is the one cache split Codex reports (D5). */
++	/** Fires after a chat turn ended successfully, which spends plan limits. */
+ 	readonly onDidFinishTurn = this.turnEmitter.event;
+ 
++	private readonly requestEmitter = new vscode.EventEmitter<RequestMeasurement>();
++	/** Fires after each model call of a running turn, so the cache figure moves as the turn goes. */
++	readonly onDidMeasureRequest = this.requestEmitter.event;
++
+ 	private readonly sessions = new Map<string, ChatSession>();
+@@ -177,5 +175,2 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 	private cachedModels: vscode.LanguageModelChatInformation[] | undefined;
+-	/** The context size each model reported in `usage_update.size`, by bare model id, so the picker can show it. */
+-	private readonly reportedWindows = new Map<string, number>();
+-	private catalog: ReadonlyMap<string, CatalogWindow> | undefined;
+ 	private toolCallSeq = 0;
+@@ -189,4 +184,2 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 	private sweepTimer: NodeJS.Timeout | undefined;
+-	/** The bridge registration behind the warm session, released with it. */
+-	private warmEndpoint: McpServerEndpoint | undefined;
+ 	private signInWarningShown = false;
+@@ -206,4 +199,2 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		private readonly dumpRequest?: (key: string, messages: readonly vscode.LanguageModelChatRequestMessage[], options: vscode.ProvideLanguageModelChatResponseOptions) => void,
+-		/** Reads the context windows of Codex's model catalog, so the picker shows them before the first turn. */
+-		private readonly readCatalog?: () => ReadonlyMap<string, CatalogWindow>,
+ 	) {
+@@ -219,3 +210,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		if (this.cachedModels) {
+-			return this.withReportedWindows(this.cachedModels);
++			return this.cachedModels;
+ 		}
+@@ -228,3 +219,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			void this.refreshModels();
+-			return this.withReportedWindows(stored);
++			return stored;
+ 		}
+@@ -237,3 +228,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			// Background (silent) lookups never download the adapter: that waits for an
+-			// explicit action, such as "Codex ACP: Sign In" or opening the model manager.
++			// explicit action, such as "Claude ACP: Sign In" or opening the model manager.
+ 			await this.agent.ensureStarted({ allowInstall: !options.silent });
+@@ -254,6 +245,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			const choices = flattenChoices(modelOption.options ?? []);
+-			// A fresh session reports no effort option, only bracketed `model[effort]`
+-			// ids: until a model is resolved, the catalogue is the only source.
+-			const reported = effortLevelsOf(warm.configOptions);
+-			const effortLevels = reported.length > 0 ? reported : effortLevelsFromModels(warm.models?.availableModels ?? []);
++			const effortLevels = effortLevelsOf(warm.configOptions);
+ 			const models = toModelVariants(choices, effortLevels);
+@@ -262,5 +250,5 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			void this.state?.update(MODELS_KEY, models);
+-			this.log(`Offering ${choices.length} Codex model(s) for chat and ${choices.length} for the Copilot agent: ${choices.map(choice => choice.value).join(', ')}`);
++			this.log(`Offering ${choices.length} Claude model(s) for chat and ${choices.length} for the Copilot agent: ${choices.map(choice => choice.value).join(', ')}`);
+ 			this.log(`Thinking effort levels reported by the agent: ${effortLevels.join(', ') || 'none'}`);
+-			return this.withReportedWindows(models);
++			return models;
+ 		} catch (error) {
+@@ -270,8 +258,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			}
+-			this.log(`Could not list Codex models: ${describe(error)}`, 'error');
+-			const details = rpcDetailsOf(error);
+-			if (details) {
+-				// The agent's own explanation (a config error names paths), so debug only.
+-				this.log(`The agent's explanation: ${details}`, 'debug');
+-			}
++			this.log(`Could not list Claude models: ${describe(error)}`, 'error');
+ 			if (this.isSignInRequired(error)) {
+@@ -284,3 +267,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 					void vscode.window.showWarningMessage(
+-						`Codex ACP could not reach its agent: ${describe(error)} See the "Codex ACP" output channel for details.`
++						`Claude ACP could not reach its agent: ${describe(error)} See the "Claude ACP" output channel for details.`
+ 					);
+@@ -311,58 +294,2 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 
+-	/** The windows Codex's own model catalog lists; read again until the adapter has written the file. */
+-	private catalogWindows(): ReadonlyMap<string, CatalogWindow> {
+-		if (!this.catalog || this.catalog.size === 0) {
+-			this.catalog = this.readCatalog?.() ?? new Map();
+-		}
+-		return this.catalog;
+-	}
+-
+-	/**
+-	 * The models with the context windows the agent measured. A turn reports the
+-	 * real size in `usage_update.size`, which is the only measurement there is;
+-	 * before one has, the catalog's size stands, and the published placeholder
+-	 * when the catalog does not list the model.
+-	 */
+-	private withReportedWindows(models: readonly vscode.LanguageModelChatInformation[]): vscode.LanguageModelChatInformation[] {
+-		const catalog = this.catalogWindows();
+-		if (this.reportedWindows.size === 0 && catalog.size === 0) {
+-			return [...models];
+-		}
+-		const raised = vscode.workspace.getConfiguration('codexAcp').get<boolean>('maxContextWindow', false);
+-		return models.map(model => {
+-			const bare = acpModelValue(model.id);
+-			const fromCatalog = catalog.get(bare.replace(/\[[^\]]*\]$/, ''));
+-			const reported = this.reportedWindows.get(bare) ?? (raised ? fromCatalog?.max : fromCatalog?.normal);
+-			const maxInputTokens = reported === undefined ? undefined : reported - MAX_OUTPUT_TOKENS;
+-			return maxInputTokens === undefined || maxInputTokens === model.maxInputTokens
+-				? model
+-				: { ...model, maxInputTokens };
+-		});
+-	}
+-
+-	/**
+-	 * Remembers the context size a turn reported and republishes the model when
+-	 * that changes the window the picker advertises. A size the model already
+-	 * shows fires nothing, so a turn cannot start a republish loop.
+-	 */
+-	private refineContextWindow(modelId: string, size: number): void {
+-		const bare = acpModelValue(modelId);
+-		const maxInputTokens = size - MAX_OUTPUT_TOKENS;
+-		if (maxInputTokens <= 0 || this.reportedWindows.get(bare) === size) {
+-			return;
+-		}
+-		this.reportedWindows.set(bare, size);
+-		const models = this.cachedModels;
+-		const refined = models ? this.withReportedWindows(models) : undefined;
+-		if (!models || !refined || refined.every((model, index) => model === models[index])) {
+-			return;
+-		}
+-		this.cachedModels = refined;
+-		void this.state?.update(MODELS_KEY, refined);
+-		this.log(`The agent reported a ${size}-token context window for ${bare}: the model now advertises ${maxInputTokens} input tokens.`);
+-		if (!this.disposed) {
+-			this.changeEmitter.fire();
+-		}
+-	}
+-
+ 	/** Tries the lookup again later, with growing pauses, so a failed start heals without a manual refresh. */
+@@ -470,3 +397,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			const reuse = tools.length > 0 ? this.findReusable(key, fingerprints, lastUser, tools, context) : undefined;
+-			session = await this.createChatSession(key, model, tools, context, reuse, effort);
++			session = await this.createChatSession(key, model, tools, context, reuse);
+ 		}
+@@ -484,3 +411,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			await this.destroySession(key);
+-			session = await this.createChatSession(key, model, tools, context, undefined, effort);
++			session = await this.createChatSession(key, model, tools, context);
+ 			this.applyTools(session, tools);
+@@ -520,4 +447,4 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		if (blocks.length === 0) {
+-			this.log('The request contained no user text to forward to Codex.', 'warn');
+-			throw new vscode.LanguageModelError("There is no user message to send to Codex.");
++			this.log('The request contained no user text to forward to Claude.', 'warn');
++			throw new vscode.LanguageModelError("There is no user message to send to Claude.");
+ 		}
+@@ -588,2 +515,23 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 
++	/**
++	 * Runs the agent's `/usage` command on the warm session and returns its
++	 * Markdown. The command is answered locally by the adapter, so it costs no
++	 * model call and no plan usage.
++	 */
++	async fetchUsageMarkdown(): Promise<string | undefined> {
++		// Reading usage in the background must not trigger the adapter download.
++		if (!await this.agent.isInstalled()) {
++			return undefined;
++		}
++		const warm = await this.ensureWarmSession();
++		let markdown = '';
++		await this.agent.prompt(warm.sessionId, [{ type: 'text', text: '/usage' }], {
++			onText: text => {
++				markdown += text;
++			},
++		});
++		this.warmUsedAt = Date.now();
++		return markdown;
++	}
++
+ 	dispose(): void {
+@@ -598,2 +546,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		this.turnEmitter.dispose();
++		this.requestEmitter.dispose();
+ 		for (const key of [...this.sessions.keys()]) {
+@@ -601,3 +550,2 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		}
+-		this.releaseWarmSession();
+ 	}
+@@ -611,3 +559,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		if (!this.warmSessionCreation) {
+-			this.warmSessionCreation = this.openWarmSession()
++			this.warmSessionCreation = this.agent.createSession({ cwd: workspaceCwd(), mcpServers: [] })
+ 				.then(session => {
+@@ -626,3 +574,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 	private idleTimeoutMs(): number {
+-		const seconds = vscode.workspace.getConfiguration('codexAcp').get<number>('sessions.idleTimeoutSeconds', DEFAULT_IDLE_TIMEOUT_SECONDS);
++		const seconds = vscode.workspace.getConfiguration('claudeAcp').get<number>('sessions.idleTimeoutSeconds', DEFAULT_IDLE_TIMEOUT_SECONDS);
+ 		return Number.isFinite(seconds) ? Math.max(0, seconds) * 1000 : DEFAULT_IDLE_TIMEOUT_SECONDS * 1000;
+@@ -647,5 +595,5 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 	/**
+-	 * Gives back the sessions nobody is using. A session with a turn is never
+-	 * released, including one waiting for Copilot to run a tool. A released chat
+-	 * is picked up again from its stored conversation on its next request.
++	 * Gives back the Claude Code processes of sessions nobody is using. A session
++	 * with a turn is never released, including one waiting for Copilot to run a tool.
++	 * A released chat is picked up again from its stored conversation on its next request.
+ 	 */
+@@ -656,2 +604,6 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			for (const [key, session] of [...this.sessions]) {
++				if (!session.turn && this.agent.hasBackgroundTasks(session.acp.sessionId)) {
++					session.lastActive = now;
++					continue;
++				}
+ 				if (!session.turn && now - session.lastActive >= idleMs) {
+@@ -664,5 +616,5 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		if (warm && now - this.warmUsedAt >= WARM_SESSION_IDLE_MS) {
+-			this.log(`Releasing the session that reads the models (${warm.sessionId}).`, 'debug');
+-			this.releaseWarmSession();
++			this.warmSession = undefined;
+ 			this.lastAgentUse = now;
++			this.log(`Releasing the session that reads models and usage (${warm.sessionId}).`, 'debug');
+ 			void this.agent.closeSession(warm.sessionId);
+@@ -672,3 +624,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 	private agentIdleMs(): number {
+-		const minutes = vscode.workspace.getConfiguration('codexAcp').get<number>('agent.idleShutdownMinutes', DEFAULT_AGENT_IDLE_MINUTES);
++		const minutes = vscode.workspace.getConfiguration('claudeAcp').get<number>('agent.idleShutdownMinutes', DEFAULT_AGENT_IDLE_MINUTES);
+ 		return Number.isFinite(minutes) ? Math.max(0, minutes) * 60_000 : DEFAULT_AGENT_IDLE_MINUTES * 60_000;
+@@ -691,30 +643,2 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 
+-	/**
+-	 * The session the model catalogue is read from. It offers no tools, but it
+-	 * still declares the bridge: `CODEX_CONFIG` names that server to carry its
+-	 * tool timeout (D8), and Codex fails `session/new` on the whole configuration
+-	 * when a session leaves the entry without a transport.
+-	 */
+-	private async openWarmSession(): Promise<AgentSession> {
+-		const endpoint = await this.bridge.registerSession([], async () => undefined);
+-		try {
+-			const session = await this.agent.createSession({ cwd: workspaceCwd(), mcpServers: [bridgeServer(endpoint)] });
+-			this.warmEndpoint = endpoint;
+-			return session;
+-		} catch (error) {
+-			this.bridge.unregisterSession(endpoint.token);
+-			throw error;
+-		}
+-	}
+-
+-	/** Drops the warm session and the bridge registration it held. */
+-	private releaseWarmSession(): void {
+-		if (this.warmEndpoint) {
+-			this.bridge.unregisterSession(this.warmEndpoint.token);
+-			this.warmEndpoint = undefined;
+-		}
+-		this.warmSession = undefined;
+-		this.warmSessionCreation = undefined;
+-	}
+-
+ 	/**
+@@ -774,3 +698,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 
+-	private async createChatSession(key: string, model: vscode.LanguageModelChatInformation, tools: readonly vscode.LanguageModelChatTool[], context: ChatContext, reuse?: Reuse, effort?: string): Promise<ChatSession> {
++	private async createChatSession(key: string, model: vscode.LanguageModelChatInformation, tools: readonly vscode.LanguageModelChatTool[], context: ChatContext, reuse?: Reuse): Promise<ChatSession> {
+ 		const endpoint = await this.bridge.registerSession(tools, (name, input, token) => this.executeTool(key, name, input, token));
+@@ -785,4 +709,11 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 				cwd: context.cwd,
+-				mcpServers: [bridgeServer(endpoint)],
++				mcpServers: [{
++					type: 'http' as const,
++					name: 'vscode',
++					url: endpoint.url,
++					headers: [{ name: 'Authorization', value: `Bearer ${endpoint.token}` }],
++				}],
++				model: acpModelValue(model.id),
+ 				systemPromptAppend,
++				reportEachModelCall: true,
+ 			};
+@@ -800,2 +731,13 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 						: await this.agent.forkSession(reuse.saved.sessionId, options);
++					// The agent ignores the requested model when it reopens a session and lets
++					// its own settings win; a prompt on another model cannot read the cache.
++					const modelOption = findModelOption(acp.configOptions);
++					const wanted = acpModelValue(model.id);
++					if (modelOption && modelOption.currentValue !== wanted) {
++						this.log(`[reuse] The reopened session runs on "${String(modelOption.currentValue)}" instead of "${wanted}"; switching it back so the cache can serve it.`, 'warn');
++						const configOptions = await this.agent.setConfigOption(acp.sessionId, modelOption.id, wanted);
++						if (configOptions) {
++							acp.configOptions = configOptions;
++						}
++					}
+ 					reused = { how: reuse.kind === 'resume' ? 'resumed' : 'forked', from: reuse.saved.sessionId, logged: false };
+@@ -814,8 +756,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			this.sessions.set(key, session);
+-			// The agent ignores the model it was asked for when it opens or reopens a
+-			// session, so the picker's choice is applied here, together with the effort:
+-			// the effort option only exists once a model has been resolved.
+-			await this.applyModel(session, effort, reused ? '[reuse] ' : '');
+-			this.log(`Created chat session for ${key} using ${model.id}`);
+-			this.log(`Created chat session for ${key} in ${context.cwd}${context.folders ? '' : ' (the window\'s folder; the request named none)'}`, 'debug');
++			this.log(`Created chat session for ${key} using ${model.id} in ${context.cwd}${context.folders ? '' : ' (the window\'s folder; the request named none)'}`);
+ 			this.evictIdleSessions(key);
+@@ -825,8 +762,2 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			this.bridge.unregisterSession(endpoint.token);
+-			// An expired login surfaces here on the first request of a chat, exactly as
+-			// it does on a turn: the user gets the same offer instead of a raw refusal.
+-			if (this.isSignInRequired(error)) {
+-				this.promptSignIn();
+-				throw new vscode.LanguageModelError(NEEDS_CREDENTIALS);
+-			}
+ 			throw error;
+@@ -868,77 +799,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 
+-	/**
+-	 * Puts the model the picker chose on a session through the `model` config
+-	 * option, which takes the bare id: a fresh session runs the adapter's own
+-	 * default, and a reopened one keeps the model it was saved with. When the
+-	 * session already runs that model the bare set would change nothing, so the
+-	 * effort goes with the model instead of being left behind.
+-	 */
+-	private async applyModel(session: ChatSession, effort: string | undefined, label = ''): Promise<void> {
+-		const acp = session.acp;
+-		const option = findModelOption(acp.configOptions);
+-		if (!option) {
+-			return;
+-		}
+-		const wanted = acpModelValue(session.model);
+-		const current = String(option.currentValue);
+-		if (current !== wanted) {
+-			try {
+-				const configOptions = await this.agent.setConfigOption(acp.sessionId, option.id, wanted);
+-				if (configOptions) {
+-					acp.configOptions = configOptions;
+-				}
+-				this.log(`${label}Session ${acp.sessionId} now runs on "${wanted}" instead of "${current}"`);
+-			} catch (error) {
+-				// A model the agent no longer offers must not take the chat down: the
+-				// session keeps the model it has and the turn still runs.
+-				this.log(`${label}Could not set the model "${wanted}" (${describe(error)}); the session keeps "${current}".`, 'warn');
+-			}
+-		}
+-		if (effort && !findEffortOption(acp.configOptions)) {
+-			await this.applyModelWithEffort(session, effort, label);
+-		}
+-	}
+-
+-	/**
+-	 * Applies the model and the effort in the adapter's single `session/set_model`
+-	 * call, for a session whose `model` set resolves no `reasoning_effort` option:
+-	 * the model the session already runs, or one the catalogue does not hold. The
+-	 * call returns nothing, so the options are read back with a write of the value
+-	 * already in place. A refusal is reported once per model and effort, because
+-	 * nothing else in the protocol can apply it.
+-	 */
+-	private async applyModelWithEffort(session: ChatSession, effort: string, label = ''): Promise<void> {
+-		const model = acpModelValue(session.model);
+-		const key = `${model}|${effort}`;
+-		if (session.effortFailure === key) {
+-			return;
+-		}
+-		try {
+-			await this.agent.setSessionModel(session.acp.sessionId, `${model}[${effort}]`);
+-		} catch (error) {
+-			session.effortFailure = key;
+-			this.log(`${label}Thinking effort "${effort}" was not applied to ${model}: the adapter does not offer that effort for this model (${describe(error)}).`, 'warn');
+-			return;
+-		}
+-		session.effortFailure = undefined;
+-		try {
+-			const readBack = session.acp.configOptions.find(option => option.id === 'collaboration_mode')
+-				?? session.acp.configOptions[0];
+-			const configOptions = readBack
+-				? await this.agent.setConfigOption(session.acp.sessionId, readBack.id, readBack.currentValue ?? 'default')
+-				: undefined;
+-			if (configOptions) {
+-				session.acp.configOptions = configOptions;
+-			}
+-		} catch (error) {
+-			this.log(`${label}Could not read the session options back after setting the effort (${describe(error)}).`, 'debug');
+-		}
+-		this.log(`${label}Session ${session.acp.sessionId} runs on "${model}" with thinking effort "${effort}"`);
+-	}
+-
+-	/**
+-	 * Applies the thinking effort the picker reported. The option only exists once
+-	 * a model has been resolved, so this runs after {@link applyModel} and falls
+-	 * back to the model-and-effort call when there is still no option to write.
+-	 */
++	/** Applies the thinking effort the picker reported, when the agent offers one. */
+ 	private async applyEffort(session: ChatSession, effort: string | undefined): Promise<void> {
+@@ -948,8 +805,4 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		const option = findEffortOption(session.acp.configOptions);
+-		if (!option) {
+-			await this.applyModelWithEffort(session, effort);
+-			return;
+-		}
+-		if (option.currentValue === effort) {
+-			session.effortFailure = undefined;
++		if (!option || option.currentValue === effort) {
++			session.effort = effort;
+ 			return;
+@@ -961,6 +814,6 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			}
+-			session.effortFailure = undefined;
++			session.effort = effort;
+ 			this.log(`Applied thinking effort "${effort}" to session ${session.acp.sessionId}`);
+ 		} catch (error) {
+-			this.log(`Could not apply thinking effort "${effort}" to ${session.model}: ${describe(error)}`, 'warn');
++			this.log(`Could not apply thinking effort "${effort}": ${describe(error)}`, 'warn');
+ 		}
+@@ -992,7 +845,5 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 						turn.contextUsed = update.used;
+-						session.contextUsed = update.used;
+ 					}
+-					if (typeof update.size === 'number' && update.size !== turn.contextSize) {
++					if (typeof update.size === 'number') {
+ 						turn.contextSize = update.size;
+-						this.refineContextWindow(session.model, update.size);
+ 					}
+@@ -1000,2 +851,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			},
++			onUsage: usage => this.measureRequest(session, turn, usage),
+ 			token,
+@@ -1004,5 +856,2 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 				turn.result = result;
+-				if (result.usage) {
+-					this.logTurnCache(session, result.usage);
+-				}
+ 				return result;
+@@ -1029,3 +878,2 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			reportedTokens: 0,
+-			contextUsed: session.contextUsed,
+ 			startedAt: Date.now(),
+@@ -1096,6 +944,6 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 				this.promptSignIn();
+-				throw new vscode.LanguageModelError(NEEDS_CREDENTIALS);
++				throw new vscode.LanguageModelError("Claude ACP needs credentials. Run \"Claude ACP: Sign In\" to sign in or to use an API key, then try again.");
+ 			}
+ 			if (turn.error instanceof RpcConnectionClosedError) {
+-				throw new vscode.LanguageModelError("The Codex agent stopped. Send your message again to start a new session; if it keeps happening, run \"Codex ACP: Restart Agent\".");
++				throw new vscode.LanguageModelError("The Claude agent stopped. Send your message again to start a new session; if it keeps happening, run \"Claude ACP: Restart Agent\".");
+ 			}
+@@ -1104,3 +952,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			}
+-			throw new vscode.LanguageModelError(`Codex ACP failed: ${describe(turn.error)}`);
++			throw new vscode.LanguageModelError(`Claude ACP failed: ${describe(turn.error)}`);
+ 		}
+@@ -1114,2 +962,6 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		const reported = turn.result?.usage;
++		if (turn.requestUsage && reported && !sameInput(turn.requestUsage, reported)) {
++			const describeInput = (usage: AcpTokenUsage) => `${usage.cachedReadTokens} cached, ${usage.inputTokens} fresh, ${usage.cachedWriteTokens} written`;
++			this.log(`The model calls of the turn add up to ${describeInput(turn.requestUsage)}, but the agent reports ${describeInput(reported)} for the turn; the cache figures may leave out calls.`, 'warn');
++		}
+ 		this.turnEmitter.fire({ usage: reported, background: session.toolCount === 0, chat: session.chat });
+@@ -1123,15 +975,25 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 
+-	/**
+-	 * Logs the cache split of a finished turn. Codex reports it once per turn, on
+-	 * the prompt response, and the listeners hear it once through
+-	 * {@link onDidFinishTurn}, so there is no per-model-call measurement (D5).
+-	 */
+-	private logTurnCache(session: ChatSession, usage: AcpTokenUsage): void {
+-		this.log(`Turn cache: ${hitRateOf(usage).toFixed(1)}% hit (${usage.cachedReadTokens} cached, ${usage.inputTokens} fresh, ${usage.cachedWriteTokens} written).`);
++	/** Adds one model call of a running turn and reports it at once, so the cache figure follows the turn. */
++	private measureRequest(session: ChatSession, turn: ActiveTurn, call: AcpTokenUsage): void {
++		const sum = turn.requestUsage;
++		turn.requestUsage = {
++			inputTokens: (sum?.inputTokens ?? 0) + call.inputTokens,
++			outputTokens: (sum?.outputTokens ?? 0) + call.outputTokens,
++			cachedReadTokens: (sum?.cachedReadTokens ?? 0) + call.cachedReadTokens,
++			cachedWriteTokens: (sum?.cachedWriteTokens ?? 0) + call.cachedWriteTokens,
++			totalTokens: (sum?.totalTokens ?? 0) + call.totalTokens,
++		};
++		this.log(`Model call: ${hitRateOf(call).toFixed(1)}% cache hit (${call.cachedReadTokens} cached, ${call.inputTokens} fresh, ${call.cachedWriteTokens} written).`);
+ 		if (session.reused && !session.reused.logged) {
+ 			session.reused.logged = true;
+-			const total = usage.inputTokens + usage.cachedReadTokens + usage.cachedWriteTokens;
+-			const verdict = usage.cachedReadTokens > 0 && usage.cachedReadTokens >= total / 2 ? 'the cache served the conversation' : 'the conversation was mostly NOT served from the cache';
+-			this.log(`[reuse] First turn after the session was ${session.reused.how} from ${session.reused.from}: ${verdict} (${usage.cachedReadTokens} cached, ${usage.inputTokens} fresh, ${usage.cachedWriteTokens} written of ${total}).`);
+-		}
++			const total = call.inputTokens + call.cachedReadTokens + call.cachedWriteTokens;
++			const verdict = call.cachedReadTokens > 0 && call.cachedReadTokens >= total / 2 ? 'the cache served the conversation' : 'the conversation was mostly NOT served from the cache';
++			this.log(`[reuse] First model call after the session was ${session.reused.how} from ${session.reused.from}: ${verdict} (${call.cachedReadTokens} cached, ${call.inputTokens} fresh, ${call.cachedWriteTokens} written of ${total}).`);
++		}
++		this.requestEmitter.fire({
++			call,
++			turn: turn.requestUsage,
++			background: session.toolCount === 0,
++			chat: session.chat,
++		});
+ 	}
+@@ -1249,4 +1111,4 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 
+-		// A background-command notification can add an assistant message after a
+-		// pending result. Only matching call IDs can settle the current calls.
++		// A background notification can place an assistant message after the result.
++		// Only a result with the pending call's ID can settle it.
+ 		for (const message of messages) {
+@@ -1356,10 +1218,8 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		}
+-		this.releaseWarmSession();
++		this.warmSession = undefined;
++		this.warmSessionCreation = undefined;
+ 
+ 		if (change === 'restarted') {
+-			// The account may have changed, and with it the models on offer and their
+-			// windows; so may `codexAcp.maxContextWindow`, which restarts the agent.
++			// The account may have changed, and with it the models on offer.
+ 			this.cachedModels = undefined;
+-			this.reportedWindows.clear();
+-			this.catalog = undefined;
+ 			this.signInWarningShown = false;
+@@ -1380,3 +1240,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 		void vscode.window.showWarningMessage(
+-			"Codex ACP needs credentials: sign in with ChatGPT or use an OpenAI API key.",
++			"Claude ACP needs credentials: sign in with a Claude subscription or an Anthropic Console account, or use an API key.",
+ 			"Sign In",
+@@ -1385,3 +1245,3 @@ export class CodexAcpProvider implements vscode.LanguageModelChatProvider<vscode
+ 			if (choice === "Sign In") {
+-				void vscode.commands.executeCommand('codexAcp.signIn');
++				void vscode.commands.executeCommand('claudeAcp.signIn');
+ 			} else if (choice === "Show Output") {
+@@ -1513,12 +1373,2 @@ function delay(milliseconds: number): Promise<void> {
+ 
+-/** The ACP server entry that points a session at this extension's tool bridge. */
+-function bridgeServer(endpoint: McpServerEndpoint) {
+-	return {
+-		type: 'http' as const,
+-		name: 'vscode',
+-		url: endpoint.url,
+-		headers: [{ name: 'Authorization', value: `Bearer ${endpoint.token}` }],
+-	};
+-}
+-
+ function describe(error: unknown): string {
+@@ -1526,8 +1376 @@ function describe(error: unknown): string {
+ }
+-
+-/** The agent's own account of an RPC failure, which only the debug log may carry. */
+-function rpcDetailsOf(error: unknown): string | undefined {
+-	const data = error instanceof RpcError ? error.data : undefined;
+-	const details = data && typeof data === 'object' ? (data as { details?: unknown }).details : undefined;
+-	return typeof details === 'string' && details.length > 0 ? details : undefined;
+-}

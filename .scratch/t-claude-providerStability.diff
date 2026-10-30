@@ -1,0 +1,16 @@
+diff --git "a/codex-acp-for-copilot\\test\\unit\\providerStability.test.ts" "b/claude-acp-for-copilot\\test\\unit\\providerStability.test.ts"
+index 9ca426f..6fade49 100644
+--- "a/codex-acp-for-copilot\\test\\unit\\providerStability.test.ts"
++++ "b/claude-acp-for-copilot\\test\\unit\\providerStability.test.ts"
+@@ -10 +10 @@ import type { AcpContentBlock } from '../../src/convert';
+-import { CodexAcpProvider } from '../../src/provider';
++import { ClaudeAcpProvider } from '../../src/provider';
+@@ -47 +47 @@ class FakeBridge {
+-const model = { id: 'gpt-5' } as vscode.LanguageModelChatInformation;
++const model = { id: 'sonnet' } as vscode.LanguageModelChatInformation;
+@@ -56 +56 @@ let agent: FakeAgent;
+-let provider: CodexAcpProvider;
++let provider: ClaudeAcpProvider;
+@@ -61 +61 @@ beforeEach(() => {
+-	provider = new CodexAcpProvider(agent as never, new FakeBridge() as never, output as never);
++	provider = new ClaudeAcpProvider(agent as never, new FakeBridge() as never, output as never);

@@ -1,0 +1,59 @@
+diff --git "a/codex-acp-for-copilot\\test\\unit\\providerIdle.test.ts" "b/claude-acp-for-copilot\\test\\unit\\providerIdle.test.ts"
+index f041374..d103d0e 100644
+--- "a/codex-acp-for-copilot\\test\\unit\\providerIdle.test.ts"
++++ "b/claude-acp-for-copilot\\test\\unit\\providerIdle.test.ts"
+@@ -9 +9 @@ import type { PromptResult } from '../../src/agent';
+-import { CodexAcpProvider } from '../../src/provider';
++import { ClaudeAcpProvider } from '../../src/provider';
+@@ -22,0 +23 @@ class FakeAgent {
++	readonly background = new Set<string>();
+@@ -25,0 +27,4 @@ class FakeAgent {
++	hasBackgroundTasks(sessionId: string): boolean {
++		return this.background.has(sessionId);
++	}
++
+@@ -37,0 +43,4 @@ class FakeAgent {
++	async isInstalled(): Promise<boolean> {
++		return true;
++	}
++
+@@ -89 +98 @@ class MemoryMemento implements vscode.Memento {
+-const model = { id: 'gpt-6.1-sol' } as vscode.LanguageModelChatInformation;
++const model = { id: 'sonnet' } as vscode.LanguageModelChatInformation;
+@@ -96 +105 @@ let agent: FakeAgent;
+-let provider: CodexAcpProvider;
++let provider: ClaudeAcpProvider;
+@@ -102 +111 @@ beforeEach(() => {
+-	provider = new CodexAcpProvider(agent as never, new FakeBridge() as never, output as never, new MemoryMemento());
++	provider = new ClaudeAcpProvider(agent as never, new FakeBridge() as never, output as never, new MemoryMemento());
+@@ -160,0 +170,15 @@ describe('an idle chat session', () => {
++	it('is kept while it still has a background task, and released once that ends', async () => {
++		await finishTurn(opening(), 1);
++		agent.background.add('s1');
++
++		await vi.advanceTimersByTimeAsync(30 * MINUTE);
++		expect(agent.closed).toEqual([]);
++
++		agent.background.delete('s1');
++		await vi.advanceTimersByTimeAsync(MINUTE);
++		expect(agent.closed).toEqual([]);
++
++		await vi.advanceTimersByTimeAsync(2 * MINUTE);
++		expect(agent.closed).toEqual(['s1']);
++	});
++
+@@ -220,0 +245,14 @@ describe('the agent process', () => {
++
++describe('the session that reads models and usage', () => {
++	it('is closed once it has been unused for a while', async () => {
++		const usage = provider.fetchUsageMarkdown();
++		await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
++		agent.prompts[0].finish();
++		await usage;
++		expect(agent.closed).toEqual([]);
++
++		await vi.advanceTimersByTimeAsync(MINUTE);
++
++		expect(agent.closed).toEqual(['s1']);
++	});
++});

@@ -1,0 +1,5 @@
+	private ensureWarmSession(): Promise<AgentSession> {
+		this.lastAgentUse = Date.now();
+		return this.warm.ensure();
+	}
+

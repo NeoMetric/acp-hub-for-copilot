@@ -1,0 +1,46 @@
+diff --git "a/codex-acp-for-copilot\\test\\unit\\providerTurns.test.ts" "b/claude-acp-for-copilot\\test\\unit\\providerTurns.test.ts"
+index c63785f..4ecfe57 100644
+--- "a/codex-acp-for-copilot\\test\\unit\\providerTurns.test.ts"
++++ "b/claude-acp-for-copilot\\test\\unit\\providerTurns.test.ts"
+@@ -8 +8 @@ import * as vscode from 'vscode';
+-import { readTokenUsage, type PromptResult } from '../../src/agent';
++import type { PromptResult } from '../../src/agent';
+@@ -10 +9,0 @@ import type { McpToolExecutor, McpToolResult } from '../../src/bridge';
+-import { hitRateOf } from '../../src/cache';
+@@ -12 +11 @@ import type { AcpContentBlock } from '../../src/convert';
+-import { CodexAcpProvider, type FinishedTurn } from '../../src/provider';
++import { ClaudeAcpProvider } from '../../src/provider';
+@@ -18 +17 @@ interface StartedPrompt {
+-	finish(result?: PromptResult): void;
++	finish(): void;
+@@ -43 +42 @@ class FakeAgent {
+-			this.prompts.push({ sessionId, blocks, finish: (result = { stopReason: 'end_turn' }) => resolve(result) });
++			this.prompts.push({ sessionId, blocks, finish: () => resolve({ stopReason: 'end_turn' }) });
+@@ -73 +72 @@ let bridge: FakeBridge;
+-let provider: CodexAcpProvider;
++let provider: ClaudeAcpProvider;
+@@ -79 +78 @@ beforeEach(() => {
+-	provider = new CodexAcpProvider(agent as never, bridge as never, output as never);
++	provider = new ClaudeAcpProvider(agent as never, bridge as never, output as never);
+@@ -171,21 +169,0 @@ describe('a tool call the agent already gave up on', () => {
+-
+-describe('the cache share of a turn', () => {
+-	it('reports the quota block once, so the usage item shows the turn at 90%', async () => {
+-		const turns: FinishedTurn[] = [];
+-		provider.onDidFinishTurn(turn => turns.push(turn));
+-
+-		const first = respond(opening());
+-		await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+-		agent.prompts[0].finish({
+-			stopReason: 'end_turn',
+-			usage: readTokenUsage({ _meta: { quota: { token_count: { inputTokens: 100, cachedInputTokens: 900, outputTokens: 10 } } } }),
+-		});
+-		await first.done;
+-
+-		// One report per turn, never one per model call: Codex reports the split once.
+-		expect(turns).toHaveLength(1);
+-		expect(hitRateOf(turns[0].usage!)).toBe(90);
+-		expect(turns[0].background).toBe(false);
+-		expect(turns[0].chat?.workspace).toBeDefined();
+-	});
+-});

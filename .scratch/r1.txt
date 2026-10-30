@@ -1,0 +1,4 @@
+	provideLanguageModelChatInformation(options: vscode.PrepareLanguageModelChatModelOptions, token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
+		return this.models.provide(options, token);
+	}
+

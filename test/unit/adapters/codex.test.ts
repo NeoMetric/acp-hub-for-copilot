@@ -87,10 +87,10 @@ describe('codex mergeConfig', () => {
 		return JSON.parse(merged?.CODEX_CONFIG ?? '{}');
 	}
 
-	it('adds the MCP tool timeout and turns the built-in tools off', () => {
+	it('turns the built-in tools off and leaves the MCP servers to the agent', () => {
 		const config = configOf({});
 
-		expect(config.mcp_servers.vscode.tool_timeout_sec).toBe(86_400);
+		expect(config.mcp_servers).toBeUndefined();
 		expect(config.features.shell_tool).toBe(false);
 		expect(config.features.code_mode).toEqual({ enabled: true, excluded_tool_namespaces: ['functions', 'clock'] });
 		expect(config.web_search).toBe('disabled');
@@ -102,8 +102,7 @@ describe('codex mergeConfig', () => {
 		const config = configOf({ CODEX_CONFIG: user });
 
 		expect(config.model).toBe('gpt-x');
-		expect(config.mcp_servers.other).toEqual({ command: 'x' });
-		expect(config.mcp_servers.vscode).toEqual({ startup_timeout_sec: 5, tool_timeout_sec: 86_400 });
+		expect(config.mcp_servers).toEqual({ other: { command: 'x' }, vscode: { startup_timeout_sec: 5 } });
 		expect(config.features.extra).toBe(true);
 		expect(config.features.goals).toBe(false);
 	});
