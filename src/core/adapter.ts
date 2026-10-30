@@ -46,16 +46,25 @@ export type AuthMethodSpec =
 export interface UsageWindow {
 	label: string;
 	usedPercent: number;
-	resetsAt?: number;
+	/** When the window resets, as text the agent or the adapter rendered. */
+	resets?: string;
 }
 
+/** An account without plan limits has no windows and says why in `note`. */
 export interface UsageReading {
+	plan?: string;
 	windows: UsageWindow[];
 	note?: string;
 }
 
+export interface UsageContext {
+	launch: LaunchContext;
+	/** Sends a prompt to a warm agent session and returns the reply text; `undefined` when the agent is not set up. */
+	askAgent(prompt: string): Promise<string | undefined>;
+}
+
 export interface UsageSource {
-	read(ctx: LaunchContext, signal: AbortSignal): Promise<UsageReading>;
+	read(ctx: UsageContext, signal: AbortSignal): Promise<UsageReading | undefined>;
 }
 
 export interface SettingSpec {
@@ -148,7 +157,11 @@ export interface AgentAdapter {
 	clientCapabilities?: Record<string, unknown>;
 	/** Picks the `authenticate` call to make after `initialize`, or `undefined` for none. */
 	authenticate?(methods: AcpAuthMethod[], apiKey: string | undefined): AuthenticateRequest | undefined;
-	/** Reads the usage of one model call from an agent-specific notification; called for every unknown notification. */
-	modelCallUsage?(method: string, params: unknown, seen: Set<string>): { sessionId: string; usage: AcpTokenUsage } | undefined;
+	/**
+	 * Reads the usage of one model call from an agent-specific notification; called for every notification
+	 * the client does not know. Returns `undefined` when the notification is not the adapter's, otherwise the
+	 * session it belongs to and the usage (absent for a call already counted; `seen` remembers call ids).
+	 */
+	modelCallUsage?(method: string, params: unknown, seen: Set<string>): { sessionId: string; usage?: AcpTokenUsage } | undefined;
 	systemPromptNote?: string;
 }
