@@ -19,28 +19,40 @@ const shared = {
 	logLevel: "info"
 };
 
-/** @type {import('esbuild').BuildOptions} */
-const options = tests
-	? {
+/** @type {import('esbuild').BuildOptions[]} */
+const builds = tests
+	? [{
 		...shared,
 		// The smoke tests run inside the extension host, next to the bundled extension.
 		entryPoints: ["test/smoke/extension.test.ts"],
 		outfile: "out/test/extension.test.js",
 		external: ["vscode", "mocha"]
-	}
-	: {
+	}]
+	: [{
 		...shared,
 		entryPoints: ["src/extension.ts"],
 		outfile: "dist/extension.js",
 		minify: !watch
-	};
+	}, {
+		// The sidebar page runs in a webview, not in node.
+		...shared,
+		platform: "browser",
+		format: "iife",
+		target: "es2022",
+		external: [],
+		entryPoints: ["src/sidebar/webview/main.ts"],
+		outfile: "dist/sidebar.js",
+		minify: !watch
+	}];
 
 async function main() {
-	if (watch) {
-		const context = await esbuild.context(options);
-		await context.watch();
-	} else {
-		await esbuild.build(options);
+	for (const options of builds) {
+		if (watch) {
+			const context = await esbuild.context(options);
+			await context.watch();
+		} else {
+			await esbuild.build(options);
+		}
 	}
 }
 

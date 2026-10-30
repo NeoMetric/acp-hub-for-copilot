@@ -24,6 +24,24 @@
 	],
 	"main": "./dist/extension.js",
 	"contributes": {
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "acpHub",
+					"title": "ACP Hub",
+					"icon": "media/acp-hub.svg"
+				}
+			]
+		},
+		"views": {
+			"acpHub": [
+				{
+					"id": "acpHub.agents",
+					"type": "webview",
+					"name": "Agents"
+				}
+			]
+		},
 		"languageModelChatProviders": [
 			{
 				"vendor": "acphub-claude",

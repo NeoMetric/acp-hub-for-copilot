@@ -1,0 +1,131 @@
+body {
+	padding: 8px;
+	color: var(--vscode-foreground);
+	font-family: var(--vscode-font-family);
+	font-size: var(--vscode-font-size);
+}
+
+h2 {
+	margin: 0;
+	font-size: 1.1em;
+	font-weight: 600;
+}
+
+.card,
+.add-agent {
+	margin-bottom: 12px;
+	padding: 10px;
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 4px;
+	background: var(--vscode-sideBar-background);
+}
+
+.card-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 8px;
+}
+
+.actions {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 8px;
+}
+
+button {
+	padding: 4px 10px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+	cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+	background: var(--vscode-button-hoverBackground);
+}
+
+button.secondary {
+	color: var(--vscode-button-secondaryForeground);
+	background: var(--vscode-button-secondaryBackground);
+}
+
+button.link {
+	padding: 0;
+	border: none;
+	color: var(--vscode-textLink-foreground);
+	background: none;
+}
+
+button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.badge {
+	padding: 2px 6px;
+	border-radius: 8px;
+	color: var(--vscode-badge-foreground);
+	background: var(--vscode-badge-background);
+	font-size: 0.9em;
+}
+
+.note,
+.resets,
+.plan {
+	color: var(--vscode-descriptionForeground);
+	font-size: 0.9em;
+}
+
+.error {
+	margin: 4px 0;
+	color: var(--vscode-errorForeground);
+}
+
+.usage {
+	margin-bottom: 8px;
+}
+
+.usage-window {
+	margin: 6px 0;
+}
+
+.usage-head {
+	display: flex;
+	justify-content: space-between;
+}
+
+.bar {
+	height: 6px;
+	margin: 2px 0;
+	border-radius: 3px;
+	background: var(--vscode-input-background);
+	overflow: hidden;
+}
+
+.bar-fill {
+	height: 100%;
+	background: var(--vscode-progressBar-background);
+}
+
+.setting {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin: 6px 0;
+}
+
+.setting input[type="checkbox"] {
+	align-self: flex-start;
+}
+
+input[type="text"],
+input[type="number"],
+select {
+	padding: 3px 4px;
+	color: var(--vscode-input-foreground);
+	background: var(--vscode-input-background);
+	border: 1px solid var(--vscode-input-border, transparent);
+}
