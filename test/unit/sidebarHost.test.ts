@@ -33,6 +33,8 @@ function setup(overrides: Partial<SidebarDeps> = {}) {
 		signOut: async () => { },
 		readSettings: () => ({}),
 		writeSetting: vi.fn(async () => { }),
+		readGlobalSetting: () => undefined,
+		writeGlobalSetting: vi.fn(async () => { }),
 		isEnabled: () => true,
 		setEnabled: async () => { },
 		getUsage: () => ({ status: 'idle', extraWindows: [] }),
@@ -71,6 +73,14 @@ describe('SidebarHost', () => {
 		await host.handleMessage({ type: 'ready' });
 		expect(last().map(item => item.id)).toEqual(['a', 'b']);
 		expect(last()[0].settings[0].value).toBe('low');
+	});
+
+	it('writes a known global setting and ignores an unknown one', async () => {
+		const { host, deps } = setup();
+		await host.handleMessage({ type: 'setGlobalSetting', key: 'resume.transcriptDetail', value: 'full' });
+		await host.handleMessage({ type: 'setGlobalSetting', key: 'somethingElse', value: 'x' });
+		expect(deps.writeGlobalSetting).toHaveBeenCalledTimes(1);
+		expect(deps.writeGlobalSetting).toHaveBeenCalledWith('resume.transcriptDetail', 'full');
 	});
 
 	it('initially shows installed agents and persists additions and removals', async () => {

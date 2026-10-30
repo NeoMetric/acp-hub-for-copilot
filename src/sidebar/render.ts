@@ -26,8 +26,10 @@ function renderInfo(label: string, description: string): string {
 	return `<details class="setting-info"><summary aria-label="About ${escapeHtml(label)}">ⓘ</summary><span class="setting-help">${escapeHtml(description)}</span></details>`;
 }
 
-function renderSetting(agentId: string, setting: SettingView): string {
-	const attributes = `data-agent="${escapeHtml(agentId)}" data-key="${escapeHtml(setting.key)}" data-type="${setting.type}" title="${escapeHtml(setting.description)}"`;
+/** An undefined `agentId` renders a setting that applies to every agent. */
+function renderSetting(agentId: string | undefined, setting: SettingView): string {
+	const owner = agentId === undefined ? 'data-global="true"' : `data-agent="${escapeHtml(agentId)}"`;
+	const attributes = `${owner} data-key="${escapeHtml(setting.key)}" data-type="${setting.type}" title="${escapeHtml(setting.description)}"`;
 	const optionsHelp = (setting.options ?? []).map((option, index) => setting.optionDescriptions?.[index] ? `${option}: ${setting.optionDescriptions[index]}` : '').filter(Boolean).join(' ');
 	const info = renderInfo(setting.label, [setting.description, optionsHelp].filter(Boolean).join(' '));
 	const label = `<span class="setting-label">${escapeHtml(setting.label)}</span>`;
@@ -154,10 +156,19 @@ function renderCard(agent: AgentCardState, settingsOpen: boolean): string {
 		+ `</section>`;
 }
 
-export function renderCards(agents: AgentCardState[], openSettings: ReadonlySet<string> = new Set()): string {
+export const GLOBAL_SETTINGS_ID = '*global';
+
+function renderGlobalSettings(settings: SettingView[], open: boolean): string {
+	if (settings.length === 0) {
+		return '';
+	}
+	return `<details class="global-settings"${open ? ' open' : ''}><summary>Settings for all agents</summary><div class="settings">${settings.map(setting => renderSetting(undefined, setting)).join('')}</div></details>`;
+}
+
+export function renderCards(agents: AgentCardState[], openSettings: ReadonlySet<string> = new Set(), globalSettings: SettingView[] = []): string {
 	const cards = agents.filter(agent => agent.visible).map(agent => renderCard(agent, openSettings.has(agent.id))).join('');
 	const available = agents.filter(agent => !agent.visible);
 	const choices = available.map(agent => `<button class="secondary add-choice" data-action="addAgent" data-agent="${escapeHtml(agent.id)}">${escapeHtml(agent.displayName)}</button>`).join('');
 	const addAgent = available.length ? `<details class="add-agent"><summary>+ Add agent</summary>${choices}</details>` : '';
-	return cards + addAgent;
+	return renderGlobalSettings(globalSettings, openSettings.has(GLOBAL_SETTINGS_ID)) + cards + addAgent;
 }

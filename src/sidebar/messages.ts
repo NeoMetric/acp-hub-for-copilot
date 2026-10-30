@@ -47,10 +47,11 @@ export interface AgentCardState {
 	error?: string;
 }
 
-export type ToWebview = { type: 'state'; agents: AgentCardState[] };
+export type ToWebview = { type: 'state'; agents: AgentCardState[]; globalSettings?: SettingView[] };
 
 export type FromWebview =
 	| { type: 'ready' }
+	| { type: 'setGlobalSetting'; key: string; value: SettingValue }
 	| { type: 'install' | 'uninstall' | 'signIn' | 'signOut' | 'refreshUsage'; agentId: string }
 	| { type: 'addAgent' | 'removeAgent'; agentId: string }
 	| { type: 'setEnabled'; agentId: string; enabled: boolean }

@@ -12,6 +12,7 @@ h2 {
 }
 
 .card,
+.global-settings,
 .add-agent {
 	margin-bottom: 12px;
 	padding: 10px;
@@ -201,6 +202,7 @@ button:disabled {
 	display: block;
 }
 
+.global-settings summary,
 .add-agent summary {
 	cursor: pointer;
 }

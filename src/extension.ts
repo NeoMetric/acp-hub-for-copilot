@@ -14,6 +14,7 @@ import { readAgentSettings, settingKey } from './core/settings';
 import { recordStoragePath } from './core/storageCleanup';
 import { UsageStore } from './core/usage';
 import { SidebarHost } from './sidebar/host';
+import type { SettingValue } from './sidebar/messages';
 
 export function activate(context: vscode.ExtensionContext): void {
 	const output = vscode.window.createOutputChannel('ACP Hub', { log: true });
@@ -58,7 +59,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			store: secrets, ctx: launch, runTerminal: runInVsCodeTerminal,
 			startAgent: methodId => providers.get(id)?.startForSignIn(methodId) ?? Promise.resolve(false),
 		});
-		if (result.ok) { await providers.get(id)?.restart(); providers.get(id)?.refresh(); }
+		if (result.ok) { await context.globalState.update(`signedIn.${id}`, true); await providers.get(id)?.restart(); providers.get(id)?.refresh(); }
 		return result;
 	}
 	async function refreshUsage(id: string, force = true): Promise<void> {
@@ -86,6 +87,10 @@ export function activate(context: vscode.ExtensionContext): void {
 		providers.set(adapter.id, provider);
 		context.subscriptions.push(
 			provider,
+			provider.onDidRequireSignIn(() => {
+				void context.globalState.update(`signedIn.${adapter.id}`, false);
+				sidebar.refresh();
+			}),
 			provider.onDidMeasureRequest(measurement => usage.recordRequest(adapter.id, measurement)),
 			provider.onDidFinishTurn(turn => {
 				usage.recordTurn(adapter.id, turn.usage, turn.background);
@@ -117,12 +122,22 @@ export function activate(context: vscode.ExtensionContext): void {
 			await provider?.publishModels();
 			return true;
 		},
-		isSignedIn: async id => (await secrets.get(id)) ? true : providers.get(id)?.signInState(),
+		isSignedIn: async id => {
+			if (await secrets.get(id)) { return true; }
+			// An agent that has not started in this window cannot say, so the last answer it gave is shown.
+			const key = `signedIn.${id}`;
+			const live = providers.get(id)?.signInState();
+			if (live === undefined) { return context.globalState.get<boolean>(key); }
+			if (context.globalState.get<boolean>(key) !== live) { void context.globalState.update(key, live); }
+			return live;
+		},
 		hasSavedKey: async id => Boolean(await secrets.get(id)),
 		signIn: chooseSignIn,
 		signOut: async id => { await signOut(id, secrets); await providers.get(id)?.restart(); providers.get(id)?.refresh(); },
 		readSettings: id => settingsFor(adapterFor(id)),
 		writeSetting: async (id, key, value) => { await vscode.workspace.getConfiguration('acpHub').update(settingKey(id, key), value, vscode.ConfigurationTarget.Global); },
+		readGlobalSetting: key => vscode.workspace.getConfiguration('acpHub').get<SettingValue>(key),
+		writeGlobalSetting: async (key, value) => { await vscode.workspace.getConfiguration('acpHub').update(key, value, vscode.ConfigurationTarget.Global); },
 		isEnabled: id => vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(id, 'enabled'), true),
 		setEnabled: async (id, enabled) => { await vscode.workspace.getConfiguration('acpHub').update(settingKey(id, 'enabled'), enabled, vscode.ConfigurationTarget.Global); providers.get(id)?.refresh(); },
 		getUsage: id => adapterFor(id).usage ? usage.get(id) : { ...usage.get(id), status: 'unsupported' },

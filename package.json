@@ -77,6 +77,28 @@
 		"configuration": {
 			"title": "ACP Hub",
 			"properties": {
+				"acpHub.resume.transcriptDetail": {
+					"description": "How an earlier conversation is restored when a chat has no saved agent session to continue (the session expired, the history changed, or the agent could not reopen it). Applies to every agent. `compact` names the tools that ran and omits their results; `full` includes each tool call's arguments and its result as text, which restores more but costs more tokens.",
+					"default": "compact",
+					"type": "string",
+					"enum": ["compact", "full"],
+					"enumDescriptions": [
+						"Messages plus the names of the tools that ran. Tool results are left out.",
+						"Messages plus tool call arguments and tool results, each cut to the per-result limit."
+					]
+				},
+				"acpHub.resume.transcriptMaxCharacters": {
+					"description": "Upper bound, in characters, for the restored conversation. The oldest messages are dropped first when it does not fit.",
+					"default": 40000,
+					"type": "number",
+					"minimum": 1000
+				},
+				"acpHub.resume.transcriptMaxToolResultCharacters": {
+					"description": "Upper bound, in characters, for one tool result in a `full` restored conversation.",
+					"default": 4000,
+					"type": "number",
+					"minimum": 100
+				},
 				"acpHub.agents.claude.enabled": {
 					"type": "boolean",
 					"default": true,

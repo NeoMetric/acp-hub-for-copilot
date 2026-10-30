@@ -135,6 +135,14 @@ describe('renderCards', () => {
 		expect(html).toContain('token-weighted cache hit rate');
 	});
 
+	it('renders the settings for all agents above the cards', () => {
+		const html = renderCards([card()], new Set(), [{ key: 'resume.transcriptDetail', label: 'Restored chat detail', description: '', type: 'enum', value: 'full', options: ['compact', 'full'] }]);
+		expect(html.indexOf('Settings for all agents')).toBeGreaterThanOrEqual(0);
+		expect(html.indexOf('Settings for all agents')).toBeLessThan(html.indexOf('class="card"'));
+		expect(html).toContain('data-global="true"');
+		expect(html).toContain('<option value="full" selected>');
+	});
+
 	it('offers hidden supported agents for adding', () => {
 		const html = renderCards([card({ visible: false })]);
 		expect(html).toContain('+ Add agent');

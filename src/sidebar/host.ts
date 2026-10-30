@@ -26,6 +26,9 @@ export interface SidebarDeps {
 	signOut(adapterId: string): Promise<void>;
 	readSettings(adapterId: string): AgentSettings;
 	writeSetting(adapterId: string, key: string, value: SettingValue): Promise<void>;
+	/** Reads a setting under `acpHub.` that applies to every agent, such as `resume.transcriptDetail`. */
+	readGlobalSetting(key: string): SettingValue | undefined;
+	writeGlobalSetting(key: string, value: SettingValue): Promise<void>;
 	isEnabled(adapterId: string): boolean;
 	setEnabled(adapterId: string, enabled: boolean): Promise<void>;
 	getUsage(adapterId: string): UsageState;
@@ -34,6 +37,35 @@ export interface SidebarDeps {
 	/** Uri of a file inside the extension folder, for example `dist/sidebar.js`. */
 	assetUri(relativePath: string): vscode.Uri;
 }
+
+const GLOBAL_SETTINGS: Array<Omit<SettingView, 'value'> & { default: SettingValue }> = [
+	{
+		key: 'resume.transcriptDetail',
+		label: 'Restored chat detail',
+		description: 'How an earlier conversation is restored when a chat has no saved agent session to continue.',
+		type: 'enum',
+		default: 'compact',
+		options: ['compact', 'full'],
+		optionDescriptions: [
+			'Messages plus the names of the tools that ran. Tool results are left out.',
+			'Messages plus tool call arguments and tool results, each cut to the per-result limit. Restores more but costs more tokens.',
+		],
+	},
+	{
+		key: 'resume.transcriptMaxCharacters',
+		label: 'Restored chat size limit',
+		description: 'Upper bound, in characters, for the restored conversation. The oldest messages are dropped first.',
+		type: 'number',
+		default: 40000,
+	},
+	{
+		key: 'resume.transcriptMaxToolResultCharacters',
+		label: 'Restored tool result limit',
+		description: 'Upper bound, in characters, for one tool result when the detail is full.',
+		type: 'number',
+		default: 4000,
+	},
+];
 
 function errorText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -67,9 +99,21 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		});
 	}
 
+	/** Redraws the cards, for a change the host learned of outside the sidebar, such as an expired sign-in. */
+	refresh(): void {
+		void this.postState();
+	}
+
 	async handleMessage(message: FromWebview): Promise<void> {
 		if (message.type === 'ready') {
 			await this.postState();
+			return;
+		}
+		if (message.type === 'setGlobalSetting') {
+			if (GLOBAL_SETTINGS.some(spec => spec.key === message.key)) {
+				await this.deps.writeGlobalSetting(message.key, message.value);
+				await this.postState();
+			}
 			return;
 		}
 
@@ -243,7 +287,11 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		if (version !== this.stateVersion || !this.view) {
 			return;
 		}
-		const message: ToWebview = { type: 'state', agents };
+		const globalSettings: SettingView[] = GLOBAL_SETTINGS.map(({ default: fallback, ...spec }) => ({
+			...spec,
+			value: this.deps.readGlobalSetting(spec.key) ?? fallback,
+		}));
+		const message: ToWebview = { type: 'state', agents, globalSettings };
 		await this.view.webview.postMessage(message);
 	}
 
