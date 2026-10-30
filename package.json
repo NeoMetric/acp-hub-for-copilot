@@ -37,7 +37,185 @@
 				"vendor": "acphub-google",
 				"displayName": "Google Agent"
 			}
-		]
+		],
+		"configuration": {
+			"title": "ACP Hub",
+			"properties": {
+				"acpHub.agents.claude.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show Claude Agent in the Copilot model picker."
+				},
+				"acpHub.agents.claude.idleTimeoutSeconds": {
+					"description": "How long a chat session stays warm after its last request before it is closed. 0 keeps it until the agent stops.",
+					"default": 120,
+					"type": "number",
+					"minimum": 0
+				},
+				"acpHub.agents.claude.idleShutdownMinutes": {
+					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again on the next request.",
+					"default": 30,
+					"type": "number",
+					"minimum": 0
+				},
+				"acpHub.agents.claude.dumpRequests": {
+					"description": "Write each request Copilot sends to a JSON file in the extension's storage folder. The files hold the whole prompt, so keep this off unless you are debugging.",
+					"default": false,
+					"type": "boolean"
+				},
+				"acpHub.agents.claude.permissionMode": {
+					"description": "How the extension answers permission requests coming from the Claude agent. Tools that run through Copilot Chat still go through Copilot's own confirmations either way.",
+					"default": "auto",
+					"type": "string",
+					"enum": [
+						"auto",
+						"ask"
+					],
+					"enumDescriptions": [
+						"Approve the permission requests of the agent automatically.",
+						"Show the options the agent offers and decline the request unless you pick one."
+					]
+				},
+				"acpHub.agents.claude.authPreference": {
+					"description": "Which credentials the Claude agent uses when both an API key and a signed-in account (OAuth) are available. Changing it restarts the agent.",
+					"default": "auto",
+					"type": "string",
+					"enum": [
+						"auto",
+						"apiKey",
+						"oauth"
+					],
+					"enumDescriptions": [
+						"Use the saved API key when there is one, otherwise the signed-in account.",
+						"Use the saved API key. Without one, the agent falls back to its signed-in account.",
+						"Always use the signed-in account and ignore the saved API key and the key environment variables."
+					]
+				},
+				"acpHub.agents.codex.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show Codex Agent in the Copilot model picker."
+				},
+				"acpHub.agents.codex.idleTimeoutSeconds": {
+					"description": "How long a chat session stays warm after its last request before it is closed. 0 keeps it until the agent stops.",
+					"default": 120,
+					"type": "number",
+					"minimum": 0
+				},
+				"acpHub.agents.codex.idleShutdownMinutes": {
+					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again on the next request.",
+					"default": 30,
+					"type": "number",
+					"minimum": 0
+				},
+				"acpHub.agents.codex.dumpRequests": {
+					"description": "Write each request Copilot sends to a JSON file in the extension's storage folder. The files hold the whole prompt, so keep this off unless you are debugging.",
+					"default": false,
+					"type": "boolean"
+				},
+				"acpHub.agents.codex.permissionMode": {
+					"description": "How the extension answers permission requests coming from the Codex agent. Tools that run through Copilot Chat still go through Copilot's own confirmations either way.",
+					"default": "auto",
+					"type": "string",
+					"enum": [
+						"auto",
+						"ask"
+					],
+					"enumDescriptions": [
+						"Approve the permission requests of the agent automatically.",
+						"Show the options the agent offers and decline the request unless you pick one."
+					]
+				},
+				"acpHub.agents.codex.authPreference": {
+					"description": "Which credentials the Codex agent uses when both an OpenAI API key and a ChatGPT account are available. Changing it restarts the agent.",
+					"default": "auto",
+					"type": "string",
+					"enum": [
+						"auto",
+						"apiKey",
+						"chatgpt"
+					],
+					"enumDescriptions": [
+						"Use the saved OpenAI API key when there is one, otherwise the ChatGPT account.",
+						"Use the saved OpenAI API key. Without one, the agent falls back to its ChatGPT account.",
+						"Always use the ChatGPT account: the saved API key is ignored and CODEX_API_KEY and OPENAI_API_KEY are withheld from the agent."
+					]
+				},
+				"acpHub.agents.codex.maxContextWindow": {
+					"description": "Ask Codex for the largest context window each model allows instead of its default. Models that cannot be raised keep their default. A larger window delays compaction, so long chats re-send more history on every turn and use up your plan limits faster. Changing it restarts the agent.",
+					"default": false,
+					"type": "boolean"
+				},
+				"acpHub.agents.google.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show Google Agent in the Copilot model picker."
+				},
+				"acpHub.agents.google.idleTimeoutSeconds": {
+					"description": "How long a chat session stays warm after its last request before it is closed. 0 keeps it until the agent stops.",
+					"default": 120,
+					"type": "number",
+					"minimum": 0
+				},
+				"acpHub.agents.google.idleShutdownMinutes": {
+					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again on the next request.",
+					"default": 30,
+					"type": "number",
+					"minimum": 0
+				},
+				"acpHub.agents.google.dumpRequests": {
+					"description": "Write each request Copilot sends to a JSON file in the extension's storage folder. The files hold the whole prompt, so keep this off unless you are debugging.",
+					"default": false,
+					"type": "boolean"
+				},
+				"acpHub.agents.google.command": {
+					"description": "Program that starts the ACP server. Leave empty to use the Antigravity server (agy_acp_server) the extension downloads.",
+					"default": "",
+					"type": "string"
+				},
+				"acpHub.agents.google.args": {
+					"description": "Arguments for the program. Leave empty for the default (none).",
+					"default": [],
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"acpHub.agents.google.permissionMode": {
+					"description": "How the extension answers permission requests coming from the Google agent. Tools that run through Copilot Chat still go through Copilot's own confirmations either way.",
+					"default": "auto",
+					"type": "string",
+					"enum": [
+						"auto",
+						"ask"
+					],
+					"enumDescriptions": [
+						"Approve the permission requests of the agent automatically.",
+						"Show the options the agent offers and decline the request unless you pick one."
+					]
+				},
+				"acpHub.agents.google.useAgentBuiltInTools": {
+					"description": "Let the Google agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them and declines their permission requests, so the tools of your Copilot chat do the work. Antigravity may still run built-in tools that never ask for permission.",
+					"default": false,
+					"type": "boolean"
+				},
+				"acpHub.agents.google.authPreference": {
+					"description": "Which credentials the agent uses when both a Gemini API key and a signed-in account are available. Changing it restarts the agent.",
+					"default": "auto",
+					"type": "string",
+					"enum": [
+						"auto",
+						"apiKey",
+						"oauth"
+					],
+					"enumDescriptions": [
+						"Use the saved API key when there is one, otherwise the signed-in account.",
+						"Use the saved API key. Without one, the agent falls back to its signed-in account.",
+						"Always use the signed-in account and ignore the saved API key and the key environment variables."
+					]
+				}
+			}
+		}
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
@@ -47,7 +225,9 @@
 		"lint": "eslint .",
 		"test": "vitest run",
 		"test:smoke": "npm run compile && node esbuild.js --tests && vscode-test",
-		"package": "vsce package"
+		"package": "vsce package",
+		"generate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/generate-vendors.mts",
+		"generate:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/generate-vendors.mts --check"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",

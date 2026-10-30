@@ -1,7 +1,8 @@
+import type { AcpAuthMethod, AcpTokenUsage } from './agentClient';
 import type { Log } from './logging';
 
 /** Values of an agent's settings, after defaults are applied. */
-export type AgentSettings = Record<string, string | number | boolean>;
+export type AgentSettings = Record<string, string | number | boolean | string[]>;
 
 export interface InstallContext {
 	storageDir: string;
@@ -59,10 +60,12 @@ export interface UsageSource {
 
 export interface SettingSpec {
 	key: string;
-	type: 'string' | 'number' | 'boolean' | 'enum';
+	type: 'string' | 'number' | 'boolean' | 'enum' | 'string-list';
 	label: string;
-	default: string | number | boolean;
+	description: string;
+	default: string | number | boolean | string[];
 	options?: string[];
+	optionDescriptions?: string[];
 }
 
 /** A model the agent offers, before it is turned into a picker entry. */
@@ -80,6 +83,41 @@ export interface AgentSessionInfo {
 	effortLevels: string[];
 }
 
+export interface SessionParamsInput {
+	/** Text appended to the agent's own system prompt. */
+	systemPromptAppend?: string;
+	model?: string;
+	/** True when `disableBuiltInTools(settings)` said so. */
+	disableBuiltInTools: boolean;
+	reportEachModelCall: boolean;
+	/** `session/resume` and `session/fork` may refuse a system prompt that `session/new` takes. */
+	isNewSession: boolean;
+}
+
+export interface AuthenticateRequest {
+	methodId: string;
+	_meta?: Record<string, unknown>;
+}
+
+/** How an agent's models are described in the model picker. */
+export interface ModelPolicy {
+	/** The picker's detail line for every model. */
+	detail: string;
+	/** `modelName` is the display name; most agents ignore it. */
+	familyOf(modelValue: string, modelName: string): string;
+	contextWindowOf(modelValue: string, modelName: string): number;
+	maxOutputTokens: number;
+	/** The agent's config option id for the thinking effort. */
+	effortConfigId: string;
+	effortLabel(value: string): string;
+	effortDescription(value: string): string;
+	/** Reads the effort levels from the agent's model list, when it offers no effort config option. */
+	effortLevelsFromModels?(models: readonly { modelId?: string }[]): string[];
+	defaultEffort(levels: readonly string[]): string;
+	fallbackTooltip(name: string): string;
+	thinkingDescription: string;
+}
+
 /**
  * Everything the core needs to know about one agent. The core never looks at
  * the agent's id; every difference between agents is expressed here.
@@ -92,11 +130,25 @@ export interface AgentAdapter {
 	launch(ctx: LaunchContext): LaunchSpec;
 	auth: AuthMethodSpec[];
 	settings: SettingSpec[];
+	modelPolicy: ModelPolicy;
 	listModels?(session: AgentSessionInfo): ModelChoice[];
 	usage?: UsageSource;
 	rebuildExpiredSessions?: boolean;
-	disableBuiltInTools?: boolean;
+	/** Whether the agent's own tools must be turned off for this session (the chat's tools are used instead). */
+	disableBuiltInTools?(settings: AgentSettings): boolean;
+	/** Turns an error from the agent into the error the caller should see; `undefined` keeps the original. */
 	mapError?(error: unknown): Error | undefined;
+	/** Gets the whole child environment (process env plus `launch().env`) and returns the one to spawn with; may also remove variables. */
 	mergeConfig?(settings: AgentSettings, env: Record<string, string>): Record<string, string>;
+	/** Extra fields for `session/new` and `session/resume` (for example `_meta`), given the options the client knows. */
+	sessionParams?(options: SessionParamsInput): Record<string, unknown>;
+	/** Value the session's `mode` config option is set to after a session is opened. */
+	defaultSessionMode?: string;
+	/** Merged into `clientCapabilities` of `initialize`. */
+	clientCapabilities?: Record<string, unknown>;
+	/** Picks the `authenticate` call to make after `initialize`, or `undefined` for none. */
+	authenticate?(methods: AcpAuthMethod[], apiKey: string | undefined): AuthenticateRequest | undefined;
+	/** Reads the usage of one model call from an agent-specific notification; called for every unknown notification. */
+	modelCallUsage?(method: string, params: unknown, seen: Set<string>): { sessionId: string; usage: AcpTokenUsage } | undefined;
 	systemPromptNote?: string;
 }
