@@ -127,6 +127,8 @@ export interface ModelPolicy {
 	defaultEffort(levels: readonly string[]): string;
 	fallbackTooltip(name: string): string;
 	thinkingDescription: string;
+	/** Whether the context size a turn reports (`usage_update.size`) replaces the window the picker advertises. */
+	refineWindowFromUsage?: boolean;
 }
 
 /**
@@ -142,9 +144,17 @@ export interface AgentAdapter {
 	auth: AuthMethodSpec[];
 	settings: SettingSpec[];
 	modelPolicy: ModelPolicy;
+	/** The two sentences of the session prompt that differ per agent (see `createSessionPrompt`). */
+	systemPrompt: { toolAccess: string; listRequiredArguments: boolean };
 	listModels?(session: AgentSessionInfo): ModelChoice[];
 	usage?: UsageSource;
 	rebuildExpiredSessions?: boolean;
+	/** Whether a chat copied from another chat can continue the stored conversation with `session/fork`. */
+	forkChats?: boolean;
+	/** How long (ms) a tool call may wait for Copilot to pick it up before it is failed; absent waits for as long as the agent does. */
+	toolWaitTimeoutMs?: number;
+	/** Whether the session that reads the model list must declare the tool bridge (the agent's own config names it). */
+	declaresBridgeOnModelLookup?: boolean;
 	/** Whether the agent's own tools must be turned off for this session (the chat's tools are used instead). */
 	disableBuiltInTools?(settings: AgentSettings): boolean;
 	/** Turns an error from the agent into the error the caller should see; `undefined` keeps the original. */
