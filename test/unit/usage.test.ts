@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, UsageContext, UsageReading } from '../../src/core/adapter';
-import { FRESH_MS, UsageStore } from '../../src/core/usage';
+import { FRESH_MS, READ_TIMEOUT_MS, UsageStore } from '../../src/core/usage';
 
 const ctx = {} as UsageContext;
 const reading: UsageReading = { windows: [{ label: '5-hour', usedPercent: 40 }] };
@@ -10,6 +10,20 @@ function adapterWith(read: () => Promise<UsageReading | undefined>): AgentAdapte
 }
 
 describe('UsageStore', () => {
+	it('stops loading when the agent never answers', async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new UsageStore(() => { });
+			const done = store.refresh(adapterWith(() => new Promise(() => { })), ctx);
+			expect(store.get('demo').status).toBe('loading');
+			await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+			await done;
+			expect(store.get('demo')).toMatchObject({ status: 'error', error: 'The agent did not answer in time.' });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('reports unsupported for an agent without a usage source', async () => {
 		const store = new UsageStore(() => { });
 		await store.refresh({ id: 'plain' } as unknown as AgentAdapter, ctx);
