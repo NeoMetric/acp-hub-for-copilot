@@ -12,17 +12,17 @@ const small: RegistryFile = {
 
 describe('vendors', () => {
 	it('names a vendor after the agent id', () => {
-		expect(vendorOf('one')).toBe('acphub-one');
+		expect(vendorOf('one')).toBe('One Agent');
 	});
 
 	it('generates one provider and one activation event per agent', () => {
 		const result = applyRegistry({ name: 'x', contributes: { commands: [] } }, small) as { contributes: { languageModelChatProviders: unknown[]; commands: unknown[] }; activationEvents: string[] };
 		expect(result.contributes.languageModelChatProviders).toEqual([
-			{ vendor: 'acphub-one', displayName: 'One Agent' },
-			{ vendor: 'acphub-two', displayName: 'Two Agent' },
+			{ vendor: 'One Agent', displayName: 'One Agent' },
+			{ vendor: 'Two Agent', displayName: 'Two Agent' },
 		]);
 		expect(result.contributes.commands).toEqual([]);
-		expect(result.activationEvents).toEqual(['onStartupFinished', 'onLanguageModelChatProvider:acphub-one', 'onLanguageModelChatProvider:acphub-two']);
+		expect(result.activationEvents).toEqual(['onStartupFinished', 'onLanguageModelChatProvider:One Agent', 'onLanguageModelChatProvider:Two Agent']);
 	});
 
 	it('generates a setting for every common and own setting, plus enabled', () => {
@@ -34,6 +34,17 @@ describe('vendors', () => {
 		expect(properties['acpHub.agents.one.mode']).toMatchObject({ type: 'string', enum: ['a', 'b'], default: 'a' });
 		expect(properties['acpHub.agents.two.args']).toMatchObject({ type: 'array', items: { type: 'string' } });
 		expect(properties['acpHub.agents.one.idle']).toMatchObject({ type: 'number', minimum: 0, default: 5 });
+	});
+
+	it('preserves non-agent settings while replacing generated agent settings', () => {
+		const result = applyRegistry({ contributes: { configuration: { properties: {
+			'acpHub.resume.transcriptDetail': { default: 'compact' },
+			'acpHub.agents.removed.enabled': { default: true },
+		} } } }, small) as { contributes: { configuration: { properties: Record<string, unknown> } } };
+		const properties = result.contributes.configuration.properties;
+		expect(properties['acpHub.resume.transcriptDetail']).toEqual({ default: 'compact' });
+		expect(properties['acpHub.agents.removed.enabled']).toBeUndefined();
+		expect(properties['acpHub.agents.one.enabled']).toBeDefined();
 	});
 
 	it('leaves the list of activation events free of duplicates', () => {

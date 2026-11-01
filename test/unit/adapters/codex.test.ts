@@ -31,7 +31,7 @@ const sessionInput: SessionParamsInput = { disableBuiltInTools: false, reportEac
 describe('codexAdapter', () => {
 	it('is described by the registry and installs the pinned npm package', () => {
 		expect(codexAdapter.id).toBe('codex');
-		expect(codexAdapter.vendor).toBe('acphub-codex');
+		expect(codexAdapter.vendor).toBe('Codex Agent');
 		expect(codexAdapter.displayName).toBe('Codex Agent');
 		expect(codexAdapter.install).toEqual({
 			kind: 'npm',

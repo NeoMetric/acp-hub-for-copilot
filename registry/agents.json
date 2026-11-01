@@ -22,7 +22,7 @@
 		},
 		{
 			"id": "google",
-			"displayName": "Antigravity Agent",
+			"displayName": "Google Agent",
 			"settings": [
 				{ "key": "command", "type": "string", "label": "Agent command", "description": "Program that starts the ACP server. Leave empty to use the Antigravity server (agy_acp_server) the extension downloads.", "default": "" },
 				{ "key": "args", "type": "string-list", "label": "Agent arguments", "description": "Arguments for the program. Leave empty for the default (none).", "default": [] },

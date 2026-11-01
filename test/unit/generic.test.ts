@@ -48,7 +48,7 @@ it('starts a registry-only agent and streams its reply', async () => {
 		const session = await client.createSession({ cwd: temp, mcpServers: [] });
 		let response = '';
 		await client.prompt(session.sessionId, [{ type: 'text', text: 'hi' }], { onText: text => { response += text; } });
-		expect(adapter.vendor).toBe('acphub-fixture');
+		expect(adapter.vendor).toBe('Fixture Agent');
 		expect(response).toBe('hello');
 	} finally {
 		await client.restart();

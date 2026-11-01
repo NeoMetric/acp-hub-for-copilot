@@ -22,7 +22,7 @@ const sessionInput: SessionParamsInput = { disableBuiltInTools: true, reportEach
 describe('claudeAdapter', () => {
 	it('is described by the registry and installs the pinned npm package', () => {
 		expect(claudeAdapter.id).toBe('claude');
-		expect(claudeAdapter.vendor).toBe('acphub-claude');
+		expect(claudeAdapter.vendor).toBe('Claude Agent');
 		expect(claudeAdapter.displayName).toBe('Claude Agent');
 		expect(claudeAdapter.install).toEqual({
 			kind: 'npm',

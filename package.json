@@ -18,9 +18,9 @@
 	],
 	"activationEvents": [
 		"onStartupFinished",
-		"onLanguageModelChatProvider:acphub-claude",
-		"onLanguageModelChatProvider:acphub-codex",
-		"onLanguageModelChatProvider:acphub-google"
+		"onLanguageModelChatProvider:Claude Agent",
+		"onLanguageModelChatProvider:Codex Agent",
+		"onLanguageModelChatProvider:Google Agent"
 	],
 	"main": "./dist/extension.js",
 	"contributes": {
@@ -62,16 +62,16 @@
 		},
 		"languageModelChatProviders": [
 			{
-				"vendor": "acphub-claude",
+				"vendor": "Claude Agent",
 				"displayName": "Claude Agent"
 			},
 			{
-				"vendor": "acphub-codex",
+				"vendor": "Codex Agent",
 				"displayName": "Codex Agent"
 			},
 			{
-				"vendor": "acphub-google",
-				"displayName": "Antigravity Agent"
+				"vendor": "Google Agent",
+				"displayName": "Google Agent"
 			}
 		],
 		"configuration": {
@@ -81,7 +81,10 @@
 					"description": "How an earlier conversation is restored when a chat has no saved agent session to continue (the session expired, the history changed, or the agent could not reopen it). Applies to every agent. `compact` names the tools that ran and omits their results; `full` includes each tool call's arguments and its result as text, which restores more but costs more tokens.",
 					"default": "compact",
 					"type": "string",
-					"enum": ["compact", "full"],
+					"enum": [
+						"compact",
+						"full"
+					],
 					"enumDescriptions": [
 						"Messages plus the names of the tools that ran. Tool results are left out.",
 						"Messages plus tool call arguments and tool results, each cut to the per-result limit."
@@ -181,7 +184,7 @@
 				"acpHub.agents.google.enabled": {
 					"type": "boolean",
 					"default": true,
-					"description": "Show Antigravity Agent in the Copilot model picker."
+					"description": "Show Google Agent in the Copilot model picker."
 				},
 				"acpHub.agents.google.idleTimeoutSeconds": {
 					"description": "How long a chat session stays warm after its last request before it is closed. 0 keeps it until the agent stops.",

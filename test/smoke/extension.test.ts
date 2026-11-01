@@ -14,6 +14,6 @@ suite('ACP Hub smoke test', () => {
 	});
 
 	test('a model lookup completes when no agent is installed', async () => {
-		await vscode.lm.selectChatModels({ vendor: 'acphub-claude' });
+		await vscode.lm.selectChatModels({ vendor: 'Claude Agent' });
 	});
 });

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { findAdapter } from '../../src/core/agents';
 
 const AGENT_LITERAL = /['"`](claude|codex|google)['"`]/;
-const VENDOR_COMPARE = /===\s*['"]acphub-/;
+const VENDOR_COMPARE = /===\s*['"](Claude|Codex|Google) Agent/;
 
 function tsFilesUnder(dir: string): string[] {
 	const files: string[] = [];

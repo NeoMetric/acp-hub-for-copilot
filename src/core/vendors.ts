@@ -15,8 +15,12 @@ export interface RegistryFile {
 	agents: RegistryAgent[];
 }
 
+/**
+ * The Agents window does not load this extension's manifest, so it labels a
+ * vendor by capitalising its id. A readable id keeps that label readable.
+ */
 export function vendorOf(agentId: string): string {
-	return `acphub-${agentId}`;
+	return `${agentId.charAt(0).toUpperCase()}${agentId.slice(1)} Agent`;
 }
 
 export function settingName(agentId: string, key: string): string {
@@ -78,7 +82,15 @@ export function applyRegistry(packageJson: JsonObject, registry: RegistryFile): 
 		vendor: vendorOf(agent.id),
 		displayName: agent.displayName,
 	}));
-	contributes.configuration = configurationOf(registry);
+	const existingConfiguration = contributes.configuration as { properties?: Record<string, JsonObject> } | undefined;
+	const existingProperties = Object.fromEntries(
+		Object.entries(existingConfiguration?.properties ?? {}).filter(([key]) => !key.startsWith('acpHub.agents.')),
+	);
+	const generatedConfiguration = configurationOf(registry);
+	contributes.configuration = {
+		...generatedConfiguration,
+		properties: { ...existingProperties, ...(generatedConfiguration.properties as Record<string, JsonObject>) },
+	};
 
 	return {
 		...packageJson,
