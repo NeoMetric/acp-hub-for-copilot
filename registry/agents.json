@@ -22,11 +22,11 @@
 		},
 		{
 			"id": "google",
-			"displayName": "Google Agent",
+			"displayName": "Antigravity Agent",
 			"settings": [
 				{ "key": "command", "type": "string", "label": "Agent command", "description": "Program that starts the ACP server. Leave empty to use the Antigravity server (agy_acp_server) the extension downloads.", "default": "" },
 				{ "key": "args", "type": "string-list", "label": "Agent arguments", "description": "Arguments for the program. Leave empty for the default (none).", "default": [] },
-				{ "key": "useAgentBuiltInTools", "type": "boolean", "label": "Use the agent's built-in tools", "description": "Let the Google agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them so Copilot chat tools can do the work. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.", "default": false },
+				{ "key": "useAgentBuiltInTools", "type": "boolean", "label": "Use the agent's built-in tools", "description": "Let the Antigravity agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them so Copilot chat tools can do the work. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.", "default": false },
 				{ "key": "authPreference", "type": "enum", "label": "Auth preference", "description": "Which credentials the agent uses when both a Gemini API key and a signed-in account are available. Changing it restarts the agent.", "default": "auto", "options": ["auto", "apiKey", "oauth"], "optionDescriptions": ["Use the saved API key when there is one, otherwise the signed-in account.", "Use the saved API key. Without one, the agent falls back to its signed-in account.", "Always use the signed-in account and ignore the saved API key and the key environment variables."] }
 			]
 		}

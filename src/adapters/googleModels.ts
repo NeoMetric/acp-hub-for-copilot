@@ -56,7 +56,7 @@ function contextWindowOf(modelValue: string, modelName: string): number {
 }
 
 export const googleModelPolicy: ModelPolicy = {
-	detail: 'Google ACP',
+	detail: 'Antigravity ACP',
 	familyOf,
 	contextWindowOf,
 	maxOutputTokens: MAX_OUTPUT_TOKENS,
@@ -64,6 +64,6 @@ export const googleModelPolicy: ModelPolicy = {
 	effortLabel,
 	effortDescription,
 	defaultEffort: levels => levels.includes('default') ? 'default' : levels[0],
-	fallbackTooltip: name => `Model "${name}" served by the local Google agent.`,
+	fallbackTooltip: name => `Model "${name}" served by the local Antigravity agent.`,
 	thinkingDescription: "How much reasoning the model spends before it answers.",
 };

@@ -1,7 +1,7 @@
 {
 	"name": "acp-hub-for-copilot",
 	"displayName": "ACP Hub for Copilot",
-	"description": "Use Claude, Codex and Google ACP agents in GitHub Copilot Chat, with one sidebar to install, sign in, configure and monitor them.",
+	"description": "Use Claude, Codex and Antigravity ACP agents in GitHub Copilot Chat, with one sidebar to install, sign in, configure and monitor them.",
 	"version": "0.0.1",
 	"publisher": "NeoMetric",
 	"license": "MIT",
@@ -71,7 +71,7 @@
 			},
 			{
 				"vendor": "acphub-google",
-				"displayName": "Google Agent"
+				"displayName": "Antigravity Agent"
 			}
 		],
 		"configuration": {
@@ -181,7 +181,7 @@
 				"acpHub.agents.google.enabled": {
 					"type": "boolean",
 					"default": true,
-					"description": "Show Google Agent in the Copilot model picker."
+					"description": "Show Antigravity Agent in the Copilot model picker."
 				},
 				"acpHub.agents.google.idleTimeoutSeconds": {
 					"description": "How long a chat session stays warm after its last request before it is closed. 0 keeps it until the agent stops.",
@@ -214,7 +214,7 @@
 					}
 				},
 				"acpHub.agents.google.useAgentBuiltInTools": {
-					"description": "Let the Google agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them so Copilot chat tools can do the work. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.",
+					"description": "Let the Antigravity agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them so Copilot chat tools can do the work. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.",
 					"default": false,
 					"type": "boolean"
 				},

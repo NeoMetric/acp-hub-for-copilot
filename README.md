@@ -1,21 +1,42 @@
-# ACP Hub for Copilot
+# Agent Hub for Copilot
 
-ACP Hub brings Claude, Codex, and Google ACP agents into GitHub Copilot Chat. Use **Add agent** in the ACP Hub sidebar to show a supported agent, install it, sign in, configure it, and view usage. Already installed agents appear automatically the first time you open the sidebar. Removing an agent from the sidebar does not uninstall it.
+**Your AI plans. Your agents. GitHub Copilot Chat.**
 
-The sidebar automatically refreshes plan limits for installed, enabled agents when the extension starts. Google groups its quota windows by model family. Limit percentages from Codex and Google are rounded to whole numbers by their agents.
+Bring Claude Code, Codex, and Antigravity into VS Code's Copilot Chat. Sign in with your existing provider account, pick an available model, and get to work in the Copilot interface you already know.
 
-The sidebar shows the last completed chat turn's cache hit rate and a cumulative, token-weighted cache hit rate for each agent since the window opened. The cumulative rate includes background requests such as chat titles.
+<!-- Screenshot placeholder: Copilot Chat with the ACP Hub model picker open and an agent in action. -->
 
-Each agent has its own vendor ID and settings under `acpHub.agents`, so the extension can be installed alongside the separate Claude, Codex, and Google ACP extensions. The sidebar can remove saved API keys; browser account sign-out must be managed through the agent's own account tools.
+## Why Agent Hub?
 
-## Development
+- **Use your existing plans.** Connect your Claude, ChatGPT, and Antigravity accounts and use available models through their respective agents. API key authentication is also available.
+- **Stay in Copilot Chat.** Work with your chosen agent through VS Code's familiar chat interface and Copilot tools.
+- **One place to manage agents.** Install, sign in, configure settings, and switch between agents from the ACP Hub sidebar.
+- **See your usage.** Keep an eye on available plan limits and cache hit rates without leaving VS Code.
 
-Requires Node.js and VS Code 1.105 or later. Run `npm ci`, then `npm run compile` and press F5 to launch an Extension Development Host. Run `npm test` for unit tests and `npm run package` to create a VSIX.
+Agent Hub connects agents using the **Agent Client Protocol (ACP)**, the open protocol also used by editors such as Zed and JetBrains IDEs. It runs the providers' agents through ACP adapters and makes their models available in Copilot Chat.
 
-## Adding an agent
+<!-- Screenshot placeholder: ACP Hub sidebar showing agent cards and usage. -->
 
-The local [registry](registry/agents.json) supplies vendor declarations and settings. Run `npm run generate` after changing it, and `npm run generate:check` to check the generated manifest. An agent with an existing CLI can supply an install specification, launch arguments, environment, and authentication methods in the registry. For an API key method, set `agentMethodId` when the agent advertises an ACP authentication method other than `api-key`. An npm agent also needs a pinned package manifest and lockfile under `adapters/<id>`.
+## Get started
 
-Agents needing custom behavior use an implementation of `AgentAdapter` in `src/adapters`; register it in `src/core/agents.ts` and add its metadata to the registry. Keep agent-specific behavior in the adapter.
+You'll need **VS Code 1.105 or later**, **GitHub Copilot Chat**, and access to at least one supported provider.
 
-The [design](docs/superpowers/specs/2026-10-30-acp-hub-design.md) and [parity checklist](docs/parity-checklist.md) describe the intended behavior and manual verification.
+1. Open **Agent Hub** in the activity bar.
+2. Select **Add agent**, then choose Claude, Codex, or Antigravity. Existing installations appear automatically.
+3. Install the agent if needed, then sign in or add an API key from its card.
+4. Open **Copilot Chat**, choose the agent's model from the model picker, and start chatting.
+
+
+Available models, usage limits, and authentication options depend on your provider and plan. Removing an agent from the sidebar does not uninstall it. Saved API keys can be removed from the sidebar; browser account sign-out is managed by the agent's own account tools.
+
+## Settings and usage
+
+Configure each agent from its card or search for `AgentHub` in VS Code Settings. The sidebar displays available plan limits and both last-turn and cumulative cache hit rates. Usage reporting varies by agent.
+
+Want to use the agents with Copilot CLI? See the [gateway guide](docs/copilot-cli-gateway.md).
+
+## Contributing
+
+Run `npm ci`, then `npm run compile` and press **F5** to launch an Extension Development Host. Use `npm test` for unit tests and `npm run package` to create a VSIX.
+
+Agent metadata lives in the [registry](registry/agents.json). After changing it, run `npm run generate` and `npm run generate:check`. Agents with custom behavior implement `AgentAdapter` in `src/adapters` and are registered in `src/core/agents.ts`. For details, see the [design](docs/superpowers/specs/2026-10-30-acp-hub-design.md) and [parity checklist](docs/parity-checklist.md).

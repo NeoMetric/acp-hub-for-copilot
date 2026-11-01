@@ -1,7 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-  <circle cx="12" cy="12" r="3"/>
-  <circle cx="4.5" cy="5" r="1.8"/>
-  <circle cx="19.5" cy="5" r="1.8"/>
-  <circle cx="12" cy="20" r="1.8"/>
-  <path d="M6 6.2l4 4M18 6.2l-4 4M12 15v3.2"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <g transform="translate(12 12) scale(1.35) translate(-12 -10.1)">
+    <g fill="none" stroke="currentColor">
+      <circle cx="12" cy="12" r="3.1" stroke-width="1.4"/>
+      <path d="M12 8.2V6.5M8.7 13.9l-1.5.9M15.3 13.9l1.5.9" stroke-width="1"/>
+    </g>
+    <g fill="currentColor">
+      <circle cx="12" cy="4.5" r="1.15"/>
+      <circle cx="5.7" cy="15.7" r="1.15"/>
+      <circle cx="18.3" cy="15.7" r="1.15"/>
+    </g>
+  </g>
 </svg>

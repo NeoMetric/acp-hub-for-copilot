@@ -4,7 +4,7 @@ Status: **parked**. Evaluated on 2026-10-30; nothing here is built. This records
 
 ## Goal
 
-Run `copilot` (GitHub Copilot CLI) in a terminal and use the models this extension exposes (Claude, Codex, Google agents) instead of, or next to, GitHub-hosted models.
+Run `copilot` (GitHub Copilot CLI) in a terminal and use the models this extension exposes (Claude, Codex, Antigravity agents) instead of, or next to, GitHub-hosted models.
 
 ## Why it doesn't work today
 
@@ -62,7 +62,7 @@ This already works in the extension and carries over:
 4. The client runs the tool (keeping its own permission prompts) and sends a new request with the result.
 5. The gateway matches the result by call id, completes the waiting MCP call, and streams the agent's continuation.
 
-Built-in tools are already disabled for Claude (`tools: []`) and Google (`useAgentBuiltInTools` setting). The bridge is already a plain `http` server.
+Built-in tools are already disabled for Claude (`tools: []`) and Antigravity (`useAgentBuiltInTools` setting). The bridge is already a plain `http` server.
 
 Harder in a gateway than in the extension:
 

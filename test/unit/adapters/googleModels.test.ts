@@ -47,10 +47,10 @@ describe('google model variants', () => {
 	it('publishes the detail, family and tooltip', () => {
 		const [first, , second] = toModelVariants(googleModelPolicy, choices, []);
 
-		expect(first.detail).toBe('Google ACP');
+		expect(first.detail).toBe('Antigravity ACP');
 		expect(first.family).toBe('gemini');
 		expect(second.family).toBe('claude');
-		expect(first.tooltip).toBe('Model "Default" served by the local Google agent.');
+		expect(first.tooltip).toBe('Model "Default" served by the local Antigravity agent.');
 	});
 
 	it('offers the thinking effort only when the agent reports levels', () => {

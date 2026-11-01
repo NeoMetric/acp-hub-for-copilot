@@ -38,7 +38,7 @@ describe('googleAdapter', () => {
 	it('is described by the registry and downloads the server', () => {
 		expect(googleAdapter.id).toBe('google');
 		expect(googleAdapter.vendor).toBe('acphub-google');
-		expect(googleAdapter.displayName).toBe('Google Agent');
+		expect(googleAdapter.displayName).toBe('Antigravity Agent');
 		expect(googleAdapter.install.kind).toBe('download');
 		expect(googleAdapter.rebuildExpiredSessions).toBe(true);
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('useAgentBuiltInTools');
