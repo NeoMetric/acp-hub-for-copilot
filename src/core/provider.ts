@@ -23,6 +23,7 @@ import { chatContextOf, chatIdOf, chatLabelOf, guidanceDiffers, guidanceHashOf, 
 import { ModelList } from './provider/modelList';
 import { findReusable, promptHashOf } from './provider/reuse';
 import { applyEffort, applyModel, describe, switchModelInPlace } from './provider/sessionOptions';
+import { startLaps, type Lap } from './provider/timing';
 import { TurnRunner } from './provider/turns';
 import type { AgentApi, ChatContext, ChatSession, FinishedTurn, ProviderDeps, Reuse } from './provider/types';
 import { CHARS_PER_TOKEN } from './provider/usageReport';
@@ -198,11 +199,13 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
 		token: vscode.CancellationToken,
 	): Promise<void> {
+		const key = sessionKey(messages, options);
+		const lap = startLaps(this.log, key);
 		await this.agentClient();
+		lap('agent client ready');
 
 		this.lastAgentUse = Date.now();
 		const tools = options.tools ?? [];
-		const key = sessionKey(messages, options);
 		const context = chatContextOf(messages, this.launch?.workspaceFolder ?? '');
 		this.recordRequest(key, messages, options);
 		const effort = effortOf(options);
@@ -211,6 +214,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		this.log(`Request from Copilot: model ${model.id}, ${messages.length} message(s), ${tools.length} tool(s): ${toolNames.join(', ') || 'none'}`);
 		// A session released a moment ago must be gone from the agent before it is resumed.
 		await this.closing.get(key);
+		lap(`previous session settled, ${this.sessions.has(key) ? 'chat has a live session' : 'new chat'}`);
 		let session = this.sessions.get(key);
 		if (session) {
 			// Re-insert so the map stays ordered by recency of use.
@@ -270,10 +274,12 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		}
 		if (!session) {
 			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, this.adapter.forkChats === true, this.log) : undefined;
-			session = await this.createChatSession(key, model, tools, context, reuse, effort);
+			session = await this.createChatSession(key, model, tools, context, reuse, effort, lap);
+			lap('chat session created');
 		}
 		this.applyTools(session, tools);
 		await applyEffort(this.agent, this.adapter.modelPolicy, session, effort, this.log);
+		lap('effort applied');
 
 		// A session that has seen nothing yet only gets the current turn, plus a
 		// transcript of what came before: the chat may predate this session (window
@@ -303,6 +309,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		this.markSeen(session, fingerprints);
 		session.chat ??= { id: chatIdOf(messages, options), label: chatLabelOf(messages), workspace: session.context.cwd };
 		session.turn = this.turns.start(session, progress, token, blocks);
+		lap('prompt sent to the agent');
 		await this.turns.drive(key, session, progress, token, fingerprints, lastUser);
 	}
 
@@ -374,13 +381,6 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			}
 			throw error;
 		}
-		const warm = await this.ensureWarmSession();
-		let reply = '';
-		await this.agent.prompt(warm.sessionId, [{ type: 'text', text: prompt }], {
-			onText: text => {
-				reply += text;
-			},
-		});
 		await this.ensureWarmSession();
 		return true;
 	}
@@ -394,6 +394,13 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		if (!await this.prepareAgent()) {
 			return undefined;
 		}
+		const warm = await this.ensureWarmSession();
+		let reply = '';
+		await this.agent.prompt(warm.sessionId, [{ type: 'text', text: prompt }], {
+			onText: text => {
+				reply += text;
+			},
+		});
 		this.warm.touch();
 		return reply;
 	}
@@ -485,9 +492,10 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		void this.client.stopWhenIdle();
 	}
 
-	private async createChatSession(key: string, model: vscode.LanguageModelChatInformation, tools: readonly vscode.LanguageModelChatTool[], context: ChatContext, reuse?: Reuse, effort?: string): Promise<ChatSession> {
+	private async createChatSession(key: string, model: vscode.LanguageModelChatInformation, tools: readonly vscode.LanguageModelChatTool[], context: ChatContext, reuse?: Reuse, effort?: string, lap?: Lap): Promise<ChatSession> {
 		const agent = this.agent;
 		const endpoint = await this.deps.bridge.registerSession(tools, (name, input, toolToken) => this.executeTool(key, name, input, toolToken));
+		lap?.(`tool bridge registered (${tools.length} tool(s))`);
 		try {
 			// A request that offers no tools is Copilot's own, such as a chat title: the
 			// agent could not read a customization file without a tool, so the prompt
@@ -495,6 +503,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			const systemPromptAppend = tools.length === 0
 				? undefined
 				: await this.buildSessionPrompt(tools, context.folders, context.guidance);
+			lap?.(`session prompt built (${systemPromptAppend?.length ?? 0} character(s))`);
 			const options: CreateSessionOptions = {
 				cwd: context.cwd,
 				mcpServers: [bridgeServer(endpoint)],
@@ -526,6 +535,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 				}
 			}
 			acp ??= await agent.createSession(options);
+			lap?.('agent session opened');
 
 			const history = reused && reuse ? [...reuse.history] : [];
 			const toolNames = tools.map(tool => tool.name);
@@ -548,6 +558,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			// session, so the picker's choice is applied here, together with the effort:
 			// the effort option only exists once a model has been resolved.
 			await applyModel(agent, this.adapter.modelPolicy, session, effort, this.log, reused ? '[reuse] ' : '');
+			lap?.('model applied');
 			this.log(`Created chat session for ${key} using ${model.id}`);
 			this.log(`Created chat session for ${key} in ${context.cwd}${context.folders ? '' : ' (the window\'s folder; the request named none)'}`, 'debug');
 			this.evictIdleSessions(key);

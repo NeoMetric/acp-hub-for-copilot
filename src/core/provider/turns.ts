@@ -64,20 +64,34 @@ export class TurnRunner {
 		// assigned right below, before any callback can run.
 		// eslint-disable-next-line prefer-const
 		let turn: ActiveTurn;
+		let sawOutput = false;
+		const firstOutput = (what: string): void => {
+			if (!sawOutput) {
+				sawOutput = true;
+				this.log(`[timing] First ${what} from the agent ${Date.now() - turn.startedAt}ms after the prompt was sent.`, 'debug');
+			}
+		};
 
 		const prompt = this.agent.prompt(session.acp.sessionId, blocks, {
 			onText: text => {
+				firstOutput('text');
 				turn.characters += text.length;
 				if (turn.streaming) {
 					turn.progress.report(new vscode.LanguageModelTextPart(text));
 				}
 			},
 			onThought: text => {
+				firstOutput('thinking');
 				if (turn.streaming) {
 					reportThinking(turn.progress, text);
 				}
 			},
-			onUpdate: (update: AcpSessionUpdate) => this.handleUpdate(session, turn, update),
+			onUpdate: (update: AcpSessionUpdate) => {
+				if (update.sessionUpdate === 'tool_call') {
+					firstOutput('tool call');
+				}
+				this.handleUpdate(session, turn, update);
+			},
 			onUsage: this.reportsEachModelCall ? usage => this.measureRequest(session, turn, usage) : undefined,
 			token,
 		}).then(
