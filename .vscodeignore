@@ -21,4 +21,6 @@ adapter/node_modules/**
 .gitattributes
 .agents/**
 .gemini/**
-icon.svg
+media/icon.jpg
+docs/**
+scripts/**
