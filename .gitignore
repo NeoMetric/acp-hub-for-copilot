@@ -10,3 +10,4 @@ Thumbs.db
 Desktop.ini
 .env
 .env.local
+storage-paths.json

@@ -24,3 +24,4 @@ adapter/node_modules/**
 media/icon.jpg
 docs/**
 scripts/**
+storage-paths.json
