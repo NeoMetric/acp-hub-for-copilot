@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type * as vscode from 'vscode';
-import { chatContextBlock, customInstructionsBlock, readTranscriptOptions, toAcpContentBlocks, toTranscriptBlock, type AcpContentBlock } from '../convert';
+import { chatContextBlock, customInstructionsBlock, firstUserWordsIn, readTranscriptOptions, toAcpContentBlocks, toTranscriptBlock, type AcpContentBlock } from '../convert';
 import type { Log } from '../logging';
 import { shortHash } from '../sessionStore';
 import type { ChatSession, GuidanceChange } from './types';
@@ -62,6 +62,19 @@ export function buildPromptBlocks(messages: readonly vscode.LanguageModelChatReq
 			log(`Restoring ${lastUser} earlier message(s) into the new ACP session.`);
 			preamble.push(transcript);
 		}
+	}
+	// Another agent answered part of the chat since this session last ran: its replies and
+	// tool calls are not in this session, and a prompt carries only user messages, so that
+	// stretch goes in as a transcript. The session's own last reply comes before the first
+	// message the user said in it, so it is left out.
+	const missed = restoreContext ? -1 : firstUserWordsIn(messages, startIndex, lastUser);
+	if (missed >= 0) {
+		const transcript = toTranscriptBlock(messages.slice(missed, lastUser), readTranscriptOptions(), true);
+		if (transcript) {
+			log(`Catching the session up on ${lastUser - missed} message(s) answered by another agent.`);
+			preamble.push(transcript);
+		}
+		return [...preamble, ...toAcpContentBlocks(messages.slice(lastUser))];
 	}
 	return [...preamble, ...toAcpContentBlocks(messages.slice(startIndex))];
 }

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TRANSCRIPT_OPTIONS, carriesToolResults, characterCountOf, chatContextBlock, customInstructionsBlock, diverged, fingerprint, firstMessageAfterReply, imageFingerprint, lastUserMessageIndex, textOf, toAcpContentBlocks, toTranscriptBlock, userWordsAfterReply } from '../../src/core/convert';
+import { DEFAULT_TRANSCRIPT_OPTIONS, carriesToolResults, characterCountOf, chatContextBlock, customInstructionsBlock, diverged, fingerprint, firstMessageAfterReply, firstUserWordsIn, imageFingerprint, lastUserMessageIndex, textOf, toAcpContentBlocks, toTranscriptBlock, userWordsAfterReply } from '../../src/core/convert';
 import { assistant, image, system, toolCall, toolResult, user } from './messages';
 import { LanguageModelTextPart, LanguageModelToolCallPart, LanguageModelToolResultPart } from './vscode-mock';
 
@@ -259,6 +259,25 @@ describe('lastUserMessageIndex', () => {
 	});
 });
 
+describe('firstUserWordsIn', () => {
+	const chat = [user('1'), assistant('a'), user('2'), assistant('b', toolCall('c', 't')), user(toolResult('c')), user('3')];
+
+	it('finds the first message where the user said something', () => {
+		expect(firstUserWordsIn(chat, 1, 5)).toBe(2);
+		expect(firstUserWordsIn(chat, 3, 6)).toBe(5);
+	});
+
+	it('skips replies and messages that only carry tool results', () => {
+		expect(firstUserWordsIn(chat, 3, 5)).toBe(-1);
+		expect(firstUserWordsIn(chat, 1, 2)).toBe(-1);
+	});
+
+	it('accepts an image-only message and an empty range', () => {
+		expect(firstUserWordsIn([assistant('a'), user(image([1]))], 0, 2)).toBe(1);
+		expect(firstUserWordsIn(chat, 4, 4)).toBe(-1);
+	});
+});
+
 describe('messages since the last reply', () => {
 	const call = assistant(toolCall('1', 't'));
 
@@ -314,6 +333,15 @@ describe('toTranscriptBlock', () => {
 		expect(text).toContain('[called tools: read_file]');
 		expect(text).toContain('[tool results omitted]');
 		expect(text).toContain('Assistant: the answer');
+	});
+
+	it('words the framing for a session that missed part of the chat', () => {
+		const text = toTranscriptBlock([user('asked elsewhere'), assistant('answered elsewhere')], DEFAULT_TRANSCRIPT_OPTIONS, true)!.text;
+
+		expect(text).toContain('<conversation_since_your_last_turn>');
+		expect(text).toContain('went on without you');
+		expect(text).not.toContain('<conversation_so_far>');
+		expect(text).toContain('User: asked elsewhere\n\nAssistant: answered elsewhere');
 	});
 
 	it('drops the leading system prompt and Copilot context wrappers', () => {

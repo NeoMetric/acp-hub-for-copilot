@@ -266,6 +266,22 @@ export function lastUserMessageIndex(messages: readonly vscode.LanguageModelChat
 	return Math.max(lastUser, 0);
 }
 
+/**
+ * The first message in `[from, to)` where the user said something, or -1. Past a
+ * session's last reply the only such message is normally the newest one, so one
+ * further back means another agent answered the chat in between.
+ */
+export function firstUserWordsIn(messages: readonly vscode.LanguageModelChatRequestMessage[], from: number, to: number): number {
+	for (let index = Math.max(from, 0); index < Math.min(to, messages.length); index++) {
+		const message = messages[index];
+		if (message.role === vscode.LanguageModelChatMessageRole.User && (textOf(message).trim().length > 0 || imageBlocksOf(message).length > 0)) {
+			return index;
+		}
+	}
+
+	return -1;
+}
+
 /** Where the messages the agent has not answered start: right after its last reply. */
 export function firstMessageAfterReply(messages: readonly vscode.LanguageModelChatRequestMessage[]): number {
 	let first = messages.length;
@@ -360,8 +376,10 @@ function toolResultText(part: vscode.LanguageModelToolResultPart): string {
  * Renders earlier messages as one text block, for an ACP session that did not
  * live through them: after a window reload, an agent restart, or an edit that
  * rewrote the history. The newest messages win when the budget runs out.
+ * `missed` words the framing for a live session that did not answer part of
+ * the chat, because the user had another agent answer it.
  */
-export function toTranscriptBlock(messages: readonly vscode.LanguageModelChatRequestMessage[], options: TranscriptOptions = DEFAULT_TRANSCRIPT_OPTIONS): AcpTextBlock | undefined {
+export function toTranscriptBlock(messages: readonly vscode.LanguageModelChatRequestMessage[], options: TranscriptOptions = DEFAULT_TRANSCRIPT_OPTIONS, missed = false): AcpTextBlock | undefined {
 	const { maxCharacters } = options;
 	const full = options.detail === 'full';
 	const entries: string[] = [];
@@ -430,10 +448,12 @@ export function toTranscriptBlock(messages: readonly vscode.LanguageModelChatReq
 	return {
 		type: 'text',
 		text: [
-			"This conversation started before your current session did. What was said so far (oldest first; you have no other memory of it):",
-			"<conversation_so_far>",
+			missed
+				? "Since your last turn this conversation went on without you: another assistant answered the messages below. What was said (oldest first; you have no other memory of it):"
+				: "This conversation started before your current session did. What was said so far (oldest first; you have no other memory of it):",
+			missed ? "<conversation_since_your_last_turn>" : "<conversation_so_far>",
 			kept.join('\n\n'),
-			"</conversation_so_far>",
+			missed ? "</conversation_since_your_last_turn>" : "</conversation_so_far>",
 			"The user's current message follows. Respond only to it, using the conversation above as context.",
 		].join('\n'),
 	};
