@@ -9,7 +9,7 @@ Run for each of Claude, Codex, and Google, comparing against the old extension o
 - [ ] Tool use: Copilot tool call round trip (read file, edit file, terminal) works as in the old extension.
 - [ ] Long chat: session reuse and fork on edited history behave as before; Google: expired session rebuilds from transcript.
 - [ ] Idle: process exits after the idle timeout; next message restarts it.
-- [ ] Usage: Claude 5h + weekly + cache ratio; Codex rate limits; Google shows "not supported".
+- [ ] Usage: Claude 5h + weekly + cache ratio; Codex rate limits; Google quota windows grouped by model family.
 - [ ] Settings changes in the sidebar take effect (authPreference, timeouts, Codex maxContextWindow, Google command/args).
 - [ ] Failure modes: wrong API key, offline install, kill the agent process mid-reply: readable error, next message works.
 - [ ] Windows path with spaces/non-ASCII as workspace folder.

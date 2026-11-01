@@ -6,6 +6,7 @@ import { REGISTRY, registryAgent } from '../core/registry';
 import { vendorOf } from '../core/vendors';
 import { googleModelPolicy } from './googleModels';
 import { mapQuotaError } from './googleQuota';
+import { googleUsage } from './googleUsage';
 import { SERVER_VERSION, ServerInstaller, serverArchiveFor } from './googleServer';
 import { booleanSetting, stringListSetting, stringSetting } from './settingValues';
 
@@ -190,6 +191,7 @@ export const googleAdapter: AgentAdapter = {
 	],
 	settings: [...REGISTRY.commonSettings, ...registry.settings],
 	modelPolicy: googleModelPolicy,
+	usage: googleUsage,
 	systemPrompt: {
 		toolAccess: 'The tools of the MCP server named `vscode` are VS Code\'s own and act on the user\'s workspace; reach them only through `call_mcp_tool`.',
 		listRequiredArguments: true,

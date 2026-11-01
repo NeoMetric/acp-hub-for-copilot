@@ -1,18 +1,14 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { codexAdapter, mergeCodexConfig, usageFromRateLimits } from '../../../src/adapters/codex';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { codexAdapter, mergeCodexConfig } from '../../../src/adapters/codex';
 import type { AgentSettings, LaunchContext, SessionParamsInput } from '../../../src/core/adapter';
-
-const { readRateLimits } = vi.hoisted(() => ({ readRateLimits: vi.fn() }));
-vi.mock('../../../src/adapters/codexRateLimits', () => ({ readRateLimits }));
 
 let storage: string;
 
 beforeEach(() => {
 	storage = fs.mkdtempSync(path.join(os.tmpdir(), 'acphub-codex é -'));
-	readRateLimits.mockReset();
 });
 
 afterEach(() => {
@@ -154,58 +150,5 @@ describe('codex hooks', () => {
 		expect(codexAdapter.sessionParams?.({ ...sessionInput, systemPromptAppend: 'guidance' })).toEqual(prompt);
 		expect(codexAdapter.sessionParams?.({ ...sessionInput, systemPromptAppend: 'guidance', isNewSession: false })).toEqual({});
 		expect(codexAdapter.sessionParams?.(sessionInput)).toEqual({});
-	});
-});
-
-describe('codex usage', () => {
-	const RESET = 1_760_000_000;
-	const resetText = new Date(RESET * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
-
-	it('maps both windows, rounded to a tenth, with the reset time', () => {
-		const reading = usageFromRateLimits({
-			kind: 'limits',
-			windows: {
-				fiveHour: { usedPercent: 42.449, windowDurationMins: 300, resetsAt: RESET },
-				weekly: { usedPercent: 7, windowDurationMins: 10_080, resetsAt: null },
-			},
-		});
-
-		expect(reading.windows).toEqual([
-			{ label: '5-hour', usedPercent: 42.4, resets: resetText },
-			{ label: 'Weekly', usedPercent: 7, resets: undefined },
-		]);
-	});
-
-	it('keeps a single window when the account has only one', () => {
-		const reading = usageFromRateLimits({ kind: 'limits', windows: { weekly: { usedPercent: 1.26, windowDurationMins: null, resetsAt: RESET } } });
-
-		expect(reading.windows).toEqual([{ label: 'Weekly', usedPercent: 1.3, resets: resetText }]);
-	});
-
-	it('reports an account without plan limits as a note', () => {
-		const reading = usageFromRateLimits({ kind: 'no-plan' });
-
-		expect(reading.windows).toEqual([]);
-		expect(reading.note).toContain('no ChatGPT plan limits');
-	});
-
-	it('throws when the read failed', () => {
-		expect(() => usageFromRateLimits({ kind: 'failed', reason: 'the app server stopped' })).toThrow('the app server stopped');
-	});
-
-	it('reads the limits of the account the agent runs in', async () => {
-		readRateLimits.mockResolvedValue({ kind: 'limits', windows: { fiveHour: { usedPercent: 10, windowDurationMins: 300, resetsAt: null } } });
-		const ctx = launchContext();
-
-		const reading = await codexAdapter.usage?.read({ launch: ctx, askAgent: () => Promise.resolve(undefined) }, new AbortController().signal);
-
-		expect(reading?.windows).toEqual([{ label: '5-hour', usedPercent: 10, resets: undefined }]);
-		expect(readRateLimits).toHaveBeenCalledWith(ctx.entryPath, expect.objectContaining({ adapterVersion: '2.3.0', codexHome: path.join(storage, 'codex-home') }));
-	});
-
-	it('lets a failed read reach the caller as an error', async () => {
-		readRateLimits.mockResolvedValue({ kind: 'failed', reason: 'boom' });
-
-		await expect(codexAdapter.usage?.read({ launch: launchContext(), askAgent: () => Promise.resolve(undefined) }, new AbortController().signal)).rejects.toThrow('boom');
 	});
 });

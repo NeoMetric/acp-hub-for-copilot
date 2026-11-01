@@ -1,11 +1,10 @@
 import type { AcpAuthMethod } from '../core/agentClient';
-import type { AgentAdapter, AgentSettings, AuthenticateRequest, LaunchContext, LaunchSpec, SessionParamsInput, UsageContext, UsageReading, UsageSource, UsageWindow } from '../core/adapter';
-import { hideConsoleNodeOptions } from '../core/hideConsole';
+import type { AgentAdapter, AgentSettings, AuthenticateRequest, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
 import { REGISTRY, registryAgent } from '../core/registry';
 import { vendorOf } from '../core/vendors';
 import { ensureCodexHome } from './codexHome';
 import { codexModelPolicy } from './codexModels';
-import { readRateLimits, type RateLimitRead, type RateWindow } from './codexRateLimits';
+import { codexUsage } from './codexUsage';
 import { booleanSetting, stringSetting } from './settingValues';
 
 const ID = 'codex';
@@ -175,46 +174,6 @@ function sessionParams(input: SessionParamsInput): Record<string, unknown> {
 	}
 	return { systemPrompt: { mode: 'append', content: [{ type: 'text', text: input.systemPromptAppend }] } };
 }
-
-const roundToTenth = (value: number): number => Math.round(value * 10) / 10;
-
-function resetText(resetsAt: number | null): string | undefined {
-	if (resetsAt === null) {
-		return undefined;
-	}
-	// The app server counts seconds.
-	return new Date(resetsAt * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
-}
-
-function windowOf(label: string, window: RateWindow | undefined): UsageWindow[] {
-	if (!window) {
-		return [];
-	}
-	return [{ label, usedPercent: roundToTenth(window.usedPercent), resets: resetText(window.resetsAt) }];
-}
-
-/** Maps what one read of the plan limits found to what the sidebar shows; a failed read throws. */
-export function usageFromRateLimits(read: RateLimitRead): UsageReading {
-	if (read.kind === 'failed') {
-		throw new Error(`Could not read the Codex plan limits: ${read.reason}`);
-	}
-	if (read.kind === 'no-plan') {
-		return { windows: [], note: 'This Codex account has no ChatGPT plan limits (an API key is billed per token).' };
-	}
-	return { windows: [...windowOf('5-hour', read.windows.fiveHour), ...windowOf('Weekly', read.windows.weekly)] };
-}
-
-const codexUsage: UsageSource = {
-	async read(ctx: UsageContext): Promise<UsageReading | undefined> {
-		const storageDir = ctx.launch.storageDir;
-		const read = await readRateLimits(ctx.launch.entryPath, {
-			adapterVersion: ADAPTER_VERSION,
-			codexHome: ensureCodexHome(storageDir),
-			nodeOptions: hideConsoleNodeOptions(storageDir, process.env.NODE_OPTIONS),
-		});
-		return usageFromRateLimits(read);
-	},
-};
 
 const registry = registryAgent(ID);
 

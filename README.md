@@ -2,6 +2,8 @@
 
 ACP Hub brings Claude, Codex, and Google ACP agents into GitHub Copilot Chat. Use **Add agent** in the ACP Hub sidebar to show a supported agent, install it, sign in, configure it, and view usage. Already installed agents appear automatically the first time you open the sidebar. Removing an agent from the sidebar does not uninstall it.
 
+The sidebar automatically refreshes plan limits for installed, enabled agents when the extension starts. Google groups its quota windows by model family. Limit percentages from Codex and Google are rounded to whole numbers by their agents.
+
 The sidebar shows the last completed chat turn's cache hit rate and a cumulative, token-weighted cache hit rate for each agent since the window opened. The cumulative rate includes background requests such as chat titles.
 
 Each agent has its own vendor ID and settings under `acpHub.agents`, so the extension can be installed alongside the separate Claude, Codex, and Google ACP extensions. The sidebar can remove saved API keys; browser account sign-out must be managed through the agent's own account tools.

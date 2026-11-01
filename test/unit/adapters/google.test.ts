@@ -40,7 +40,6 @@ describe('googleAdapter', () => {
 		expect(googleAdapter.vendor).toBe('acphub-google');
 		expect(googleAdapter.displayName).toBe('Google Agent');
 		expect(googleAdapter.install.kind).toBe('download');
-		expect(googleAdapter.usage).toBeUndefined();
 		expect(googleAdapter.rebuildExpiredSessions).toBe(true);
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('useAgentBuiltInTools');
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('idleTimeoutSeconds');
