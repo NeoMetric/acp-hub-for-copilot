@@ -1,10 +1,10 @@
-# Agent Hub for Copilot
+# Agent Hub for Copilot — Claude/Codex/Antigravity Agents via ACP Adapters
 
 **Your AI plans. Your agents. GitHub Copilot Chat.**
 
-Bring Claude Code, Codex, and Antigravity into VS Code's Copilot Chat. Sign in with your existing provider account, pick an available model, and get to work in the Copilot interface you already know.
+Bring Claude Code, Codex, and Antigravity into VS Code's Copilot Chat. Sign in with your existing provider account, pick an available model, and get to work in the Copilot interface you already know. Uses the [Agent Client Protocol (ACP)] to connect agents to Copilot Chat. 
 
-<!-- Screenshot placeholder: Copilot Chat with the ACP Hub model picker open and an agent in action. -->
+<img src="claude-agent-picker-image.png" alt="Claude agent picker" width="30%"> <img src="codex-agent-picker-image.png" alt="Codex agent picker" width="30%"> <img src="google-agent-picker-image.png" alt="Google agent picker" width="30%">
 
 ## Why Agent Hub?
 
@@ -15,7 +15,7 @@ Bring Claude Code, Codex, and Antigravity into VS Code's Copilot Chat. Sign in w
 
 Agent Hub connects agents using the **Agent Client Protocol (ACP)**, the open protocol also used by editors such as Zed and JetBrains IDEs. It runs the providers' agents through ACP adapters and makes their models available in Copilot Chat.
 
-<!-- Screenshot placeholder: ACP Hub sidebar showing agent cards and usage. -->
+<img src="primary_sidebar_image.png" alt="Agent Hub primary sidebar" width="400">
 
 ## Get started
 
