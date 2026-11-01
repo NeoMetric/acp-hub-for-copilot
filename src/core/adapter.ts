@@ -168,6 +168,8 @@ export interface AgentAdapter {
 	defaultSessionMode?: string;
 	/** Merged into `clientCapabilities` of `initialize`. */
 	clientCapabilities?: Record<string, unknown>;
+	/** Replaces the `clientInfo` identity sent on `initialize`, for agents that decide what to offer by client. */
+	clientIdentity?: { name: string; title: string };
 	/** Picks the `authenticate` call to make after `initialize`, or `undefined` for none. */
 	authenticate?(methods: AcpAuthMethod[], apiKey: string | undefined, settings?: AgentSettings): AuthenticateRequest | undefined;
 	/**

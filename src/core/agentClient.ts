@@ -675,8 +675,8 @@ export class AgentClient implements vscode.Disposable {
 					...this.adapter.clientCapabilities,
 				},
 				clientInfo: {
-					name: 'acp-hub-for-copilot',
-					title: 'ACP Hub for Copilot',
+					name: this.adapter.clientIdentity?.name ?? 'acp-hub-for-copilot',
+					title: this.adapter.clientIdentity?.title ?? 'ACP Hub for Copilot',
 					version: this.deps.clientVersion,
 				},
 			}, { timeoutMs: INITIALIZE_TIMEOUT_MS });

@@ -191,6 +191,8 @@ export const googleAdapter: AgentAdapter = {
 	],
 	settings: [...REGISTRY.commonSettings, ...registry.settings],
 	modelPolicy: googleModelPolicy,
+	// The agent offers its Claude and GPT-OSS models only to clients on its allowlist, of which Zed is the generic ACP one.
+	clientIdentity: { name: 'zed', title: 'Zed' },
 	usage: googleUsage,
 	systemPrompt: {
 		toolAccess: 'The tools of the MCP server named `vscode` are VS Code\'s own and act on the user\'s workspace; reach them only through `call_mcp_tool`.',
