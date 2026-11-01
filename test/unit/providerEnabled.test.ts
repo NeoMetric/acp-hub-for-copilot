@@ -16,9 +16,7 @@ it('reports a successful browser sign-in', async () => {
 		client: {}, createClient: () => client, signIn: vi.fn(), showOutput: vi.fn(),
 	} as unknown as ProviderDeps;
 	const provider = new AcpProvider(claudeAdapter, deps);
-	expect(provider.signInState()).toBeUndefined();
 	expect(await provider.startForSignIn('mock-login')).toBe(true);
-	expect(provider.signInState()).toBe(true);
 	provider.dispose();
 });
 

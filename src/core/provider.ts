@@ -76,7 +76,6 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	private readonly closing = new Map<string, Promise<void>>();
 	private sweepTimer: NodeJS.Timeout | undefined;
 	private signInWarningShown = false;
-	private knownBrowserSignIn: boolean | undefined;
 	private disposed = false;
 
 	constructor(
@@ -327,14 +326,6 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		return Math.ceil(characters / CHARS_PER_TOKEN);
 	}
 
-	/** Returns the account state reported by the agent, when available. */
-	signInState(): boolean | undefined {
-		const status = this.client?.lastAuthStatus as { kind?: unknown } | undefined;
-		if (status?.kind === 'none' || this.client?.requiresSignIn) { return false; }
-		if (typeof status?.kind === 'string') { return true; }
-		return this.knownBrowserSignIn;
-	}
-
 	/** Starts the agent to let its own browser sign-in flow run. */
 	async startForSignIn(methodId?: string): Promise<boolean> {
 		const agent = await this.agentClient();
@@ -344,8 +335,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		} else {
 			await agent.ensureStarted();
 		}
-		this.knownBrowserSignIn = !agent.requiresSignIn;
-		return this.knownBrowserSignIn;
+		return !agent.requiresSignIn;
 	}
 
 	/** Restarts the agent process; the provider's caches are reset with it. */

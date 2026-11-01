@@ -100,6 +100,15 @@ export function activate(context: vscode.ExtensionContext): void {
 		);
 		void provider.publishModels();
 	}
+	// A usage read is the best proof of the account: limits came back, or the agent asked for credentials.
+	context.subscriptions.push({
+		dispose: usage.onDidChange(id => {
+			const signedIn = usage.get(id).signedIn;
+			if (signedIn !== undefined && context.globalState.get<boolean>(`signedIn.${id}`) !== signedIn) {
+				void context.globalState.update(`signedIn.${id}`, signedIn);
+			}
+		}),
+	});
 	const sidebar = new SidebarHost({
 		listAdapters: () => ADAPTERS,
 		getVisibleAgents: () => context.globalState.get<string[]>('sidebar.visibleAgents'),
@@ -124,12 +133,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		},
 		isSignedIn: async id => {
 			if (await secrets.get(id)) { return true; }
-			// An agent that has not started in this window cannot say, so the last answer it gave is shown.
-			const key = `signedIn.${id}`;
-			const live = providers.get(id)?.signInState();
-			if (live === undefined) { return context.globalState.get<boolean>(key); }
-			if (context.globalState.get<boolean>(key) !== live) { void context.globalState.update(key, live); }
-			return live;
+			return context.globalState.get<boolean>(`signedIn.${id}`);
 		},
 		hasSavedKey: async id => Boolean(await secrets.get(id)),
 		signIn: chooseSignIn,

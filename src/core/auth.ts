@@ -24,12 +24,6 @@ export interface SignInDeps {
 	startAgent?(methodId?: string): Promise<boolean>;
 }
 
-export interface SignInStateDeps {
-	store: KeyStore;
-	/** What the running agent says about its own account; `unknown` when it has not said. */
-	agentStatus?: () => 'yes' | 'no' | 'unknown';
-}
-
 export type SignInChoice =
 	| { kind: 'api-key'; key: string }
 	| { kind: 'terminal'; method: AuthMethodSpec }
@@ -179,16 +173,4 @@ export async function signIn(adapter: AgentAdapter, choice: SignInChoice, deps: 
 /** Removes the saved API key of this agent. Other agents' keys stay. */
 export async function signOut(agentId: string, store: KeyStore): Promise<void> {
 	await store.delete(agentId);
-}
-
-/** A saved key means signed in; otherwise whatever the agent reported. */
-export async function readSignInState(adapter: AgentAdapter, deps: SignInStateDeps): Promise<'yes' | 'no' | 'unknown'> {
-	const key = await deps.store.get(adapter.id);
-	if (key !== undefined) {
-		return 'yes';
-	}
-	if (!deps.agentStatus) {
-		return 'unknown';
-	}
-	return deps.agentStatus();
 }

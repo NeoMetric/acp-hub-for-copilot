@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, LaunchContext } from '../../src/core/adapter';
-import { readSignInState, signIn, signInWithApiKey, signOut, terminalMethodsFrom, validateApiKey } from '../../src/core/auth';
+import { signIn, signInWithApiKey, signOut, terminalMethodsFrom, validateApiKey } from '../../src/core/auth';
 import { AgentSecretStore } from '../../src/core/secrets';
 import { FakeSecretStorage } from './secrets';
 
@@ -176,31 +176,5 @@ describe('signOut', () => {
 
 		expect(await store.get('a1')).toBeUndefined();
 		expect(await store.get('a2')).toBe('two');
-	});
-});
-
-describe('readSignInState', () => {
-	it('is yes with a saved key', async () => {
-		const store = makeStore();
-		await store.set('a1', 'one');
-
-		expect(await readSignInState(adapter, { store })).toBe('yes');
-	});
-
-	it('is unknown with no key and no status', async () => {
-		expect(await readSignInState(adapter, { store: makeStore() })).toBe('unknown');
-	});
-
-	it('uses what the agent reported when there is no key', async () => {
-		const store = makeStore();
-		expect(await readSignInState(adapter, { store, agentStatus: () => 'no' })).toBe('no');
-		expect(await readSignInState(adapter, { store, agentStatus: () => 'yes' })).toBe('yes');
-	});
-
-	it('does not see another agent\'s key', async () => {
-		const store = makeStore();
-		await store.set('a2', 'two');
-
-		expect(await readSignInState(adapter, { store })).toBe('unknown');
 	});
 });

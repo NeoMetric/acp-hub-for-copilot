@@ -69,7 +69,7 @@ it('registers a provider for every contributed vendor and the sidebar', () => {
     globalStorageUri: { fsPath: 'storage' },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
-    globalState: {},
+    globalState: { get: () => undefined, update: async () => undefined },
     secrets: {},
   };
   activate(context as never);
@@ -88,7 +88,7 @@ it('loads the usage of installed, enabled agents into the sidebar at startup', a
     globalStorageUri: { fsPath: 'storage' },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
-    globalState: {},
+    globalState: { get: () => undefined, update: async () => undefined },
     secrets: {},
   } as never);
 
@@ -109,7 +109,7 @@ it('does not start a usage read for disabled or uninstalled agents', async () =>
     globalStorageUri: { fsPath: 'storage' },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
-    globalState: {},
+    globalState: { get: () => undefined, update: async () => undefined },
     secrets: {},
   } as never);
 

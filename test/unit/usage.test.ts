@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, UsageContext, UsageReading } from '../../src/core/adapter';
+import { RpcError } from '../../src/core/rpc';
 import { FRESH_MS, READ_TIMEOUT_MS, UsageStore } from '../../src/core/usage';
 
 const ctx = {} as UsageContext;
@@ -22,6 +23,18 @@ describe('UsageStore', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it('takes the account as signed in when limits come back and signed out on an auth refusal', async () => {
+		const store = new UsageStore(() => { });
+		await store.refresh(adapterWith(async () => reading), ctx, true);
+		expect(store.get('demo').signedIn).toBe(true);
+		await store.refresh(adapterWith(async () => { throw new RpcError('Authentication required', -32000); }), ctx, true);
+		expect(store.get('demo').signedIn).toBe(false);
+		await store.refresh(adapterWith(async () => { throw new Error('boom'); }), ctx, true);
+		expect(store.get('demo').signedIn).toBe(false);
+		await store.refresh(adapterWith(async () => ({ windows: [] })), ctx, true);
+		expect(store.get('demo').signedIn).toBe(false);
 	});
 
 	it('reports unsupported for an agent without a usage source', async () => {

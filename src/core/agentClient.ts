@@ -262,11 +262,6 @@ export class AgentClient implements vscode.Disposable {
 		return (this.authStatus as { kind?: unknown } | undefined)?.kind === 'api_key';
 	}
 
-	/** The last `_auth/status_update` payload reported by the agent, if any. */
-	get lastAuthStatus(): unknown {
-		return this.authStatus;
-	}
-
 	/** Whether the agent refused a request with "authentication required". */
 	get requiresSignIn(): boolean {
 		return this.signInRequired;
@@ -741,7 +736,8 @@ export class AgentClient implements vscode.Disposable {
 			await rpc.request('authenticate', request, { timeoutMs: AUTHENTICATE_TIMEOUT_MS });
 			this.log(`Authenticated with ${request.methodId}.`);
 		} catch (error) {
-			this.signInRequired = true;
+			// Only a refusal for lack of credentials means signed out; a timeout or server error says nothing about the account.
+			this.signInRequired = isAuthRequiredError(error);
 			this.log(`Authentication with ${request.methodId} failed: ${describeError(error)}`, 'warn');
 		}
 	}

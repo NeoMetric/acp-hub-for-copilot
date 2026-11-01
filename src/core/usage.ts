@@ -1,6 +1,7 @@
 import type { AgentAdapter, UsageContext, UsageReading, UsageWindow } from './adapter';
 import type { Log } from './logging';
 import type { AcpTokenUsage } from './agentClient';
+import { isAuthRequiredError } from './rpc';
 import { CacheTracker, type CacheStats, type RequestMeasurement } from './cache';
 
 /** A reading younger than this is reused instead of asking the agent again. */
@@ -17,6 +18,8 @@ export interface UsageState {
 	reading?: UsageReading;
 	error?: string;
 	fetchedAt?: number;
+	/** What the last read proved about the account: limits came back (true) or the agent refused for lack of credentials (false). Unset when it proved nothing. */
+	signedIn?: boolean;
 	/** Windows the provider measured itself, such as the prompt cache hit rate. */
 	extraWindows: UsageWindow[];
 	/** Latest measured model call, preferring chat calls over background requests. */
@@ -115,11 +118,14 @@ export class UsageStore {
 				this.update(agentId, { status: 'unavailable', error: undefined });
 				return;
 			}
-			this.update(agentId, { status: 'ok', reading, error: undefined, fetchedAt: this.now() });
+			this.update(agentId, {
+				status: 'ok', reading, error: undefined, fetchedAt: this.now(),
+				...(reading.windows.length > 0 ? { signedIn: true } : {}),
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.log(`Could not read usage of ${agentId}: ${message}`, 'warn');
-			this.update(agentId, { status: 'error', error: message });
+			this.update(agentId, { status: 'error', error: message, ...(isAuthRequiredError(error) ? { signedIn: false } : {}) });
 		} finally {
 			clearTimeout(timer);
 		}
