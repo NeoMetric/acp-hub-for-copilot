@@ -364,17 +364,13 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		}
 	}
 
-	/**
-	 * Sends one prompt to the warm session and returns the reply text, or
-	 * `undefined` when the agent is not installed. Usage sources use it for
-	 * commands the agent answers itself, which cost no model call.
-	 */
-	async askAgent(prompt: string): Promise<string | undefined> {
+	/** Starts the agent and opens the warm session; `false` when the agent is not installed. */
+	async prepareAgent(): Promise<boolean> {
 		try {
 			await this.agentClient();
 		} catch (error) {
 			if (error instanceof AdapterNotInstalledError) {
-				return undefined;
+				return false;
 			}
 			throw error;
 		}
@@ -385,6 +381,19 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 				reply += text;
 			},
 		});
+		await this.ensureWarmSession();
+		return true;
+	}
+
+	/**
+	 * Sends one prompt to the warm session and returns the reply text, or
+	 * `undefined` when the agent is not installed. Usage sources use it for
+	 * commands the agent answers itself, which cost no model call.
+	 */
+	async askAgent(prompt: string): Promise<string | undefined> {
+		if (!await this.prepareAgent()) {
+			return undefined;
+		}
 		this.warm.touch();
 		return reply;
 	}

@@ -66,7 +66,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		const adapter = adapterFor(id);
 		const launch = await resolveLaunch(adapter);
 		if (!launch) { return; }
-		await usage.refresh(adapter, { launch, askAgent: prompt => providers.get(id)?.askAgent(prompt) ?? Promise.resolve(undefined) }, force);
+		await usage.refresh(adapter, { launch, ready: () => providers.get(id)?.prepareAgent() ?? Promise.resolve(false), askAgent: prompt => providers.get(id)?.askAgent(prompt) ?? Promise.resolve(undefined) }, force);
 	}
 	for (const adapter of ADAPTERS) {
 		const provider = new AcpProvider(adapter, {

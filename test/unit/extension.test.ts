@@ -27,6 +27,7 @@ vi.mock('../../src/core/provider', () => ({
     onDidRequireSignIn() { return { dispose() {} }; }
     onDidFinishTurn() { return { dispose() {} }; }
     publishModels() { return Promise.resolve(); }
+    prepareAgent() { return Promise.resolve(true); }
     askAgent(prompt: string) {
       if (this.adapter.id === 'google' && prompt === '/usage') {return Promise.resolve('### Quota Limits\n- **Gemini Models**\n  - **Weekly Limit Remaining:** 75% remaining');}
       if (this.adapter.id === 'codex' && prompt === '/status') {return Promise.resolve('**5h limit:** 58% left');}

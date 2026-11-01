@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, UsageContext, UsageReading } from '../../src/core/adapter';
 import { RpcError } from '../../src/core/rpc';
-import { FRESH_MS, READ_TIMEOUT_MS, UsageStore } from '../../src/core/usage';
+import { FRESH_MS, READ_TIMEOUT_MS, READY_TIMEOUT_MS, UsageStore } from '../../src/core/usage';
 
 const ctx = {} as UsageContext;
 const reading: UsageReading = { windows: [{ label: '5-hour', usedPercent: 40 }] };
@@ -11,6 +11,39 @@ function adapterWith(read: () => Promise<UsageReading | undefined>): AgentAdapte
 }
 
 describe('UsageStore', () => {
+	it('does not count a slow agent start against the read', async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new UsageStore(() => { });
+			const slowStart = { ready: () => new Promise<boolean>(resolve => setTimeout(() => resolve(true), READ_TIMEOUT_MS + 5_000)) } as UsageContext;
+			const done = store.refresh(adapterWith(async () => reading), slowStart);
+			await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS + 5_000);
+			await done;
+			expect(store.get('demo')).toMatchObject({ status: 'ok', reading });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('reports an agent that never starts', async () => {
+		vi.useFakeTimers();
+		try {
+			const store = new UsageStore(() => { });
+			const done = store.refresh(adapterWith(async () => reading), { ready: () => new Promise<boolean>(() => { }) } as UsageContext);
+			await vi.advanceTimersByTimeAsync(READY_TIMEOUT_MS);
+			await done;
+			expect(store.get('demo')).toMatchObject({ status: 'error', error: 'The agent did not start in time.' });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('is unavailable when the agent is not set up', async () => {
+		const store = new UsageStore(() => { });
+		await store.refresh(adapterWith(async () => reading), { ready: async () => false } as UsageContext);
+		expect(store.get('demo').status).toBe('unavailable');
+	});
+
 	it('stops loading when the agent never answers', async () => {
 		vi.useFakeTimers();
 		try {

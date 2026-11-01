@@ -10,6 +10,9 @@ export const FRESH_MS = 60_000;
 /** How long reading the usage of an agent may take before the card reports an error. */
 export const READ_TIMEOUT_MS = 45_000;
 
+/** How long starting the agent and opening its session may take; a slow start must not eat into the read. */
+export const READY_TIMEOUT_MS = 180_000;
+
 export type UsageStatus = 'unsupported' | 'idle' | 'loading' | 'ok' | 'unavailable' | 'error';
 
 export interface UsageState {
@@ -106,14 +109,23 @@ export class UsageStore {
 		const abort = new AbortController();
 		let timer: NodeJS.Timeout | undefined;
 		// An agent that never answers would otherwise leave the card on "Loading usage..." for good.
-		const timeout = new Promise<never>((_, reject) => {
+		const timeout = (ms: number, message: string) => new Promise<never>((_, reject) => {
 			timer = setTimeout(() => {
 				abort.abort();
-				reject(new Error('The agent did not answer in time.'));
-			}, READ_TIMEOUT_MS);
+				reject(new Error(message));
+			}, ms);
 		});
 		try {
-			const reading = await Promise.race([source.read(ctx, abort.signal), timeout]);
+			if (ctx.ready) {
+				// Starting the agent is timed on its own so a slow start leaves the read its full budget.
+				const started = await Promise.race([ctx.ready(), timeout(READY_TIMEOUT_MS, 'The agent did not start in time.')]);
+				clearTimeout(timer);
+				if (!started) {
+					this.update(agentId, { status: 'unavailable', error: undefined });
+					return;
+				}
+			}
+			const reading = await Promise.race([source.read(ctx, abort.signal), timeout(READ_TIMEOUT_MS, 'The agent did not answer in time.')]);
 			if (!reading) {
 				this.update(agentId, { status: 'unavailable', error: undefined });
 				return;

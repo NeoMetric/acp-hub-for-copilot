@@ -61,6 +61,8 @@ export interface UsageReading {
 
 export interface UsageContext {
 	launch: LaunchContext;
+	/** Starts the agent and opens its warm session, which can take a while; resolves `false` when the agent is not set up. */
+	ready?(): Promise<boolean>;
 	/** Sends a prompt to a warm agent session and returns the reply text; `undefined` when the agent is not set up. */
 	askAgent(prompt: string): Promise<string | undefined>;
 }
