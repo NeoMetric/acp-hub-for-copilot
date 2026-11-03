@@ -171,7 +171,7 @@ async function installServer(ctx: InstallContext): Promise<string> {
 			return;
 		}
 		reportedPercent = percent;
-		ctx.progress(`Downloading the Antigravity ACP server: ${percent}%`);
+		ctx.progress(`Downloading the Antigravity ACP server: ${percent}%`, percent);
 	});
 	return server.file;
 }

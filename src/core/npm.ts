@@ -14,7 +14,11 @@ export interface NpmRunOptions {
 	readonly cwd: string;
 	readonly timeoutMs: number;
 	readonly log: Log;
+	/** Sees every output line first; returning true keeps the line out of the log. */
+	readonly onLine?: (line: string) => boolean | void;
 }
+
+const NPM_MISSING_MESSAGE = "Node.js is required to install and run the ACP adapter, but npm was not found on this machine. Install Node.js (which includes npm) from https://nodejs.org, then fully restart VS Code and try again.";
 
 /** Runs `npm` with `args`, rejecting with the tail of its output when it fails. */
 export async function runNpm(args: readonly string[], options: NpmRunOptions): Promise<void> {
@@ -44,6 +48,9 @@ export async function runNpm(args: readonly string[], options: NpmRunOptions): P
 
 		let tail = '';
 		const onLine = (line: string) => {
+			if (options.onLine?.(line)) {
+				return;
+			}
 			tail = `${tail}\n${line}`.slice(-2000);
 			options.log(line, levelOfLine(line));
 		};
@@ -79,10 +86,15 @@ export async function runNpm(args: readonly string[], options: NpmRunOptions): P
 		child.on('error', error => {
 			const missing = (error as NodeJS.ErrnoException).code === 'ENOENT';
 			finish(new Error(missing
-				? "npm could not be found. Install Node.js (which includes npm), then reload the window."
+				? NPM_MISSING_MESSAGE
 				: `Could not run npm: ${error.message}`));
 		});
 		child.on('close', code => {
+			// cmd.exe reports a missing command as exit code 9009 (or 1) plus a "not recognized" line.
+			if (shell && code !== 0 && (code === 9009 || /is not recognized as an internal or external command/i.test(tail))) {
+				finish(new Error(NPM_MISSING_MESSAGE));
+				return;
+			}
 			finish(code === 0 ? undefined : new Error(`npm exited with code ${code ?? 'null'}:${tail}`));
 		});
 	});

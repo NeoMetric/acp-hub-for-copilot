@@ -157,6 +157,14 @@ export interface AgentClientDeps {
 	/** Folder for the record of running agents and the console-hiding helper. */
 	storageDir: string;
 	clientVersion: string;
+	/** Shows (or, with `undefined`, clears) the page and message an agent asks the user to visit to sign in. */
+	onSignInUrl?(prompt: SignInUrlPrompt | undefined): void;
+}
+
+/** A page the agent wants the user to open to finish signing in, such as a device-code page. */
+export interface SignInUrlPrompt {
+	readonly url: string;
+	readonly message: string;
 }
 
 /** Thrown when the agent has not been installed, so there is nothing to start. */
@@ -250,6 +258,8 @@ export class AgentClient implements vscode.Disposable {
 	private authMethods: readonly AcpAuthMethod[] = [];
 	private authStatus: unknown;
 	private signInRequired = false;
+	/** True while `signInWithMethod` runs, the only time a page request from the agent is honoured. */
+	private signingIn = false;
 
 	constructor(
 		private readonly adapter: AgentAdapter,
@@ -531,8 +541,24 @@ export class AgentClient implements vscode.Disposable {
 		if (!this.authMethods.some(method => method.id === methodId)) {
 			throw new Error(`Authentication method ${methodId} was not advertised by the agent.`);
 		}
-		await rpc.request('authenticate', { methodId }, { timeoutMs: 5 * 60_000 });
+		this.signingIn = true;
+		try {
+			await rpc.request('authenticate', { methodId }, { timeoutMs: 5 * 60_000 });
+		} finally {
+			this.signingIn = false;
+			this.deps.onSignInUrl?.(undefined);
+		}
 		this.signInRequired = false;
+	}
+
+	/** Answers the agent asking the user to open a page; only accepted while the user is signing in. */
+	private handleElicitation(params: unknown): { action: 'accept' | 'decline' } {
+		const request = (params ?? {}) as { mode?: unknown; url?: unknown; message?: unknown };
+		if (!this.signingIn || request.mode !== 'url' || typeof request.url !== 'string' || !/^https:\/\//i.test(request.url)) {
+			return { action: 'decline' };
+		}
+		this.deps.onSignInUrl?.({ url: request.url, message: typeof request.message === 'string' ? request.message : 'Open this page to sign in.' });
+		return { action: 'accept' };
 	}
 
 	/** Kills the agent process, drops every session and notifies listeners. */
@@ -665,6 +691,7 @@ export class AgentClient implements vscode.Disposable {
 		this.rpc = rpc;
 		rpc.onNotification((method, params) => this.handleNotification(method, params));
 		rpc.onRequest('session/request_permission', params => this.handlePermissionRequest(params));
+		rpc.onRequest('elicitation/create', params => this.handleElicitation(params));
 
 		try {
 			const response = await rpc.request<AcpInitializeResponse>('initialize', {
@@ -792,6 +819,11 @@ export class AgentClient implements vscode.Disposable {
 	}
 
 	private handleNotification(method: string, params: unknown): void {
+		if (method === 'elicitation/complete') {
+			this.deps.onSignInUrl?.(undefined);
+			return;
+		}
+
 		if (method === '_auth/status_update') {
 			const payload = (params as { authStatus?: unknown } | undefined)?.authStatus;
 			this.authStatus = payload;

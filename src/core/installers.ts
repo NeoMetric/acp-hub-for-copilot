@@ -14,7 +14,7 @@ export interface InstallEnvironment {
 	extensionDir: string;
 	settings?: AgentSettings;
 	log: Log;
-	progress(message: string): void;
+	progress(message: string, fraction?: number): void;
 }
 
 export interface InstallResult {
@@ -25,12 +25,12 @@ export interface InstallResult {
 /** Updates for one install invocation, delivered in order to its caller. */
 export type InstallProgress =
 	| { agentId: string; state: 'started' | 'completed' }
-	| { agentId: string; state: 'progress'; message: string }
+	| { agentId: string; state: 'progress'; message: string; fraction?: number }
 	| { agentId: string; state: 'failed'; error: unknown };
 
 export type InstallProgressReporter = (update: InstallProgress) => void;
 
-function npmInstallerFor(adapter: AgentAdapter, env: InstallEnvironment, progress?: (message: string) => void): NpmInstaller | undefined {
+function npmInstallerFor(adapter: AgentAdapter, env: InstallEnvironment, progress?: (message: string, fraction?: number) => void): NpmInstaller | undefined {
 	const spec = adapter.install;
 	if (spec.kind !== 'npm') {
 		return undefined;
@@ -112,9 +112,9 @@ export async function installAgent(adapter: AgentAdapter, env: InstallEnvironmen
 	const emit = (update: InstallProgress) => {
 		try { report?.(update); } catch { /* Observers must not affect installation. */ }
 	};
-	const progress = (message: string) => {
-		env.progress(message);
-		emit({ agentId: adapter.id, state: 'progress', message });
+	const progress = (message: string, fraction?: number) => {
+		env.progress(message, fraction);
+		emit({ agentId: adapter.id, state: 'progress', message, fraction });
 	};
 	emit({ agentId: adapter.id, state: 'started' });
 	try {

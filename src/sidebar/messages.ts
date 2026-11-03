@@ -44,6 +44,10 @@ export interface AgentCardState {
 	usage: UsageView;
 	/** Text for the operation in progress, such as "Signing in..." */
 	busy?: string;
+	/** Percent of the install done, when it is known. */
+	installPercent?: number;
+	/** A page the user has to open to finish signing in, with the agent's instructions for it. */
+	signInUrl?: { url: string; message: string };
 	error?: string;
 }
 
@@ -52,7 +56,7 @@ export type ToWebview = { type: 'state'; agents: AgentCardState[]; globalSetting
 export type FromWebview =
 	| { type: 'ready' }
 	| { type: 'setGlobalSetting'; key: string; value: SettingValue }
-	| { type: 'install' | 'uninstall' | 'signIn' | 'signOut' | 'refreshUsage'; agentId: string }
+	| { type: 'install' | 'uninstall' | 'signIn' | 'signOut' | 'refreshUsage' | 'copySignInUrl' | 'openSignInUrl'; agentId: string }
 	| { type: 'addAgent' | 'removeAgent'; agentId: string }
 	| { type: 'setEnabled'; agentId: string; enabled: boolean }
 	| { type: 'setSetting'; agentId: string; key: string; value: SettingValue };

@@ -109,6 +109,17 @@ button:disabled {
 	font-size: 0.9em;
 }
 
+.sign-in-url {
+	font-family: var(--vscode-editor-font-family);
+	font-size: 0.85em;
+	word-break: break-all;
+	user-select: all;
+	padding: 4px 6px;
+	margin: 4px 0;
+	background: var(--vscode-textCodeBlock-background);
+	border-radius: 3px;
+}
+
 .note,
 .resets,
 .plan {

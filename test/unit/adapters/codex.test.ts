@@ -46,7 +46,8 @@ describe('codexAdapter', () => {
 	it('lists its sign-in methods', () => {
 		expect(codexAdapter.auth).toEqual([
 			{ kind: 'oauth-browser', label: 'ChatGPT account', agentMethodId: 'chat-gpt', browserAuthPreference: 'chatgpt' },
-			{ kind: 'api-key', label: 'OpenAI API key', envVar: 'CODEX_API_KEY', keyPrefix: 'sk-' },
+						{ kind: 'oauth-browser', label: 'ChatGPT account (code, any browser)', agentMethodId: 'chat-gpt-device-code', browserAuthPreference: 'chatgpt' },
+						{ kind: 'api-key', label: 'OpenAI API key', envVar: 'CODEX_API_KEY', keyPrefix: 'sk-' },
 		]);
 	});
 

@@ -186,8 +186,11 @@ export const codexAdapter: AgentAdapter = {
 	auth: [
 		// The agent runs this sign-in itself (`authenticate` with its `chat-gpt` method).
 		{ kind: 'oauth-browser', label: 'ChatGPT account', agentMethodId: 'chat-gpt', browserAuthPreference: 'chatgpt' },
+		// The agent hands the sign-in page and a one-time code to the client, so it works in any browser profile.
+		{ kind: 'oauth-browser', label: 'ChatGPT account (code, any browser)', agentMethodId: 'chat-gpt-device-code', browserAuthPreference: 'chatgpt' },
 		{ kind: 'api-key', label: 'OpenAI API key', envVar: 'CODEX_API_KEY', keyPrefix: 'sk-' },
 	],
+	clientCapabilities: { elicitation: { url: {} } },
 	settings: [...REGISTRY.commonSettings, ...registry.settings],
 	modelPolicy: codexModelPolicy,
 	systemPrompt: {

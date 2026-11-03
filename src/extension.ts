@@ -59,7 +59,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			store: secrets, ctx: launch, runTerminal: runInVsCodeTerminal,
 			startAgent: methodId => providers.get(id)?.startForSignIn(methodId) ?? Promise.resolve(false),
 		});
-		if (result.ok) { await context.globalState.update(`signedIn.${id}`, true); await providers.get(id)?.restart(); providers.get(id)?.refresh(); }
+		if (result.ok) { await context.globalState.update(`signedIn.${id}`, true); await providers.get(id)?.restart(); providers.get(id)?.refresh(); void refreshUsage(id); }
 		return result;
 	}
 	async function refreshUsage(id: string, force = true): Promise<void> {
@@ -77,7 +77,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				log: scopedLog(output, adapter.id),
 				storageDir: path.join(storageDir, adapter.id),
 				clientVersion: String(context.extension.packageJSON.version),
-
+				onSignInUrl: prompt => sidebar.showSignInUrl(adapter.id, prompt),
 			},
 			requestDumpDir: context.globalStorageUri,
 			profilePromptsDir: path.join(path.dirname(path.dirname(storageDir)), 'prompts'),
@@ -114,7 +114,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		getVisibleAgents: () => context.globalState.get<string[]>('sidebar.visibleAgents'),
 		saveVisibleAgents: async ids => { await context.globalState.update('sidebar.visibleAgents', ids); },
 		getInstallState: id => getInstallState(adapterFor(id), { ...installEnv, settings: settingsFor(adapterFor(id)) }),
-		install: async (id, onProgress) => { await installAgent(adapterFor(id), installEnv, update => { if (update.state === 'progress') { onProgress(update.message); } }); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
+		install: async (id, onProgress) => { await installAgent(adapterFor(id), installEnv, update => { if (update.state === 'progress') { onProgress(update.message, update.fraction); } }); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
 		uninstall: async id => {
 			const adapter = adapterFor(id);
 			const confirmed = await vscode.window.showWarningMessage(
@@ -147,6 +147,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		getUsage: id => adapterFor(id).usage ? usage.get(id) : { ...usage.get(id), status: 'unsupported' },
 		refreshUsage,
 		onUsageChange: listener => ({ dispose: usage.onDidChange(listener) }),
+		openExternal: async url => { await vscode.env.openExternal(vscode.Uri.parse(url)); },
+		copyToClipboard: async text => { await vscode.env.clipboard.writeText(text); },
 		assetUri: relative => vscode.Uri.joinPath(context.extensionUri, relative),
 	});
 	context.subscriptions.push(

@@ -48,7 +48,7 @@ root.addEventListener('click', event => {
 		draw();
 		return;
 	}
-	if (action === 'install' || action === 'uninstall' || action === 'signIn' || action === 'signOut' || action === 'refreshUsage' || action === 'addAgent' || action === 'removeAgent') {
+	if (action === 'install' || action === 'uninstall' || action === 'signIn' || action === 'signOut' || action === 'refreshUsage' || action === 'copySignInUrl' || action === 'openSignInUrl' || action === 'addAgent' || action === 'removeAgent') {
 		vscode.postMessage({ type: action, agentId });
 	}
 });

@@ -109,7 +109,8 @@ function renderInstall(agent: AgentCardState): string {
 		return '<span class="badge">Installed</span>';
 	}
 	if (agent.install === 'installing') {
-		return '<span>Installing...</span><progress aria-label="Installing agent"></progress>';
+		const value = agent.installPercent === undefined ? '' : ` value="${Math.round(agent.installPercent)}" max="100"`;
+		return `<span>Installing...</span><progress aria-label="Installing agent"${value}></progress>`;
 	}
 	return `<button data-action="install" data-agent="${id}">Install</button>`;
 }
@@ -143,6 +144,13 @@ function renderCard(agent: AgentCardState, settingsOpen: boolean): string {
 	const checked = agent.enabled ? ' checked' : '';
 	const busy = agent.busy ? `<div class="note">${escapeHtml(agent.busy)}</div>` : '';
 	const error = agent.error ? `<div class="error">${escapeHtml(agent.error)}</div>` : '';
+	const signInUrl = agent.signInUrl
+		? `<div class="note">${escapeHtml(agent.signInUrl.message)}</div>`
+			+ `<div class="note">Browser did not open? Paste this URL into any browser:</div>`
+			+ `<div class="sign-in-url">${escapeHtml(agent.signInUrl.url)}</div>`
+			+ `<div class="actions"><button data-action="copySignInUrl" data-agent="${id}">Copy URL</button>`
+			+ `<button class="secondary" data-action="openSignInUrl" data-agent="${id}">Open in browser</button></div>`
+		: '';
 	const gear = `<button class="icon-button" data-action="toggleSettings" data-agent="${id}" aria-label="Settings for ${escapeHtml(agent.displayName)}" aria-expanded="${settingsOpen}" title="Settings">⚙</button>`;
 
 	return `<section class="card" data-agent="${id}">`
@@ -150,6 +158,7 @@ function renderCard(agent: AgentCardState, settingsOpen: boolean): string {
 		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${id}"${checked}> Enabled</label>${gear}</div></div>`
 		+ `<div class="actions">${renderInstall(agent)}${renderAccount(agent)}</div>`
 		+ busy
+		+ signInUrl
 		+ error
 		+ renderUsage(agent)
 		+ (settingsOpen ? renderSettingsPanel(agent) : '')

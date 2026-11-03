@@ -17,7 +17,7 @@ export interface SidebarDeps {
 	saveVisibleAgents(ids: string[]): Promise<void>;
 	getInstallState(adapterId: string): Promise<InstallState>;
 	/** Rejects when the install fails. */
-	install(adapterId: string, onProgress: (message: string) => void): Promise<void>;
+	install(adapterId: string, onProgress: (message: string, fraction?: number) => void): Promise<void>;
 	/** Asks the user to confirm, stops the agent and deletes its files; resolves to false when the user declines. */
 	uninstall(adapterId: string): Promise<boolean>;
 	isSignedIn(adapterId: string): Promise<boolean | undefined>;
@@ -34,6 +34,8 @@ export interface SidebarDeps {
 	getUsage(adapterId: string): UsageState;
 	refreshUsage(adapterId: string): Promise<void>;
 	onUsageChange(listener: (adapterId: string) => void): { dispose(): void };
+	openExternal(url: string): Promise<void>;
+	copyToClipboard(text: string): Promise<void>;
 	/** Uri of a file inside the extension folder, for example `dist/sidebar.js`. */
 	assetUri(relativePath: string): vscode.Uri;
 }
@@ -75,7 +77,10 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 	private view: vscode.WebviewView | undefined;
 	private readonly installing = new Set<string>();
 	private readonly busy = new Map<string, string>();
+	/** Percent done of each running install that can tell; others show an endless bar. */
+	private readonly installProgress = new Map<string, number>();
 	private readonly errors = new Map<string, string>();
+	private readonly signInUrls = new Map<string, { url: string; message: string }>();
 	private visibleAgents: Set<string> | undefined;
 	private stateVersion = 0;
 	private readonly enabledWrites = new Map<string, Promise<void>>();
@@ -101,6 +106,17 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 
 	/** Redraws the cards, for a change the host learned of outside the sidebar, such as an expired sign-in. */
 	refresh(): void {
+		void this.postState();
+	}
+
+	/** Shows the page an agent wants the user to open to sign in, opening it too; `undefined` clears it. */
+	showSignInUrl(adapterId: string, prompt: { url: string; message: string } | undefined): void {
+		if (prompt) {
+			this.signInUrls.set(adapterId, prompt);
+			void this.deps.openExternal(prompt.url);
+		} else if (!this.signInUrls.delete(adapterId)) {
+			return;
+		}
 		void this.postState();
 	}
 
@@ -162,6 +178,15 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 				}
 				return;
 			}
+			case 'copySignInUrl':
+			case 'openSignInUrl': {
+				// The stored URL is used, never one that came from the webview.
+				const prompt = this.signInUrls.get(adapter.id);
+				if (prompt) {
+					await (message.type === 'copySignInUrl' ? this.deps.copyToClipboard(prompt.url) : this.deps.openExternal(prompt.url));
+				}
+				return;
+			}
 			case 'setSetting':
 				await this.runBusy(adapter, undefined, () => this.deps.writeSetting(adapter.id, message.key, message.value));
 				return;
@@ -177,14 +202,18 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		this.busy.set(adapter.id, 'Installing...');
 		await this.postState();
 		try {
-			await this.deps.install(adapter.id, message => {
+			await this.deps.install(adapter.id, (message, fraction) => {
 				this.busy.set(adapter.id, message);
+				if (fraction !== undefined) {
+					this.installProgress.set(adapter.id, fraction);
+				}
 				void this.postState();
 			});
 		} catch (error) {
 			this.errors.set(adapter.id, `Install failed: ${errorText(error)}`);
 		}
 		this.installing.delete(adapter.id);
+		this.installProgress.delete(adapter.id);
 		this.busy.delete(adapter.id);
 		await this.postState();
 	}
@@ -251,6 +280,8 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 				fetchedAt: usage.fetchedAt,
 			},
 			busy: this.busy.get(adapter.id),
+			installPercent: this.installProgress.get(adapter.id),
+			signInUrl: this.signInUrls.get(adapter.id),
 			error: this.errors.get(adapter.id),
 		};
 	}

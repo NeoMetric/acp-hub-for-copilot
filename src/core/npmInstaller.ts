@@ -14,6 +14,19 @@ const LOCK_POLL_MS = 1_000;
 /** A lock older than the longest possible install belongs to a process that died. */
 const LOCK_STALE_MS = INSTALL_TIMEOUT_MS + 60_000;
 
+/** An npm log line for a downloaded package tarball; the URL is captured. */
+const TARBALL_FETCH = /\bhttp fetch GET (?:200|304) (\S+\.tgz)\b/;
+
+/** Whether a lockfile `os` or `cpu` list (entries may be negated with `!`) allows `value`. */
+function supports(list: readonly string[] | undefined, value: string): boolean {
+	if (!list || list.length === 0) {
+		return true;
+	}
+	const blocked = list.filter(item => item.startsWith('!')).map(item => item.slice(1));
+	const allowed = list.filter(item => !item.startsWith('!'));
+	return !blocked.includes(value) && (allowed.length === 0 || allowed.includes(value));
+}
+
 const MARKER_FILE = 'installed-version';
 const LOCK_DIRECTORY = '.install-lock';
 
@@ -35,7 +48,7 @@ export class NpmInstaller {
 		private readonly version: string,
 		private readonly log: Log,
 		private readonly entry?: string,
-		private readonly progress?: (message: string) => void,
+		private readonly progress?: (message: string, fraction?: number) => void,
 	) { }
 
 	/** The adapter's entry point when the current version is installed, else `undefined`. */
@@ -112,10 +125,31 @@ export class NpmInstaller {
 			await fs.promises.copyFile(path.join(this.manifestDirectory, file), path.join(directory, file));
 		}
 
-		await runNpm(['ci', '--ignore-scripts', '--no-audit', '--no-fund'], {
+		const total = await this.tarballCount();
+		const fetched = new Set<string>();
+		let reportedPercent = -1;
+		this.progress?.(`Downloading ${this.packageName}...`, 0);
+
+		await runNpm(['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=http'], {
 			cwd: directory,
 			timeoutMs: INSTALL_TIMEOUT_MS,
 			log: this.log,
+			onLine: line => {
+				const url = TARBALL_FETCH.exec(line)?.[1];
+				if (!url) {
+					return false;
+				}
+				fetched.add(url);
+				if (total > 0) {
+					// Packages for other platforms are in the lockfile but never fetched, so never claim 100%.
+					const percent = Math.min(99, Math.floor(fetched.size * 100 / total));
+					if (percent !== reportedPercent) {
+						reportedPercent = percent;
+						this.progress?.(`Downloading ${this.packageName}: ${Math.min(fetched.size, total)}/${total} packages`, percent);
+					}
+				}
+				return true;
+			},
 		});
 
 		const entry = await findAdapterEntry(directory, this.packageName, this.entry);
@@ -178,6 +212,19 @@ export class NpmInstaller {
 	}
 
 	/** The version plus a digest of the lockfile, so a changed dependency tree reinstalls. */
+	/** How many package tarballs `npm ci` fetches on this platform, from the lockfile. */
+	private async tarballCount(): Promise<number> {
+		try {
+			const lock = JSON.parse(await readTextIfExists(path.join(this.manifestDirectory, 'package-lock.json')) ?? '{}') as {
+				packages?: Record<string, { resolved?: string; os?: string[]; cpu?: string[] }>;
+			};
+			return Object.entries(lock.packages ?? {}).filter(([key, entry]) => key !== '' && entry.resolved
+				&& supports(entry.os, process.platform) && supports(entry.cpu, process.arch)).length;
+		} catch {
+			return 0;
+		}
+	}
+
 	private async expectedMarker(): Promise<string | undefined> {
 		const lock = await readTextIfExists(path.join(this.manifestDirectory, 'package-lock.json'));
 		if (lock === undefined) {

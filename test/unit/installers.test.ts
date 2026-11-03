@@ -88,6 +88,30 @@ describe('configured commands', () => {
 });
 
 describe('installation progress', () => {
+	it('counts fetched tarballs against the lockfile, skipping other platforms and never reaching 100%', async () => {
+		const other = process.platform === 'win32' ? 'linux' : 'win32';
+		const entry = (name: string, extra: object = {}) => [`node_modules/${name}`, { resolved: `https://registry.npmjs.org/${name}/-/${name}-1.0.0.tgz`, ...extra }];
+		fs.writeFileSync(path.join(temp, 'extension', 'adapters', 'demo', 'package-lock.json'), JSON.stringify({
+			packages: Object.fromEntries([['', {}], entry('a'), entry('b'), entry('c'), entry('d', { os: [other] })]),
+		}));
+		runNpm.mockImplementation((_args: string[], options: { cwd: string; onLine: (line: string) => boolean }) => {
+			expect(options.onLine('npm http fetch GET 200 https://registry.npmjs.org/a/-/a-1.0.0.tgz 5ms (cache miss)')).toBe(true);
+			expect(options.onLine('npm http fetch GET 200 https://registry.npmjs.org/a/-/a-1.0.0.tgz 5ms (cache miss)')).toBe(true);
+			options.onLine('npm http fetch GET 200 https://registry.npmjs.org/b/-/b-1.0.0.tgz 5ms (cache miss)');
+			options.onLine('npm http fetch GET 200 https://registry.npmjs.org/c/-/c-1.0.0.tgz 5ms (cache miss)');
+			expect(options.onLine('npm http fetch GET 200 https://registry.npmjs.org/a-meta 5ms')).toBe(false);
+			const packageDir = path.join(options.cwd, 'node_modules', '@scope', 'demo-acp');
+			fs.mkdirSync(path.join(packageDir, 'dist'), { recursive: true });
+			fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ bin: { demo: 'dist/index.js' } }));
+			fs.writeFileSync(path.join(packageDir, 'dist', 'index.js'), '');
+			return Promise.resolve();
+		});
+		const report = vi.fn();
+		await installAgent(npmAdapter(), env, report);
+		const fractions = report.mock.calls.map(([update]) => update.fraction).filter(fraction => fraction !== undefined);
+		expect(fractions).toEqual([0, 33, 66, 99]);
+	});
+
 	it('reports npm progress and completion, including an already installed agent', async () => {
 		fakeNpmCi({ withEntry: true });
 		const report = vi.fn();
@@ -95,6 +119,7 @@ describe('installation progress', () => {
 		expect(report.mock.calls.map(([update]) => update)).toEqual([
 			{ agentId: 'demo', state: 'started' },
 			{ agentId: 'demo', state: 'progress', message: 'Installing @scope/demo-acp@1.0.0' },
+			{ agentId: 'demo', state: 'progress', message: 'Downloading @scope/demo-acp...', fraction: 0 },
 			{ agentId: 'demo', state: 'completed' },
 		]);
 		report.mockClear();
@@ -111,7 +136,7 @@ describe('installation progress', () => {
 			install: { kind: 'download', version: '1', find: async () => undefined, install: async (ctx: { progress(message: string): void }) => { ctx.progress('Downloading'); throw failure; } },
 		} as unknown as AgentAdapter;
 		await expect(installAgent(adapter, { ...env, progress }, report)).rejects.toBe(failure);
-		expect(progress).toHaveBeenCalledWith('Downloading');
+		expect(progress).toHaveBeenCalledWith('Downloading', undefined);
 		expect(report.mock.calls.map(([update]) => update)).toEqual([
 			{ agentId: 'dl', state: 'started' },
 			{ agentId: 'dl', state: 'progress', message: 'Downloading' },
@@ -145,7 +170,7 @@ describe('npm agents', () => {
 		expect(first.entryPath.endsWith(path.join('dist', 'index.js'))).toBe(true);
 		expect(second.entryPath).toBe(first.entryPath);
 		expect(runNpm).toHaveBeenCalledTimes(1);
-		expect(runNpm.mock.calls[0][0]).toEqual(['ci', '--ignore-scripts', '--no-audit', '--no-fund']);
+		expect(runNpm.mock.calls[0][0]).toEqual(['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=http']);
 		expect(await getInstallState(npmAdapter(), env)).toBe('installed');
 	});
 

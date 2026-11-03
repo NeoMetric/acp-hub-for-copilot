@@ -7,7 +7,8 @@ export type AgentSettings = Record<string, string | number | boolean | string[]>
 export interface InstallContext {
 	storageDir: string;
 	log: Log;
-	progress(message: string): void;
+	/** `fraction` is the share done, from 0 to 100, when it is known. */
+	progress(message: string, fraction?: number): void;
 }
 
 /**

@@ -40,6 +40,8 @@ function setup(overrides: Partial<SidebarDeps> = {}) {
 		getUsage: () => ({ status: 'idle', extraWindows: [] }),
 		refreshUsage: async () => { },
 		onUsageChange: () => ({ dispose() { } }),
+		openExternal: vi.fn(async () => { }),
+		copyToClipboard: vi.fn(async () => { }),
 		assetUri: path => ({ path }) as never,
 		...overrides,
 	};
@@ -73,6 +75,23 @@ describe('SidebarHost', () => {
 		await host.handleMessage({ type: 'ready' });
 		expect(last().map(item => item.id)).toEqual(['a', 'b']);
 		expect(last()[0].settings[0].value).toBe('low');
+	});
+
+	it('shows a sign-in page, opens it, and copies or reopens only the stored URL', async () => {
+		const { host, deps, card } = setup();
+		host.showSignInUrl('a', { url: 'https://example.com/device', message: 'Enter code ABCD' });
+		await host.handleMessage({ type: 'ready' });
+		expect(deps.openExternal).toHaveBeenCalledWith('https://example.com/device');
+		expect(card('a').signInUrl).toEqual({ url: 'https://example.com/device', message: 'Enter code ABCD' });
+
+		await host.handleMessage({ type: 'copySignInUrl', agentId: 'a' });
+		expect(deps.copyToClipboard).toHaveBeenCalledWith('https://example.com/device');
+		await host.handleMessage({ type: 'copySignInUrl', agentId: 'b' });
+		expect(deps.copyToClipboard).toHaveBeenCalledTimes(1);
+
+		host.showSignInUrl('a', undefined);
+		await host.handleMessage({ type: 'ready' });
+		expect(card('a').signInUrl).toBeUndefined();
 	});
 
 	it('writes a known global setting and ignores an unknown one', async () => {
