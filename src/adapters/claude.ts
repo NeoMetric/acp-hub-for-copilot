@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AcpTokenUsage } from '../core/agentClient';
 import type { AgentAdapter, AgentSettings, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
@@ -123,6 +125,16 @@ function modelCallUsage(method: string, params: unknown, seen: Set<string>): { s
 	return { sessionId, usage: modelCallUsageOf(notification?.message, seen) };
 }
 
+/** The login program stays open after it succeeds, so a rewritten credentials file is what says it is done. */
+function signInCompleted(startedAt: number): boolean {
+	const directory = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+	try {
+		return fs.statSync(path.join(directory, '.credentials.json')).mtimeMs >= startedAt;
+	} catch {
+		return false;
+	}
+}
+
 const registry = registryAgent(ID);
 
 export const claudeAdapter: AgentAdapter = {
@@ -144,6 +156,7 @@ export const claudeAdapter: AgentAdapter = {
 		listRequiredArguments: false,
 	},
 	usage: claudeUsage,
+	signInCompleted,
 	disableBuiltInTools: () => true,
 	mergeConfig,
 	sessionParams,

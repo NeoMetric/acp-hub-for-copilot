@@ -12,9 +12,11 @@ export interface TerminalOptions {
 	shellPath: string;
 	shellArgs: string[];
 	env: Record<string, string>;
+	/** Polled while the terminal is open; when it returns true the terminal is closed and the sign-in counts as done. */
+	completed?: () => boolean;
 }
 
-/** Opens a terminal with these options and resolves when the user closes it. */
+/** Opens a terminal with these options and resolves when its program exits or the user closes it. */
 export type TerminalRunner = (options: TerminalOptions) => Promise<void>;
 
 export interface SignInDeps {
@@ -139,11 +141,13 @@ export async function signInWithTerminal(
 		return { ok: false, message: `"${method.label}" asks to run a command ${adapter.displayName} does not allow.` };
 	}
 
+	const startedAt = Date.now();
 	await deps.runTerminal({
 		name: `${adapter.displayName} Sign In (${method.label})`,
 		shellPath: process.execPath,
 		shellArgs: [ctx.entryPath, ...method.terminalCommand],
 		env: { ELECTRON_RUN_AS_NODE: '1' },
+		completed: adapter.signInCompleted ? () => adapter.signInCompleted!(startedAt) : undefined,
 	});
 	return { ok: true };
 }

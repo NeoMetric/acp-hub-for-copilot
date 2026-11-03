@@ -110,7 +110,7 @@ function renderInstall(agent: AgentCardState): string {
 	}
 	if (agent.install === 'installing') {
 		const value = agent.installPercent === undefined ? '' : ` value="${Math.round(agent.installPercent)}" max="100"`;
-		return `<span>Installing...</span><progress aria-label="Installing agent"${value}></progress>`;
+		return `<span>${escapeHtml(agent.busy ?? 'Installing...')}</span><progress aria-label="Installing agent"${value}></progress>`;
 	}
 	return `<button data-action="install" data-agent="${id}">Install</button>`;
 }

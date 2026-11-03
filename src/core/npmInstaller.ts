@@ -16,6 +16,8 @@ const LOCK_STALE_MS = INSTALL_TIMEOUT_MS + 60_000;
 
 /** An npm log line for a downloaded package tarball; the URL is captured. */
 const TARBALL_FETCH = /\bhttp fetch GET (?:200|304) (\S+\.tgz)\b/;
+/** npm 10 and later log a tarball served from its cache like this. */
+const TARBALL_CACHE_HIT = /\bhttp cache \S+?@(\S+\.tgz)\b/;
 
 /** Whether a lockfile `os` or `cpu` list (entries may be negated with `!`) allows `value`. */
 function supports(list: readonly string[] | undefined, value: string): boolean {
@@ -125,33 +127,44 @@ export class NpmInstaller {
 			await fs.promises.copyFile(path.join(this.manifestDirectory, file), path.join(directory, file));
 		}
 
-		const total = await this.tarballCount();
+		const expected = await this.expectedPackages();
+		const total = expected.length;
 		const fetched = new Set<string>();
 		let reportedPercent = -1;
-		this.progress?.(`Downloading ${this.packageName}...`, 0);
+		// Packages for other platforms are in the lockfile but never installed, so never claim 100%.
+		const report = (done: number) => {
+			const percent = Math.min(99, Math.floor(done * 100 / total));
+			if (total > 0 && percent > reportedPercent) {
+				reportedPercent = percent;
+				this.progress?.(`Installing ${this.packageName}: ${Math.min(done, total)}/${total} packages`, percent);
+			}
+		};
+		// Downloads are only logged for packages missing from npm's cache, so the bar also follows what lands on disk.
+		const poll = setInterval(() => {
+			report(expected.filter(key => fs.existsSync(path.join(directory, key, 'package.json'))).length);
+		}, 300);
 
-		await runNpm(['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=http'], {
-			cwd: directory,
-			timeoutMs: INSTALL_TIMEOUT_MS,
-			log: this.log,
-			onLine: line => {
-				const url = TARBALL_FETCH.exec(line)?.[1];
-				if (!url) {
-					return false;
-				}
-				fetched.add(url);
-				if (total > 0) {
-					// Packages for other platforms are in the lockfile but never fetched, so never claim 100%.
-					const percent = Math.min(99, Math.floor(fetched.size * 100 / total));
-					if (percent !== reportedPercent) {
-						reportedPercent = percent;
-						this.progress?.(`Downloading ${this.packageName}: ${Math.min(fetched.size, total)}/${total} packages`, percent);
+		try {
+			await runNpm(['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=http'], {
+				cwd: directory,
+				timeoutMs: INSTALL_TIMEOUT_MS,
+				log: this.log,
+				onLine: line => {
+					// Tarball lines are kept out of the log: there is one per package.
+					const url = TARBALL_CACHE_HIT.exec(line)?.[1] ?? TARBALL_FETCH.exec(line)?.[1];
+					if (!url) {
+						return false;
 					}
-				}
-				return true;
-			},
-		});
+					fetched.add(url);
+					report(fetched.size);
+					return true;
+				},
+			});
+		} finally {
+			clearInterval(poll);
+		}
 
+		this.progress?.('Finalizing install...');
 		const entry = await findAdapterEntry(directory, this.packageName, this.entry);
 		if (!entry) {
 			throw new Error(`The ACP adapter was installed but no entry point was found in ${path.join(directory, 'node_modules')}.`);
@@ -211,20 +224,20 @@ export class NpmInstaller {
 		}
 	}
 
-	/** The version plus a digest of the lockfile, so a changed dependency tree reinstalls. */
-	/** How many package tarballs `npm ci` fetches on this platform, from the lockfile. */
-	private async tarballCount(): Promise<number> {
+	/** The lockfile paths `npm ci` installs on this platform. */
+	private async expectedPackages(): Promise<string[]> {
 		try {
 			const lock = JSON.parse(await readTextIfExists(path.join(this.manifestDirectory, 'package-lock.json')) ?? '{}') as {
 				packages?: Record<string, { resolved?: string; os?: string[]; cpu?: string[] }>;
 			};
 			return Object.entries(lock.packages ?? {}).filter(([key, entry]) => key !== '' && entry.resolved
-				&& supports(entry.os, process.platform) && supports(entry.cpu, process.arch)).length;
+				&& supports(entry.os, process.platform) && supports(entry.cpu, process.arch)).map(([key]) => key);
 		} catch {
-			return 0;
+			return [];
 		}
 	}
 
+	/** The version plus a digest of the lockfile, so a changed dependency tree reinstalls. */
 	private async expectedMarker(): Promise<string | undefined> {
 		const lock = await readTextIfExists(path.join(this.manifestDirectory, 'package-lock.json'));
 		if (lock === undefined) {

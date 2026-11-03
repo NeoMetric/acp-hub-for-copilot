@@ -1,3 +1,6 @@
+import { randomBytes } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { AgentAdapter, AuthMethodSpec } from './adapter';
 import { validateApiKey, type SignInChoice, type TerminalOptions } from './auth';
@@ -71,16 +74,68 @@ export async function pickSignInChoice(adapter: AgentAdapter, terminalMethods: A
 	return { kind: 'api-key', key };
 }
 
-/** The real terminal runner: shows a terminal and resolves when it is closed. */
-export function runInVsCodeTerminal(options: TerminalOptions): Promise<void> {
+/**
+ * Runs the program for the user and tells the extension when it exits, because a
+ * terminal stays open after its process ends and would otherwise hold the sign-in up.
+ */
+const WRAPPER_SOURCE = `const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const [marker, program, ...args] = process.argv.slice(2);
+const finish = code => { fs.writeFileSync(marker, String(code)); process.exit(code); };
+const child = spawn(program, args, { stdio: 'inherit' });
+child.on('error', () => finish(1));
+child.on('exit', code => finish(code ?? 1));
+`;
+
+const MARKER_POLL_MS = 500;
+
+/**
+ * The real terminal runner: shows a terminal and resolves when its program exits or the
+ * terminal is closed, whichever comes first. A terminal whose program succeeded is closed.
+ */
+export async function runInVsCodeTerminal(options: TerminalOptions, storageDir: string): Promise<void> {
+	await fs.promises.mkdir(storageDir, { recursive: true });
+	const wrapper = path.join(storageDir, 'sign-in-terminal.cjs');
+	await fs.promises.writeFile(wrapper, WRAPPER_SOURCE, 'utf8');
+	const marker = path.join(storageDir, `sign-in-${randomBytes(6).toString('hex')}.done`);
+
 	return new Promise<void>(resolve => {
-		const terminal = vscode.window.createTerminal(options);
-		const listener = vscode.window.onDidCloseTerminal(closed => {
-			if (closed !== terminal) {
+		const { completed, ...terminalOptions } = options;
+		const terminal = vscode.window.createTerminal({
+			...terminalOptions,
+			shellPath: process.execPath,
+			shellArgs: [wrapper, marker, options.shellPath, ...options.shellArgs],
+		});
+		let finished = false;
+		const finish = () => {
+			if (finished) {
 				return;
 			}
+			finished = true;
+			clearInterval(poll);
 			listener.dispose();
+			fs.rmSync(marker, { force: true });
 			resolve();
+		};
+		const poll = setInterval(() => {
+			if (completed?.()) {
+				finish();
+				terminal.dispose();
+				return;
+			}
+			const exitCode = fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8').trim() : '';
+			if (!exitCode) {
+				return;
+			}
+			finish();
+			if (exitCode === '0') {
+				terminal.dispose();
+			}
+		}, MARKER_POLL_MS);
+		const listener = vscode.window.onDidCloseTerminal(closed => {
+			if (closed === terminal) {
+				finish();
+			}
 		});
 		terminal.show();
 	});

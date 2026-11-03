@@ -56,7 +56,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		const launch = await resolveLaunch(adapter);
 		if (!launch) { return { ok: false, message: 'Install the agent first.' }; }
 		const result = await signIn(adapter, choice, {
-			store: secrets, ctx: launch, runTerminal: runInVsCodeTerminal,
+			store: secrets, ctx: launch, runTerminal: options => runInVsCodeTerminal(options, storageDir),
 			startAgent: methodId => providers.get(id)?.startForSignIn(methodId) ?? Promise.resolve(false),
 		});
 		if (result.ok) { await context.globalState.update(`signedIn.${id}`, true); await providers.get(id)?.restart(); providers.get(id)?.refresh(); void refreshUsage(id); }
@@ -114,7 +114,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		getVisibleAgents: () => context.globalState.get<string[]>('sidebar.visibleAgents'),
 		saveVisibleAgents: async ids => { await context.globalState.update('sidebar.visibleAgents', ids); },
 		getInstallState: id => getInstallState(adapterFor(id), { ...installEnv, settings: settingsFor(adapterFor(id)) }),
-		install: async (id, onProgress) => { await installAgent(adapterFor(id), installEnv, update => { if (update.state === 'progress') { onProgress(update.message, update.fraction); } }); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
+		install: async (id, onProgress) => { await installAgent(adapterFor(id), installEnv, update => { if (update.state === 'progress') { onProgress(update.message, update.fraction); } }); onProgress('Starting the agent...'); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
 		uninstall: async id => {
 			const adapter = adapterFor(id);
 			const confirmed = await vscode.window.showWarningMessage(

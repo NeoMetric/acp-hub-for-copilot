@@ -173,6 +173,8 @@ export interface AgentAdapter {
 	clientCapabilities?: Record<string, unknown>;
 	/** Replaces the `clientInfo` identity sent on `initialize`, for agents that decide what to offer by client. */
 	clientIdentity?: { name: string; title: string };
+	/** Whether a terminal sign-in begun at `startedAt` (ms) has already succeeded, for a login program that stays open afterwards. */
+	signInCompleted?(startedAt: number): boolean;
 	/** Picks the `authenticate` call to make after `initialize`, or `undefined` for none. */
 	authenticate?(methods: AcpAuthMethod[], apiKey: string | undefined, settings?: AgentSettings): AuthenticateRequest | undefined;
 	/**

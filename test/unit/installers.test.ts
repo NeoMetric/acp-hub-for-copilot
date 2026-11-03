@@ -100,6 +100,7 @@ describe('installation progress', () => {
 			options.onLine('npm http fetch GET 200 https://registry.npmjs.org/b/-/b-1.0.0.tgz 5ms (cache miss)');
 			options.onLine('npm http fetch GET 200 https://registry.npmjs.org/c/-/c-1.0.0.tgz 5ms (cache miss)');
 			expect(options.onLine('npm http fetch GET 200 https://registry.npmjs.org/a-meta 5ms')).toBe(false);
+			expect(options.onLine('npm http cache d@https://registry.npmjs.org/d/-/d-1.0.0.tgz 0ms (cache hit)')).toBe(true);
 			const packageDir = path.join(options.cwd, 'node_modules', '@scope', 'demo-acp');
 			fs.mkdirSync(path.join(packageDir, 'dist'), { recursive: true });
 			fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ bin: { demo: 'dist/index.js' } }));
@@ -109,7 +110,7 @@ describe('installation progress', () => {
 		const report = vi.fn();
 		await installAgent(npmAdapter(), env, report);
 		const fractions = report.mock.calls.map(([update]) => update.fraction).filter(fraction => fraction !== undefined);
-		expect(fractions).toEqual([0, 33, 66, 99]);
+		expect(fractions).toEqual([33, 66, 99]);
 	});
 
 	it('reports npm progress and completion, including an already installed agent', async () => {
@@ -119,7 +120,7 @@ describe('installation progress', () => {
 		expect(report.mock.calls.map(([update]) => update)).toEqual([
 			{ agentId: 'demo', state: 'started' },
 			{ agentId: 'demo', state: 'progress', message: 'Installing @scope/demo-acp@1.0.0' },
-			{ agentId: 'demo', state: 'progress', message: 'Downloading @scope/demo-acp...', fraction: 0 },
+			{ agentId: 'demo', state: 'progress', message: 'Finalizing install...' },
 			{ agentId: 'demo', state: 'completed' },
 		]);
 		report.mockClear();
