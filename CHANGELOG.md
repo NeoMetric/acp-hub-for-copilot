@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.2
 
 - Show a clear message when Node.js or npm is missing, explaining that Node.js is required for the ACP adapters.
 - Show download progress (packages fetched) and a determinate progress bar while installing Claude and Codex.
