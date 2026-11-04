@@ -166,6 +166,11 @@
 						"Always use the signed-in account and ignore the saved API key and the key environment variables."
 					]
 				},
+				"acpHub.agents.claude.replaceSystemPrompt": {
+					"description": "On: Claude's built-in Claude Code prompt is replaced by Copilot's guidance for the chat; only the agent's one-line identity stays. Off: Copilot's guidance is added to the end of the Claude Code prompt. Changing it restarts the agent.",
+					"default": false,
+					"type": "boolean"
+				},
 				"acpHub.agents.codex.enabled": {
 					"type": "boolean",
 					"default": true,
@@ -205,6 +210,11 @@
 				},
 				"acpHub.agents.codex.maxContextWindow": {
 					"description": "Ask Codex for the largest context window each model allows instead of its default. Models that cannot be raised keep their default. A larger window delays compaction, so long chats re-send more history on every turn and use up your plan limits faster. Changing it restarts the agent.",
+					"default": false,
+					"type": "boolean"
+				},
+				"acpHub.agents.codex.replaceSystemPrompt": {
+					"description": "On: Codex's built-in instructions, bundled skills and environment notes are replaced by a one-line identity, and Copilot's guidance for the chat is added after it. Off: Copilot's guidance is added to Codex's own instructions. Changing it restarts the agent.",
 					"default": false,
 					"type": "boolean"
 				},

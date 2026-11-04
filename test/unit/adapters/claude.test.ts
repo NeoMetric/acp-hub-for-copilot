@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { claudeAdapter, modelCallUsageOf } from '../../../src/adapters/claude';
 import { claudeUsage } from '../../../src/adapters/claudeUsage';
 import type { AgentSettings, LaunchContext, SessionParamsInput } from '../../../src/core/adapter';
+import { HOST_IDENTITY } from '../../../src/core/hostIdentity';
 
 const STORAGE = path.join('C:', 'Users', 'Zoë Müller', 'storage', 'claude');
 
@@ -17,7 +18,7 @@ function launchContext(settings: AgentSettings = {}, apiKey?: string): LaunchCon
 	};
 }
 
-const sessionInput: SessionParamsInput = { disableBuiltInTools: true, reportEachModelCall: false, isNewSession: true };
+const sessionInput: SessionParamsInput = { disableBuiltInTools: true, replaceSystemPrompt: false, reportEachModelCall: false, isNewSession: true };
 
 describe('claudeAdapter', () => {
 	it('is described by the registry and installs the pinned npm package', () => {
@@ -31,7 +32,7 @@ describe('claudeAdapter', () => {
 			manifestDirectory: 'adapters/claude',
 		});
 		expect(claudeAdapter.usage).toBe(claudeUsage);
-		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference']);
+		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'replaceSystemPrompt']);
 	});
 
 	it('lists its sign-in methods', () => {
@@ -115,6 +116,18 @@ describe('claude sessionParams', () => {
 			},
 		});
 		expect(claudeAdapter.disableBuiltInTools?.({})).toBe(true);
+	});
+
+	it('replaces the Claude Code prompt with a string when the setting is on', () => {
+		const replaced = claudeAdapter.sessionParams?.({ ...sessionInput, replaceSystemPrompt: true, systemPromptAppend: 'guidance' }) as { _meta: { systemPrompt: unknown } };
+		const bare = claudeAdapter.sessionParams?.({ ...sessionInput, replaceSystemPrompt: true }) as { _meta: { systemPrompt: unknown } };
+
+		expect(replaced._meta.systemPrompt).toBe('guidance');
+		expect(bare._meta.systemPrompt).toBe(HOST_IDENTITY);
+	});
+
+	it('offers the replace setting', () => {
+		expect(claudeAdapter.settings.find(setting => setting.key === 'replaceSystemPrompt')).toMatchObject({ type: 'boolean', default: false });
 	});
 
 	it('asks for each model call only when the client wants them', () => {

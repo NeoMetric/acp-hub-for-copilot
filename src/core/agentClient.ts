@@ -406,6 +406,7 @@ export class AgentClient implements vscode.Disposable {
 		}
 		return this.adapter.sessionParams({
 			systemPromptAppend: options.systemPromptAppend,
+			replaceSystemPrompt: this.ctx.settings.replaceSystemPrompt === true,
 			model: options.model,
 			disableBuiltInTools: this.adapter.disableBuiltInTools?.(this.ctx.settings) ?? false,
 			reportEachModelCall: options.reportEachModelCall ?? false,

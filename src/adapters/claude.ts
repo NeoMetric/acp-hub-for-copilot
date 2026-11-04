@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AcpTokenUsage } from '../core/agentClient';
 import type { AgentAdapter, AgentSettings, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
+import { HOST_IDENTITY } from '../core/hostIdentity';
 import { REGISTRY, registryAgent } from '../core/registry';
 import { vendorOf } from '../core/vendors';
 import { claudeModelPolicy } from './claudeModels';
@@ -63,7 +64,11 @@ function sessionParams(input: SessionParamsInput): Record<string, unknown> {
 	}
 
 	const meta: Record<string, unknown> = { disableBuiltInTools: true, claudeCode };
-	if (input.systemPromptAppend) {
+	if (input.replaceSystemPrompt) {
+		// A string replaces the Claude Code prompt; the agent keeps one line of its own identity.
+		// A request without tools has no prompt of its own, but must not fall back to the preset.
+		meta.systemPrompt = input.systemPromptAppend ?? HOST_IDENTITY;
+	} else if (input.systemPromptAppend) {
 		meta.systemPrompt = { append: input.systemPromptAppend };
 	}
 	return { _meta: meta };

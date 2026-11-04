@@ -235,6 +235,7 @@ describe('AgentClient', () => {
 
 		expect(sessionParams).toHaveBeenCalledWith({
 			systemPromptAppend: 'be brief',
+			replaceSystemPrompt: false,
 			model: 'mock-2',
 			disableBuiltInTools: true,
 			reportEachModelCall: false,

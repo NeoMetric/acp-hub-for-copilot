@@ -100,6 +100,11 @@ export interface AgentSessionInfo {
 export interface SessionParamsInput {
 	/** Text appended to the agent's own system prompt. */
 	systemPromptAppend?: string;
+	/**
+	 * True when the agent's `replaceSystemPrompt` setting is on. An adapter that declares that
+	 * setting decides what replacing means for its agent; one that does not declare it never sees true.
+	 */
+	replaceSystemPrompt: boolean;
 	model?: string;
 	/** True when `disableBuiltInTools(settings)` said so. */
 	disableBuiltInTools: boolean;

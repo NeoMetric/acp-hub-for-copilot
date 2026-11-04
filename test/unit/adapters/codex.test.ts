@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { codexAdapter, mergeCodexConfig } from '../../../src/adapters/codex';
 import type { AgentSettings, LaunchContext, SessionParamsInput } from '../../../src/core/adapter';
+import { HOST_IDENTITY } from '../../../src/core/hostIdentity';
 
 let storage: string;
 
@@ -26,7 +27,7 @@ function launchContext(settings: AgentSettings = {}, apiKey?: string): LaunchCon
 	};
 }
 
-const sessionInput: SessionParamsInput = { disableBuiltInTools: false, reportEachModelCall: false, isNewSession: true };
+const sessionInput: SessionParamsInput = { disableBuiltInTools: false, replaceSystemPrompt: false, reportEachModelCall: false, isNewSession: true };
 
 describe('codexAdapter', () => {
 	it('is described by the registry and installs the pinned npm package', () => {
@@ -39,7 +40,7 @@ describe('codexAdapter', () => {
 			version: '2.3.0',
 			manifestDirectory: 'adapters/codex',
 		});
-		expect(codexAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'maxContextWindow']);
+		expect(codexAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'maxContextWindow', 'replaceSystemPrompt']);
 		expect(codexAdapter.defaultSessionMode).toBe('agent-full-access');
 	});
 
@@ -106,6 +107,25 @@ describe('codex mergeConfig', () => {
 
 	it('asks for the largest context window when the setting is on', () => {
 		expect(configOf({}, { maxContextWindow: true }).model_context_window).toBe(10_000_000);
+	});
+
+	it('keeps the Codex instructions unless the replace setting is on', () => {
+		const config = configOf({ CODEX_HOME: storage });
+
+		expect(config.model_instructions_file).toBeUndefined();
+		expect(config.skills).toBeUndefined();
+		expect(config.include_environment_context).toBeUndefined();
+		expect(fs.existsSync(path.join(storage, 'base-instructions.md'))).toBe(false);
+	});
+
+	it('replaces the Codex instructions with the identity line when the replace setting is on', () => {
+		const config = configOf({ CODEX_HOME: storage }, { replaceSystemPrompt: true });
+		const file = path.join(storage, 'base-instructions.md');
+
+		expect(config.model_instructions_file).toBe(file);
+		expect(config.skills).toEqual({ bundled: { enabled: false } });
+		expect(config.include_environment_context).toBe(false);
+		expect(fs.readFileSync(file, 'utf8')).toBe(HOST_IDENTITY);
 	});
 
 	it('refuses a CODEX_CONFIG that is not valid JSON and names it', () => {

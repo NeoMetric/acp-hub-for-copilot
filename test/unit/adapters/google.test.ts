@@ -186,7 +186,7 @@ describe('google hooks', () => {
 	});
 
 	it('sends the disabled tools and the system prompt in _meta.antigravity', () => {
-		const base = { disableBuiltInTools: true, reportEachModelCall: false, isNewSession: true };
+		const base = { disableBuiltInTools: true, replaceSystemPrompt: false, reportEachModelCall: false, isNewSession: true };
 		const params = googleAdapter.sessionParams?.({ ...base, systemPromptAppend: 'hello' }) as { _meta: { antigravity: { disabledTools: string[]; systemPrompt: unknown } } };
 
 		expect(params._meta.antigravity.disabledTools).toContain('run_command');

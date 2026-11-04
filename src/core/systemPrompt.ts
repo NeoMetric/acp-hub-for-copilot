@@ -7,6 +7,7 @@ import * as os from 'node:os';
 import * as vscode from 'vscode';
 import type { Log } from './logging';
 import { discoverCustomizations, type CustomFile, type CustomKind } from './customizations';
+import { HOST_IDENTITY } from './hostIdentity';
 
 /** Room for the required arguments of the tools the chat offers. */
 export const TOOL_ARGUMENTS_CHAR_BUDGET = 4_000;
@@ -36,7 +37,7 @@ export interface ToolArguments {
  * may produce. Everything else the model needs comes from the guidance.
  */
 function introOf(toolAccess: string): string {
-	return `You are running inside Visual Studio Code, as the model behind a chat in GitHub Copilot Chat. ${toolAccess} A result of one of these tools can end with a note that the user sent a new message while the tool ran. VS Code adds that note and the words after it are the user's own: treat them as their newest message.
+	return `${HOST_IDENTITY} ${toolAccess} A result of one of these tools can end with a note that the user sent a new message while the tool ran. VS Code adds that note and the words after it are the user's own: treat them as their newest message.
 
 Follow Microsoft content policies. Avoid content that violates copyrights. If you are asked to generate content that is harmful, hateful, racist, sexist, lewd, or violent, only respond with "Sorry, I can't assist with that."`;
 }

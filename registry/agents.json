@@ -9,7 +9,8 @@
 			"id": "claude",
 			"displayName": "Claude Agent",
 			"settings": [
-				{ "key": "authPreference", "type": "enum", "label": "Auth preference", "description": "Which credentials the Claude agent uses when both an API key and a signed-in account (OAuth) are available. Changing it restarts the agent.", "default": "auto", "options": ["auto", "apiKey", "oauth"], "optionDescriptions": ["Use the saved API key when there is one, otherwise the signed-in account.", "Use the saved API key. Without one, the agent falls back to its signed-in account.", "Always use the signed-in account and ignore the saved API key and the key environment variables."] }
+				{ "key": "authPreference", "type": "enum", "label": "Auth preference", "description": "Which credentials the Claude agent uses when both an API key and a signed-in account (OAuth) are available. Changing it restarts the agent.", "default": "auto", "options": ["auto", "apiKey", "oauth"], "optionDescriptions": ["Use the saved API key when there is one, otherwise the signed-in account.", "Use the saved API key. Without one, the agent falls back to its signed-in account.", "Always use the signed-in account and ignore the saved API key and the key environment variables."] },
+				{ "key": "replaceSystemPrompt", "type": "boolean", "label": "Replace the Claude Code system prompt", "description": "On: Claude's built-in Claude Code prompt is replaced by Copilot's guidance for the chat; only the agent's one-line identity stays. Off: Copilot's guidance is added to the end of the Claude Code prompt. Changing it restarts the agent.", "default": false }
 			]
 		},
 		{
@@ -17,7 +18,8 @@
 			"displayName": "Codex Agent",
 			"settings": [
 				{ "key": "authPreference", "type": "enum", "label": "Auth preference", "description": "Which credentials the Codex agent uses when both an OpenAI API key and a ChatGPT account are available. Changing it restarts the agent.", "default": "auto", "options": ["auto", "apiKey", "chatgpt"], "optionDescriptions": ["Use the saved OpenAI API key when there is one, otherwise the ChatGPT account.","Use the saved OpenAI API key. Without one, the agent falls back to its ChatGPT account.","Always use the ChatGPT account: the saved API key is ignored and CODEX_API_KEY and OPENAI_API_KEY are withheld from the agent."] },
-				{ "key": "maxContextWindow", "type": "boolean", "label": "Largest context window", "description": "Ask Codex for the largest context window each model allows instead of its default. Models that cannot be raised keep their default. A larger window delays compaction, so long chats re-send more history on every turn and use up your plan limits faster. Changing it restarts the agent.", "default": false }
+				{ "key": "maxContextWindow", "type": "boolean", "label": "Largest context window", "description": "Ask Codex for the largest context window each model allows instead of its default. Models that cannot be raised keep their default. A larger window delays compaction, so long chats re-send more history on every turn and use up your plan limits faster. Changing it restarts the agent.", "default": false },
+				{ "key": "replaceSystemPrompt", "type": "boolean", "label": "Replace the Codex system prompt", "description": "On: Codex's built-in instructions, bundled skills and environment notes are replaced by a one-line identity, and Copilot's guidance for the chat is added after it. Off: Copilot's guidance is added to Codex's own instructions. Changing it restarts the agent.", "default": false }
 			]
 		},
 		{

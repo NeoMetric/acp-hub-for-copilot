@@ -1,5 +1,8 @@
 import type { AcpAuthMethod } from '../core/agentClient';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { AgentAdapter, AgentSettings, AuthenticateRequest, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
+import { HOST_IDENTITY } from '../core/hostIdentity';
 import { REGISTRY, registryAgent } from '../core/registry';
 import { vendorOf } from '../core/vendors';
 import { ensureCodexHome } from './codexHome';
@@ -116,10 +119,16 @@ function readUserConfig(existing: string | undefined): Record<string, unknown> {
  * transport"), so `session/new` fails and the agent offers no models at all, and the
  * adapter skips a session's server whose name the config already defines.
  */
-export function mergeCodexConfig(existing: string | undefined, maxContextWindow: boolean): string {
+export function mergeCodexConfig(existing: string | undefined, maxContextWindow: boolean, baseInstructionsFile?: string): string {
 	const config = readUserConfig(existing);
 	if (maxContextWindow) {
 		config.model_context_window = RAISED_CONTEXT_WINDOW;
+	}
+	if (baseInstructionsFile) {
+		// Replaces Codex's own instructions; the bundled skills and the environment notes are Codex's too.
+		config.model_instructions_file = baseInstructionsFile;
+		config.skills = { ...asRecord(config.skills), bundled: { ...asRecord(asRecord(config.skills).bundled), enabled: false } };
+		config.include_environment_context = false;
 	}
 	const features = { ...asRecord(config.features), ...DISABLED_BUILT_IN_FEATURES };
 	// Code mode stays on: it is the only way the model reaches the bridge's tools.
@@ -152,8 +161,22 @@ function mergeConfig(settings: AgentSettings, env: Record<string, string>): Reco
 		delete merged.CODEX_API_KEY;
 	}
 
-	merged.CODEX_CONFIG = mergeCodexConfig(merged.CODEX_CONFIG, booleanSetting(settings, 'maxContextWindow'));
+	const baseInstructionsFile = booleanSetting(settings, 'replaceSystemPrompt') ? writeBaseInstructions(merged.CODEX_HOME) : undefined;
+	merged.CODEX_CONFIG = mergeCodexConfig(merged.CODEX_CONFIG, booleanSetting(settings, 'maxContextWindow'), baseInstructionsFile);
 	return merged;
+}
+
+/**
+ * Codex reads its base instructions from a file, once for the whole agent, so the file holds
+ * only what never changes. The guidance of each chat still goes in as an appended prompt.
+ */
+function writeBaseInstructions(codexHome: string | undefined): string | undefined {
+	if (!codexHome) {
+		return undefined;
+	}
+	const file = path.join(codexHome, 'base-instructions.md');
+	fs.writeFileSync(file, HOST_IDENTITY);
+	return file;
 }
 
 /**
