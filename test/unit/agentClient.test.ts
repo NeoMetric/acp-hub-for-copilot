@@ -239,6 +239,7 @@ describe('AgentClient', () => {
 			model: 'mock-2',
 			disableBuiltInTools: true,
 			reportEachModelCall: false,
+			settings: { own: true },
 			isNewSession: true,
 		});
 	});

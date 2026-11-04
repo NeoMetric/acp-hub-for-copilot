@@ -166,6 +166,21 @@
 						"Always use the signed-in account and ignore the saved API key and the key environment variables."
 					]
 				},
+				"acpHub.agents.claude.toolSearch": {
+					"description": "Whether Copilot's tools are loaded on demand. On: the model sees only tool names and fetches a tool's description when it needs it, which makes each request much smaller but can add a lookup step before a tool is first used (not supported by every model, Haiku included). Off: every tool's full description is sent with every request. Default: the agent decides. Changing it restarts the agent.",
+					"default": "default",
+					"type": "string",
+					"enum": [
+						"default",
+						"on",
+						"off"
+					],
+					"enumDescriptions": [
+						"Leave it to the agent.",
+						"Load tools on demand.",
+						"Send every tool's description with every request."
+					]
+				},
 				"acpHub.agents.claude.replaceSystemPrompt": {
 					"description": "On: Claude's built-in Claude Code prompt is replaced by Copilot's guidance for the chat; only the agent's one-line identity stays. Off: Copilot's guidance is added to the end of the Claude Code prompt. Changing it restarts the agent.",
 					"default": false,

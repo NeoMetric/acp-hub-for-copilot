@@ -32,7 +32,7 @@ describe('claudeAdapter', () => {
 			manifestDirectory: 'adapters/claude',
 		});
 		expect(claudeAdapter.usage).toBe(claudeUsage);
-		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'replaceSystemPrompt']);
+		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'toolSearch', 'replaceSystemPrompt']);
 	});
 
 	it('lists its sign-in methods', () => {
@@ -88,6 +88,15 @@ describe('claude mergeConfig', () => {
 		expect(merged?.PATH).toBe('x');
 	});
 
+	it('sets tool search only when the user chose on or off', () => {
+		const env = { ENABLE_TOOL_SEARCH: 'auto' };
+
+		expect(claudeAdapter.mergeConfig?.({}, env).ENABLE_TOOL_SEARCH).toBe('auto');
+		expect(claudeAdapter.mergeConfig?.({ toolSearch: 'default' }, {}).ENABLE_TOOL_SEARCH).toBeUndefined();
+		expect(claudeAdapter.mergeConfig?.({ toolSearch: 'on' }, env).ENABLE_TOOL_SEARCH).toBe('true');
+		expect(claudeAdapter.mergeConfig?.({ toolSearch: 'off' }, {}).ENABLE_TOOL_SEARCH).toBe('false');
+	});
+
 	it('removes a key of the shell when only the signed-in account is wanted', () => {
 		const env = { ANTHROPIC_API_KEY: 'sk-ant-shell' };
 
@@ -97,6 +106,15 @@ describe('claude mergeConfig', () => {
 });
 
 describe('claude sessionParams', () => {
+	it('keeps the tool search tool only when tool search is on', () => {
+		const toolsOf = (settings?: AgentSettings) => (claudeAdapter.sessionParams?.({ ...sessionInput, settings }) as { _meta: { claudeCode: { options: { tools: unknown } } } })._meta.claudeCode.options.tools;
+
+		expect(toolsOf()).toEqual([]);
+		expect(toolsOf({ toolSearch: 'default' })).toEqual([]);
+		expect(toolsOf({ toolSearch: 'off' })).toEqual([]);
+		expect(toolsOf({ toolSearch: 'on' })).toEqual(['ToolSearch']);
+	});
+
 	it('turns every built-in tool off and carries the system prompt', () => {
 		const params = claudeAdapter.sessionParams?.({ ...sessionInput, systemPromptAppend: 'guidance', model: 'claude-x' });
 

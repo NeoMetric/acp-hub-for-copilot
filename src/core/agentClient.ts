@@ -410,6 +410,7 @@ export class AgentClient implements vscode.Disposable {
 			model: options.model,
 			disableBuiltInTools: this.adapter.disableBuiltInTools?.(this.ctx.settings) ?? false,
 			reportEachModelCall: options.reportEachModelCall ?? false,
+			settings: this.ctx.settings,
 			isNewSession,
 		});
 	}

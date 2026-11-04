@@ -38,6 +38,10 @@ function mergeConfig(settings: AgentSettings, env: Record<string, string>): Reco
 	// The agent gives up on a tool call after 60 seconds by default, but a call waits for
 	// Copilot to run the tool, which can take as long as the user needs to answer a
 	// question or approve a command. A value the user already set is kept.
+	const toolSearch = stringSetting(settings, 'toolSearch', 'default');
+	if (toolSearch === 'on' || toolSearch === 'off') {
+		merged.ENABLE_TOOL_SEARCH = toolSearch === 'on' ? 'true' : 'false';
+	}
 	merged.MCP_TOOL_TIMEOUT ??= String(TOOL_CALL_TIMEOUT_MS);
 	merged.CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT ??= String(TOOL_CALL_TIMEOUT_MS);
 	return merged;
@@ -47,7 +51,9 @@ function sessionParams(input: SessionParamsInput): Record<string, unknown> {
 	const claudeCodeOptions: Record<string, unknown> = {
 		// An empty list removes every built-in tool; the adapter reads `disableBuiltInTools`
 		// as a legacy shorthand for the same, so both are sent and neither can be dropped silently.
-		tools: [],
+		// Tool search is the one exception: the agent loads every tool in full when its
+		// search tool is missing, so turning tool search on keeps that one.
+		tools: stringSetting(input.settings ?? {}, 'toolSearch', 'default') === 'on' ? ['ToolSearch'] : [],
 		allowedTools: ['mcp__vscode__*'],
 		strictMcpConfig: true,
 		settingSources: [],

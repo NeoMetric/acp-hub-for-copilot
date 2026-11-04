@@ -109,6 +109,8 @@ export interface SessionParamsInput {
 	/** True when `disableBuiltInTools(settings)` said so. */
 	disableBuiltInTools: boolean;
 	reportEachModelCall: boolean;
+	/** The agent's settings, for an adapter whose session options depend on one. */
+	settings?: AgentSettings;
 	/** `session/resume` and `session/fork` may refuse a system prompt that `session/new` takes. */
 	isNewSession: boolean;
 }
