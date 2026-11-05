@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add a "Cache misses" counter to each agent card, with the tokens that were billed at full price instead of read from the cache, and a separate count for misses after the chat sat idle longer than the cache lives.
+- Fix toggling Copilot's tools, such as Search Tools, rebuilding the chat session and missing the cache. The reminder Copilot adds to the end of a request when tools are deferred is no longer taken as a change to the chat.
+- Move per-request log lines (requests, tool and guidance changes, session reuse details, usage) from the info to the debug level and drop duplicates, so the log shows what matters.
+
 ## 0.0.4
 
 - Fix skill context arriving separately from its tool result being taken as a new message from the user, which ended the running turn and started a new one. The context now goes to the agent with its tool result.

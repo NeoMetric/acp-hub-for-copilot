@@ -97,16 +97,24 @@ describe('McpBridge', () => {
 		bridge.updateTools(endpoint.token, [...two].reverse());
 
 		expect(JSON.stringify((await rpc('tools/list')).result)).toBe(first);
-		expect((await rpc('tools/list')).result.tools.map((tool: { name: string }) => tool.name)).toEqual(['a', 'b']);
+		expect((await rpc('tools/list')).result.tools.map((tool: { name: string }) => tool.name)).toEqual(['a', 'b', 'read_file']);
 	});
 
-	it('picks up replaced tools', async () => {
+	it('keeps listing a withdrawn tool, so the agent\'s cached tool block stays, but refuses to run it', async () => {
 		bridge.updateTools(endpoint.token, []);
 
-		expect((await rpc('tools/list')).result.tools).toEqual([]);
+		expect((await rpc('tools/list')).result.tools.map((tool: { name: string }) => tool.name)).toEqual(['read_file']);
+		expect((await rpc('tools/call', { name: 'read_file' })).result.isError).toBe(true);
+		expect(execute).not.toHaveBeenCalled();
 	});
 
-	it('tells an open notification stream that the tool list changed, so a disabled tool stops being offered', async () => {
+	it('stays quiet when a tool is withdrawn', () => {
+		bridge.updateTools(endpoint.token, []);
+
+		expect(logs.filter(line => line.includes('Tool set of an agent session grew'))).toHaveLength(0);
+	});
+
+	it('tells an open notification stream that the tool list changed, so an enabled tool starts being offered', async () => {
 		const response = await fetch(endpoint.url, { headers: { authorization: `Bearer ${endpoint.token}` } });
 		expect(response.status).toBe(200);
 		expect(response.headers.get('content-type')).toContain('text/event-stream');
@@ -126,7 +134,7 @@ describe('McpBridge', () => {
 		};
 
 		await readUntil('waiting for notifications');
-		bridge.updateTools(endpoint.token, []);
+		bridge.updateTools(endpoint.token, [{ name: 'write_file', description: '' }] as unknown as vscode.LanguageModelChatTool[]);
 		expect(await readUntil('notifications/tools/list_changed')).toContain('notifications/tools/list_changed');
 
 		await reader.cancel();
@@ -137,7 +145,7 @@ describe('McpBridge', () => {
 		bridge.updateTools(endpoint.token, two);
 		bridge.updateTools(endpoint.token, [...two].reverse());
 
-		expect(logs.filter(line => line.includes('Tool set of an agent session changed'))).toHaveLength(1);
+		expect(logs.filter(line => line.includes('Tool set of an agent session grew'))).toHaveLength(1);
 	});
 
 	it('drops the notification stream when its session goes away', async () => {

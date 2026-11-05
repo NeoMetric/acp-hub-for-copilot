@@ -95,10 +95,5 @@ export function reportUsage(turn: ActiveTurn, log: Log): void {
 		completion_tokens_details: { reasoning_tokens: usage?.reasoningOutputTokens ?? 0 },
 	};
 	turn.progress.report(vscode.LanguageModelDataPart.json(payload, 'usage'));
-	log(`Reported usage: ${promptTokens} prompt token(s), ${completionTokens} completion token(s)`);
-	if (usage) {
-		const totalInput = usage.inputTokens + usage.cachedReadTokens + usage.cachedWriteTokens;
-		const hitRate = totalInput > 0 ? ((usage.cachedReadTokens / totalInput) * 100).toFixed(1) : '0';
-		log(`Cache: ${hitRate}% hit rate (${usage.cachedReadTokens} cached, ${usage.inputTokens} fresh, ${usage.cachedWriteTokens} written)`);
-	}
+	log(`Reported usage: ${promptTokens} prompt token(s), ${completionTokens} completion token(s)`, 'debug');
 }

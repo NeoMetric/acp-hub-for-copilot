@@ -278,6 +278,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 				note: usage.reading?.note,
 				error: usage.error,
 				fetchedAt: usage.fetchedAt,
+				cacheMisses: usage.cacheMisses,
 			},
 			busy: this.busy.get(adapter.id),
 			installPercent: this.installProgress.get(adapter.id),

@@ -187,7 +187,7 @@ export class TurnRunner {
 					reportUsage(turn, this.log);
 					turn.streaming = false;
 					this.watchTools(key, session, turn);
-					this.log(`Turn for ${key} asked for ${turn.pending.size} tool call(s); returning them to Copilot.`);
+					this.log(`Turn for ${key} asked for ${turn.pending.size} tool call(s); returning them to Copilot.`, 'debug');
 					return;
 				}
 				await Promise.race([sleepUntilActivity(turn), turn.prompt.then(() => undefined, () => undefined)]);

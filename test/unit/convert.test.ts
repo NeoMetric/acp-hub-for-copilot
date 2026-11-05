@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TRANSCRIPT_OPTIONS, carriesToolResults, characterCountOf, chatContextBlock, customInstructionsBlock, diverged, fingerprint, firstMessageAfterReply, firstUserWordsIn, imageFingerprint, lastUserMessageIndex, textOf, toAcpContentBlocks, toTranscriptBlock, userWordsAfterReply } from '../../src/core/convert';
+import { DEFAULT_TRANSCRIPT_OPTIONS, carriesToolResults, characterCountOf, chatContextBlock, customInstructionsBlock, diverged, fingerprint, firstMessageAfterReply, firstUserWordsIn, imageFingerprint, lastUserMessageIndex, persistentFingerprints, textOf, toAcpContentBlocks, toTranscriptBlock, userWordsAfterReply } from '../../src/core/convert';
 import { assistant, image, system, toolCall, toolResult, user } from './messages';
 import { LanguageModelTextPart, LanguageModelToolCallPart, LanguageModelToolResultPart } from './vscode-mock';
 
@@ -223,6 +223,34 @@ describe('fingerprint and diverged', () => {
 		const after = [system('root: c:\\repo'), user('hi'), assistant('hello'), user('more')].map(fingerprint);
 
 		expect(diverged(before, after)).toBe(false);
+	});
+
+	it('does not let a reminder Copilot adds to a user message change the fingerprint', () => {
+		// A tool toggle makes Copilot add a reminder to an earlier user message; the message itself is unchanged.
+		const before = user('fix the bug');
+		const after = user('<system_reminder>The tools changed.</system_reminder>\nfix the bug');
+
+		expect(fingerprint(after)).toBe(fingerprint(before));
+		expect(diverged([fingerprint(before)], [fingerprint(after)])).toBe(false);
+	});
+
+	it('leaves a trailing message that only holds a reminder out of the history', () => {
+		// With deferred tools, Copilot ends a request with a reminder-only user message and drops it from the next one.
+		const reminder = user('<system_reminder>\nThe deferred tools: a, b\n</system_reminder>');
+		const first = persistentFingerprints([user('hi'), reminder]);
+		const second = persistentFingerprints([user('hi'), assistant('hello'), user('more'), reminder]);
+
+		expect(first).toEqual([fingerprint(user('hi'))]);
+		expect(diverged(first, second)).toBe(false);
+		expect(second).toHaveLength(3);
+	});
+
+	it('keeps a reminder that is not alone in its message or not at the end', () => {
+		const reminder = user('<system_reminder>x</system_reminder>');
+
+		expect(persistentFingerprints([user('hi'), user('<system_reminder>x</system_reminder>\nmore')])).toHaveLength(2);
+		expect(persistentFingerprints([reminder, user('hi')])).toHaveLength(2);
+		expect(persistentFingerprints([user('hi'), user('<system_reminder>x</system_reminder>', image([1]))])).toHaveLength(2);
 	});
 
 	it('hashes an image part once', () => {

@@ -28,6 +28,8 @@ export interface UsageView {
 	note?: string;
 	error?: string;
 	fetchedAt?: number;
+	/** Cache misses of chats that were already running. */
+	cacheMisses?: { unexpected: number; expired: number; lostTokens: number };
 }
 
 export interface AgentCardState {

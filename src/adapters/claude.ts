@@ -167,6 +167,7 @@ export const claudeAdapter: AgentAdapter = {
 		listRequiredArguments: false,
 	},
 	usage: claudeUsage,
+	refreshesTools: true,
 	signInCompleted,
 	disableBuiltInTools: () => true,
 	mergeConfig,

@@ -9,7 +9,7 @@ import type { AgentAdapter, AgentSettings, LaunchContext } from './adapter';
 import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentSession, type CreateSessionOptions } from './agentClient';
 import type { McpToolResult } from './bridge';
 import type { RequestMeasurement } from './cache';
-import { carriesToolResults, characterCountOf, diverged, fingerprint, lastUserMessageIndex, skillContextAfterReply, userWordsAfterReply } from './convert';
+import { carriesToolResults, characterCountOf, diverged, lastUserMessageIndex, persistentFingerprints, skillContextAfterReply, userWordsAfterReply } from './convert';
 import type { Log } from './logging';
 import { acpModelValue, effortOf } from './models';
 import { createRequestDump, summarizeRequest } from './requestDump';
@@ -19,7 +19,7 @@ import { createSessionPrompt } from './systemPrompt';
 import { buildPromptBlocks } from './provider/assemble';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './provider/heldCalls';
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESSION_IDLE_MS } from './provider/idle';
-import { chatContextOf, chatIdOf, chatLabelOf, guidanceDiffers, guidanceHashOf, sessionKey, toolsDiffer } from './provider/keys';
+import { chatContextOf, chatIdOf, chatLabelOf, describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, sessionKey, toolChangeOf, toolsDiffer } from './provider/keys';
 import { ModelList } from './provider/modelList';
 import { findReusable, promptHashOf } from './provider/reuse';
 import { applyEffort, applyModel, describe, switchModelInPlace } from './provider/sessionOptions';
@@ -212,7 +212,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		const effort = effortOf(options);
 		const toolNames = tools.map(tool => tool.name);
 		this.log(`Request shape: ${summarizeRequest(messages, options)}`, 'debug');
-		this.log(`Request from Copilot: model ${model.id}, ${messages.length} message(s), ${tools.length} tool(s): ${toolNames.join(', ') || 'none'}`);
+		this.log(`Request from Copilot: model ${model.id}, ${messages.length} message(s), ${tools.length} tool(s): ${toolNames.join(', ') || 'none'}`, 'debug');
 		// A session released a moment ago must be gone from the agent before it is resumed.
 		await this.closing.get(key);
 		lap(`previous session settled, ${this.sessions.has(key) ? 'chat has a live session' : 'new chat'}`);
@@ -228,7 +228,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			await this.turns.abort(session);
 			session = await this.switchModel(key, session, model, tools, context);
 		}
-		const fingerprints = messages.map(fingerprint);
+		const fingerprints = persistentFingerprints(messages);
 		const lastUser = lastUserMessageIndex(messages);
 
 		// Copilot ran the tools of the pending turn: hand the results back to the
@@ -270,13 +270,17 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			await this.turns.abort(session);
 		}
 
-		if (session && tools.length > 0 && (!session.hasPrompt || toolsDiffer(session.openedTools, tools) || guidanceDiffers(session.context.guidance, context.guidance))) {
+		// An agent that refreshes its tool list on `tools/list_changed` takes a changed tool set
+		// from `applyTools` below; any other reads its tools only when its session opens.
+		const toolsChanged = this.adapter.refreshesTools !== true && session !== undefined && toolsDiffer(session.openedTools, tools);
+		if (session && tools.length > 0 && (!session.hasPrompt || toolsChanged)) {
 			// The chat was opened by a request that offered no tools, such as a title,
-			// and so got no workspace prompt; or Copilot now offers a tool this session
-			// never saw, or describes the chat differently. The agent takes its prompt and
-			// its tools when it opens a session, so the chat gets a new one; its messages
-			// are restored into it.
-			this.log(`Chat ${key} ${session.hasPrompt ? 'changed its tools or its guidance' : 'now offers tools'}; giving it a new session.`);
+			// and so got no workspace prompt; or Copilot now offers other tools than the
+			// session has. The agent takes its prompt and its tools when it opens a session,
+			// so the chat gets a new one that continues the stored conversation when it can,
+			// and otherwise has its messages restored.
+			const change = session.hasPrompt ? ` (${describeToolChange(toolChangeOf(session.openedTools, tools.map(tool => tool.name)))})` : '';
+			this.log(`Chat ${key} ${session.hasPrompt ? `changed its tools${change}` : 'now offers tools'}; reopening it with the current ones.`);
 			await this.destroySession(key);
 			session = undefined;
 		}
@@ -284,6 +288,8 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, this.adapter.forkChats === true, this.log) : undefined;
 			session = await this.createChatSession(key, model, tools, context, reuse, effort, lap);
 			lap('chat session created');
+		} else if (tools.length > 0 && guidanceDiffers(session.context.guidance, context.guidance)) {
+			this.sendGuidanceChange(key, session, context.guidance);
 		}
 		this.applyTools(session, tools);
 		await applyEffort(this.agent, this.adapter.modelPolicy, session, effort, this.log);
@@ -296,7 +302,8 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		let restoreContext = session.history.length === 0;
 
 		if (session.history.length > fingerprints.length || diverged(session.history, fingerprints)) {
-			this.log(`Chat history changed for ${key}; starting a fresh ACP session.`);
+			const at = session.history.findIndex((fingerprint, index) => fingerprint !== fingerprints[index]);
+			this.log(`Chat history changed for ${key}; starting a fresh ACP session. The session had seen ${session.history.length} message(s), the request has ${fingerprints.length}; ${at < 0 ? 'the request is shorter and otherwise the same' : `the first difference is message #${at + 1}: was ${(session.history[at] ?? '').slice(0, 120)}, now ${(fingerprints[at] ?? '').slice(0, 120)}`}.`, 'warn');
 			await this.destroySession(key);
 			session = await this.createChatSession(key, model, tools, context, undefined, effort);
 			this.applyTools(session, tools);
@@ -373,7 +380,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	async publishModels(): Promise<void> {
 		try {
 			await vscode.lm.selectChatModels({ vendor: this.adapter.vendor });
-			this.log('Published models to the workbench.');
+			this.log('Published models to the workbench.', 'debug');
 		} catch (error) {
 			this.log(`Could not publish models: ${describe(error)}`, 'error');
 		}
@@ -607,6 +614,26 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		}
 	}
 
+	/**
+	 * Copilot describes the chat afresh with every request, and the agent keeps the
+	 * guidance it was opened with. As natively, a live session is not reopened for that:
+	 * the lines that changed go with the next prompt, and the session counts from then on
+	 * as having been told the new guidance.
+	 */
+	private sendGuidanceChange(key: string, session: ChatSession, guidance: string | undefined): void {
+		const change = guidanceChangeOf(guidanceLineHashes(session.context.guidance), guidance);
+		const pending = session.guidanceChange;
+		if (change.added.length > 0 || change.removed > 0) {
+			session.guidanceChange = pending
+				? { added: [...new Set([...pending.added, ...change.added])], removed: pending.removed + change.removed }
+				: change;
+		}
+		const hash = guidanceHashOf(guidance);
+		this.log(`The guidance of chat ${key} changed (${session.guidanceHash} -> ${hash}): ${change.added.length} line(s) new, ${change.removed} gone; sending the change with the next prompt.`, 'debug');
+		session.context = { ...session.context, guidance };
+		session.guidanceHash = hash;
+	}
+
 	/** Applies the tool set of a request to the session, which tells the agent when it changed. */
 	private applyTools(session: ChatSession, tools: readonly vscode.LanguageModelChatTool[]): void {
 		// A request that offers no tools is Copilot's own, such as a chat title: it says
@@ -617,6 +644,14 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		}
 		this.deps.bridge.updateTools(session.endpoint.token, tools);
 		session.toolCount = tools.length;
+		// Only an agent that refreshes its list has the new tools now; any other keeps
+		// what it opened with, so the next request still sees the difference.
+		if (this.adapter.refreshesTools === true && toolsDiffer(session.openedTools, tools)) {
+			const names = tools.map(tool => tool.name);
+			this.log(`Tools of the chat session changed: ${describeToolChange(toolChangeOf(session.openedTools, names))}.`, 'debug');
+			session.openedTools = new Set(names);
+			session.toolsHash = toolsHashOf(names);
+		}
 	}
 
 

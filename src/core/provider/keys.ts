@@ -26,12 +26,23 @@ export function keepsSessionAfterFailure(error: unknown, failures: number, signe
 }
 
 /**
- * Whether Copilot now offers a different set of tools than the session opened
- * with. The agent lists its tools once, when it opens, so a tool added or removed
- * later only reaches it through a new session.
+ * Whether Copilot now offers a different set of tools than the session has.
+ * An agent that does not refresh its tool list on `tools/list_changed` reads it
+ * once, when its session opens, so such a change only reaches it by reopening the session.
  */
 export function toolsDiffer(opened: ReadonlySet<string>, tools: readonly vscode.LanguageModelChatTool[]): boolean {
 	return tools.length !== opened.size || tools.some(tool => !opened.has(tool.name));
+}
+
+/** The tools that were added and removed between two sets of names, for the log. */
+export function toolChangeOf(before: Iterable<string>, after: Iterable<string>): { added: string[]; removed: string[] } {
+	const was = new Set(before);
+	const now = new Set(after);
+	return { added: [...now].filter(name => !was.has(name)).sort(), removed: [...was].filter(name => !now.has(name)).sort() };
+}
+
+export function describeToolChange(change: { added: readonly string[]; removed: readonly string[] }): string {
+	return `${change.added.length} tool(s) added${change.added.length ? ` (${change.added.join(', ')})` : ''}, ${change.removed.length} removed${change.removed.length ? ` (${change.removed.join(', ')})` : ''}`;
 }
 
 /**

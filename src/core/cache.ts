@@ -60,6 +60,56 @@ function statsOf(usage: AcpTokenUsage, background: boolean): CacheStats {
 	};
 }
 
+/** What a chat's previous model call left in the prompt cache. */
+interface CallBaseline {
+	/** Input tokens the cache held for the chat afterwards: what that call read plus what it wrote. */
+	readonly cached: number;
+	readonly total: number;
+	readonly at: number;
+}
+
+/** The cache lives five minutes from its last use. */
+const CACHE_TTL_MS = 5 * 60_000;
+/** Below this the API does not cache a prompt, so a small prefix proves nothing. */
+const MIN_CACHEABLE_TOKENS = 1_024;
+/** The share of the expected prefix that must be read for the call to count as served. */
+const SERVED_SHARE = 0.5;
+/** A call that shrinks below this share of the earlier prompt was compacted or rewound, so the old prefix no longer applies. */
+const SHRUNK_SHARE = 0.7;
+const MAX_TRACKED_CHATS = 200;
+
+/** Cache misses of chats that were already running, as the sidebar shows them. */
+export interface MissStats {
+	/** Calls that lost a prefix the cache should have held. */
+	readonly unexpected: number;
+	/** Calls that lost it after the chat sat idle longer than the cache lives; nothing to fix. */
+	readonly expired: number;
+	/** Tokens that were billed at full price for lack of the cache. */
+	readonly lostTokens: number;
+}
+
+/**
+ * Whether a model call of a chat that already ran missed the cache. The previous
+ * call left a prefix of `cached` tokens, which this call extends, so it should read
+ * nearly all of that. A first call has nothing to compare with and is never a miss,
+ * and neither is a call that shrank the prompt. The cost is the tokens it paid for
+ * that the cache should have served.
+ */
+export function detectMiss(previous: CallBaseline | undefined, call: InputCounts, now: number): { readonly lostTokens: number; readonly expired: boolean } | undefined {
+	if (!previous || previous.cached < MIN_CACHEABLE_TOKENS) {
+		return undefined;
+	}
+	const total = totalInput(call);
+	if (total < previous.total * SHRUNK_SHARE) {
+		return undefined;
+	}
+	const servable = Math.min(previous.cached, total);
+	if (call.cachedReadTokens >= servable * SERVED_SHARE) {
+		return undefined;
+	}
+	return { lostTokens: servable - call.cachedReadTokens, expired: now - previous.at > CACHE_TTL_MS };
+}
+
 /**
  * One finished model call of a turn, with the turn's figures so far. The agent
  * makes a call per tool round trip, so this is what the cache serves.
@@ -101,6 +151,12 @@ export class CacheTracker {
 	private cachedWrite = 0;
 	private uncached = 0;
 	private requests = 0;
+	private readonly baselines = new Map<string, CallBaseline>();
+	private unexpectedMisses = 0;
+	private expiredMisses = 0;
+	private lostTokens = 0;
+
+	constructor(private readonly now: () => number = Date.now) { }
 
 	/** Adds a finished turn. Returns whether it counted: a turn without input says nothing about the cache. */
 	record(usage: AcpTokenUsage | undefined, background = false): boolean {
@@ -136,10 +192,40 @@ export class CacheTracker {
 		if (background) {
 			return true;
 		}
+		this.trackMiss(measurement.chat?.id, call);
 
 		this.lastChatCall = stats;
 		this.live = totalInput(turn) > 0 ? statsOf(turn, false) : undefined;
 		return true;
+	}
+
+	/** Compares the call with what the chat's previous call left cached. The baseline is kept per chat, so a chat moved to a new session is still compared. */
+	private trackMiss(chatId: string | undefined, call: AcpTokenUsage): void {
+		if (!chatId) {
+			return;
+		}
+		const now = this.now();
+		const miss = detectMiss(this.baselines.get(chatId), call, now);
+		if (miss) {
+			this.lostTokens += miss.lostTokens;
+			if (miss.expired) {
+				this.expiredMisses += 1;
+			} else {
+				this.unexpectedMisses += 1;
+			}
+		}
+		this.baselines.delete(chatId);
+		this.baselines.set(chatId, { cached: call.cachedReadTokens + call.cachedWriteTokens, total: totalInput(call), at: now });
+		if (this.baselines.size > MAX_TRACKED_CHATS) {
+			this.baselines.delete(this.baselines.keys().next().value as string);
+		}
+	}
+
+	/** Misses among the calls of chats that were already running; `undefined` until one was seen. */
+	get misses(): MissStats | undefined {
+		return this.unexpectedMisses + this.expiredMisses > 0
+			? { unexpected: this.unexpectedMisses, expired: this.expiredMisses, lostTokens: this.lostTokens }
+			: undefined;
 	}
 
 	/** The live figures: the turn in flight, otherwise the latest chat turn. */
@@ -188,6 +274,10 @@ export class CacheTracker {
 		this.cachedWrite = 0;
 		this.uncached = 0;
 		this.requests = 0;
+		this.baselines.clear();
+		this.unexpectedMisses = 0;
+		this.expiredMisses = 0;
+		this.lostTokens = 0;
 	}
 }
 

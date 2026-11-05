@@ -88,7 +88,7 @@ async function applyModelWithEffort(agent: AgentApi, session: ChatSession, effor
 	} catch (error) {
 		log(`${label}Could not read the session options back after setting the effort (${describe(error)}).`, 'debug');
 	}
-	log(`${label}Session ${session.acp.sessionId} runs on "${model}" with thinking effort "${effort}"`);
+	log(`${label}Session ${session.acp.sessionId} runs on "${model}" with thinking effort "${effort}"`, 'debug');
 }
 
 /**
@@ -118,7 +118,7 @@ export async function applyEffort(agent: AgentApi, policy: ModelPolicy, session:
 			session.acp.configOptions = configOptions;
 		}
 		session.effortFailure = undefined;
-		log(`Applied thinking effort "${effort}" to session ${session.acp.sessionId}`);
+		log(`Applied thinking effort "${effort}" to session ${session.acp.sessionId}`, 'debug');
 	} catch (error) {
 		log(`Could not apply thinking effort "${effort}" to ${session.model}: ${describe(error)}`, 'warn');
 	}

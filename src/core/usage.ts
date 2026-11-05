@@ -2,7 +2,7 @@ import type { AgentAdapter, UsageContext, UsageReading, UsageWindow } from './ad
 import type { Log } from './logging';
 import type { AcpTokenUsage } from './agentClient';
 import { isAuthRequiredError } from './rpc';
-import { CacheTracker, type CacheStats, type RequestMeasurement } from './cache';
+import { CacheTracker, type CacheStats, type MissStats, type RequestMeasurement } from './cache';
 
 /** A reading younger than this is reused instead of asking the agent again. */
 export const FRESH_MS = 60_000;
@@ -27,6 +27,8 @@ export interface UsageState {
 	extraWindows: UsageWindow[];
 	/** Latest measured model call, preferring chat calls over background requests. */
 	lastModelCall?: CacheStats;
+	/** Calls of already running chats that lost the cache they should have had. */
+	cacheMisses?: MissStats;
 }
 
 export type UsageListener = (agentId: string) => void;
@@ -72,7 +74,7 @@ export class UsageStore {
 		let cache = this.caches.get(agentId);
 		if (!cache) { cache = new CacheTracker(); this.caches.set(agentId, cache); }
 		if (cache.recordRequest(measurement)) {
-			this.update(agentId, { lastModelCall: cache.latestRequest });
+			this.update(agentId, { lastModelCall: cache.latestRequest, cacheMisses: cache.misses });
 		}
 	}
 

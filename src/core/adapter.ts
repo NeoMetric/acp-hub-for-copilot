@@ -162,6 +162,8 @@ export interface AgentAdapter {
 	rebuildExpiredSessions?: boolean;
 	/** Whether a chat copied from another chat can continue the stored conversation with `session/fork`. */
 	forkChats?: boolean;
+	/** Whether the agent fetches the tool list again on `tools/list_changed`, so a changed tool set needs no new session. */
+	refreshesTools?: boolean;
 	/** How long (ms) a tool call may wait for Copilot to pick it up before it is failed; absent waits for as long as the agent does. */
 	toolWaitTimeoutMs?: number;
 	/** Whether the session that reads the model list must declare the tool bridge (the agent's own config names it). */

@@ -24,6 +24,8 @@ export interface SavedSession {
 	readonly history: readonly string[];
 	/** The tools, the guidance and the session prompt the session opened with; a cache hit needs all three unchanged. */
 	readonly toolsHash: string;
+	/** The tool names behind `toolsHash`, so a later window can say which tools were added or removed. */
+	readonly toolNames?: readonly string[];
 	readonly guidanceHash: string;
 	readonly promptHash: string;
 	/** Hashes of the lines of the guidance, so a later window can tell what changed when the guidance hash differs. */
@@ -59,12 +61,14 @@ export interface ReuseCheck {
  * `ignoreGuidance` leaves the guidance out, for a chat resuming its own session:
  * the host renders its prompt differently from one window to the next, and the
  * conversation is worth more than the old wording of that prompt.
+ * `ignoreTools` does the same for the tools: Copilot offers a different set from one
+ * request to the next, and the resumed session opens with the set of the request.
  */
-export function mismatchOf(saved: SavedSession, check: ReuseCheck, options?: { readonly ignoreGuidance?: boolean }): string | undefined {
+export function mismatchOf(saved: SavedSession, check: ReuseCheck, options?: { readonly ignoreGuidance?: boolean; readonly ignoreTools?: boolean }): string | undefined {
 	if (saved.cwd !== check.cwd) {
 		return `folder changed (${saved.cwd} -> ${check.cwd})`;
 	}
-	if (saved.toolsHash !== check.toolsHash) {
+	if (!options?.ignoreTools && saved.toolsHash !== check.toolsHash) {
 		return 'the offered tools changed';
 	}
 	if (!options?.ignoreGuidance && saved.guidanceHash !== check.guidanceHash) {

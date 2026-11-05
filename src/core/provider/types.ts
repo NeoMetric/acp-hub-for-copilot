@@ -117,22 +117,23 @@ export interface Reuse {
 export interface ChatSession {
 	readonly acp: AgentSession;
 	readonly endpoint: McpServerEndpoint;
-	readonly context: ChatContext;
+	/** The guidance in it is what the agent has been told, so it follows the guidance changes sent to the session. */
+	context: ChatContext;
 	readonly history: string[];
 	model: string;
 	/** How many tools Copilot offered with the latest request; none marks a request Copilot made for itself. */
 	toolCount: number;
-	/** Every tool name this session has been offered, so a newly offered tool starts a session that can see it. */
-	readonly openedTools: ReadonlySet<string>;
+	/** The tool names the session's bridge serves now, with the hash saved for them. */
+	openedTools: ReadonlySet<string>;
 	/** Whether the session was given the workspace prompt; a request that offers no tools gets none. */
 	readonly hasPrompt: boolean;
 	/** Hashes of what the session opened with, saved so a later window can tell whether it may pick the session up again. */
-	readonly toolsHash: string;
-	readonly guidanceHash: string;
+	toolsHash: string;
+	guidanceHash: string;
 	readonly promptHash: string;
 	/** Hash of the user and mode instructions the agent was last given, so each change is sent once. */
 	instructionsHash?: string;
-	/** Guidance the resumed session has not been told about yet; the next prompt carries it. */
+	/** Guidance the session has not been told about yet, because it was resumed or Copilot changed it since; the next prompt carries it. */
 	guidanceChange?: GuidanceChange;
 	/** Set when the session continues a stored conversation. Its first model call logs whether the cache served it. */
 	reused?: { readonly how: 'resumed' | 'forked'; readonly from: string; logged: boolean };

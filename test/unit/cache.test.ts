@@ -187,3 +187,63 @@ describe('cacheTooltip', () => {
 		expect(text).not.toContain('Last chat turn');
 	});
 });
+
+describe('cache miss detection', () => {
+	const chat = { id: 'c1', label: 'Chat', workspace: 'w' };
+	const measure = (tracker: CacheTracker, call: AcpTokenUsage, chatIdentity: typeof chat | undefined = chat, background = false) =>
+		tracker.recordRequest({ call, turn: call, background, chat: chatIdentity });
+
+	it('does not count the first call of a chat', () => {
+		const tracker = new CacheTracker(() => 0);
+		measure(tracker, turn(0, 2, 20_000, 5));
+
+		expect(tracker.misses).toBeUndefined();
+	});
+
+	it('counts a call that lost the prefix the previous one left', () => {
+		let now = 0;
+		const tracker = new CacheTracker(() => now);
+		measure(tracker, turn(20_000, 2, 500));
+		now = 30_000;
+		measure(tracker, turn(800, 2, 21_000));
+
+		expect(tracker.misses).toEqual({ unexpected: 1, expired: 0, lostTokens: 20_500 - 800 });
+	});
+
+	it('counts a miss after the cache lifetime apart', () => {
+		let now = 0;
+		const tracker = new CacheTracker(() => now);
+		measure(tracker, turn(20_000, 2, 500));
+		now = 6 * 60_000;
+		measure(tracker, turn(0, 2, 21_000));
+
+		expect(tracker.misses).toMatchObject({ unexpected: 0, expired: 1 });
+	});
+
+	it('does not count a call whose prompt shrank, as after a compaction', () => {
+		const tracker = new CacheTracker(() => 0);
+		measure(tracker, turn(50_000, 2, 500));
+		measure(tracker, turn(0, 2, 12_000));
+
+		expect(tracker.misses).toBeUndefined();
+	});
+
+	it('does not count a served call or a small prefix', () => {
+		const tracker = new CacheTracker(() => 0);
+		measure(tracker, turn(20_000, 2, 500));
+		measure(tracker, turn(20_500, 2, 300));
+		measure(tracker, turn(0, 2, 300), { ...chat, id: 'c2' });
+		measure(tracker, turn(0, 2, 300), { ...chat, id: 'c2' });
+
+		expect(tracker.misses).toBeUndefined();
+	});
+
+	it('compares a chat with its own earlier call and ignores background requests', () => {
+		const tracker = new CacheTracker(() => 0);
+		measure(tracker, turn(20_000, 2, 500));
+		measure(tracker, turn(0, 2, 5_000), { ...chat, id: 'c2' });
+		measure(tracker, turn(0, 2, 9_000), chat, true);
+
+		expect(tracker.misses).toBeUndefined();
+	});
+});

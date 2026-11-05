@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as vscode from 'vscode';
 import { guidanceChangeOf, guidanceLineHashes } from '../../src/core/provider';
+import { describeToolChange, toolChangeOf } from '../../src/core/provider/keys';
 import { findForkSource, hashAll, isPrefixOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/core/sessionStore';
 
 const check: ReuseCheck = { cwd: '/work', toolsHash: toolsHashOf(['a', 'b']), guidanceHash: 'g1' };
@@ -40,6 +41,20 @@ describe('mismatchOf', () => {
 	it('can leave the guidance out while still checking the rest', () => {
 		expect(mismatchOf(saved('k', ['u1'], { guidanceHash: 'x' }), check, { ignoreGuidance: true })).toBeUndefined();
 		expect(mismatchOf(saved('k', ['u1'], { guidanceHash: 'x', toolsHash: 'y' }), check, { ignoreGuidance: true })).toContain('tools');
+	});
+
+	it('can leave the tools out while still checking the rest', () => {
+		const options = { ignoreGuidance: true, ignoreTools: true };
+		expect(mismatchOf(saved('k', ['u1'], { guidanceHash: 'x', toolsHash: 'y' }), check, options)).toBeUndefined();
+		expect(mismatchOf(saved('k', ['u1'], { toolsHash: 'y', cwd: '/other' }), check, options)).toContain('folder');
+	});
+});
+
+describe('toolChangeOf', () => {
+	it('lists the tools added and removed', () => {
+		expect(toolChangeOf(['a', 'b'], ['b', 'c', 'd'])).toEqual({ added: ['c', 'd'], removed: ['a'] });
+		expect(toolChangeOf(['a'], ['a'])).toEqual({ added: [], removed: [] });
+		expect(describeToolChange({ added: ['c'], removed: [] })).toBe('1 tool(s) added (c), 0 removed');
 	});
 });
 

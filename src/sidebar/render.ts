@@ -77,6 +77,19 @@ function renderWindow(window: UsageWindow): string {
 		+ `</div>`;
 }
 
+function formatTokens(tokens: number): string {
+	return tokens >= 1_000_000 ? `${(tokens / 1_000_000).toFixed(1)}M` : tokens >= 1_000 ? `${Math.round(tokens / 1_000)}k` : String(tokens);
+}
+
+function renderCacheMisses(misses: NonNullable<AgentCardState['usage']['cacheMisses']>): string {
+	const idle = misses.expired > 0 ? ` <span class="resets">+${misses.expired} after idle</span>` : '';
+	const description = 'Calls of a chat that was already running which lost the prompt cache they should have had, such as after a tool change or a reopened session. Calls after the chat sat idle longer than the cache lives are counted apart. Chats seen for the first time are not counted. The token figure is the input billed at full price instead of read from the cache.';
+	return `<div class="usage-window">`
+		+ `<div class="usage-head"><span>Cache misses ${renderInfo('Cache misses', description)}</span><span>${misses.unexpected}</span></div>`
+		+ `<span class="resets">${escapeHtml(formatTokens(misses.lostTokens))} tokens re-billed</span>${idle}`
+		+ `</div>`;
+}
+
 function renderUsage(agent: AgentCardState): string {
 	const usage = agent.usage;
 	const parts: string[] = [];
@@ -88,6 +101,9 @@ function renderUsage(agent: AgentCardState): string {
 	}
 	for (const window of usage.windows) {
 		parts.push(renderWindow(window));
+	}
+	if (usage.cacheMisses) {
+		parts.push(renderCacheMisses(usage.cacheMisses));
 	}
 	if (usage.status === 'loading') {
 		parts.push('<div class="note">Loading usage...</div>');

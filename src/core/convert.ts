@@ -99,6 +99,9 @@ const CHAT_CONTEXT = /<(environment_info|workspace_info|userMemory|sessionMemory
  * `<instructions>` block with the sentence that introduces it, and the
  * `<modeInstructions>` of Plan, Agent and custom modes.
  */
+/** Reminders Copilot adds to a user message, such as the tools or guidance in force. */
+const SYSTEM_REMINDERS = /<system_reminder>[\s\S]*?<\/system_reminder>\s*/g;
+
 const CUSTOM_INSTRUCTIONS = /(?:^[^\n<]*user provided coding instructions[^\n]*\r?\n)?<instructions>[\s\S]*?<\/instructions>|<modeInstructions>[\s\S]*?<\/modeInstructions>/gm;
 
 /**
@@ -230,7 +233,35 @@ export function fingerprint(message: vscode.LanguageModelChatRequestMessage): st
 	}
 
 	// The instructions of the mode change when the user switches modes, which is no rewrite of the chat.
-	return `${message.role}:${textOf(message).replace(CUSTOM_INSTRUCTIONS, '')}:${imageFingerprint(message)}:${parts.join(',')}`;
+	// Copilot also adds reminders about the tools and guidance to a user message, so a tool toggle
+	// rewrites an earlier message; those reminders are no change to what was said either.
+	return `${message.role}:${textOf(message).replace(CUSTOM_INSTRUCTIONS, '').replace(SYSTEM_REMINDERS, '')}:${imageFingerprint(message)}:${parts.join(',')}`;
+}
+
+/**
+ * The fingerprints of the messages that stay in the chat. While tools are deferred, Copilot
+ * ends a request with a user message that holds nothing but a `<system_reminder>` listing them,
+ * and leaves it out of the next request, so it is no part of the conversation.
+ */
+export function persistentFingerprints(messages: readonly vscode.LanguageModelChatRequestMessage[]): string[] {
+	let end = messages.length;
+
+	while (end > 0 && isReminderOnly(messages[end - 1])) {
+		end--;
+	}
+
+	return messages.slice(0, end).map(fingerprint);
+}
+
+function isReminderOnly(message: vscode.LanguageModelChatRequestMessage): boolean {
+	if (message.role !== vscode.LanguageModelChatMessageRole.User || isSystemMessage(message)) {
+		return false;
+	}
+	if (!message.content.every(part => part instanceof vscode.LanguageModelTextPart)) {
+		return false;
+	}
+	const text = textOf(message);
+	return text.includes('<system_reminder>') && text.replace(SYSTEM_REMINDERS, '').trim().length === 0;
 }
 
 /** Whether the messages the session has seen are no longer a prefix of the chat. */

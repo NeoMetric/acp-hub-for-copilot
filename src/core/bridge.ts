@@ -35,7 +35,13 @@ export interface McpToolResult {
 export type McpToolExecutor = (name: string, input: unknown, token: vscode.CancellationToken) => Promise<McpToolResult | undefined>;
 
 interface McpSession {
+	/** The tools the chat may use now; a call to any other is refused. */
 	readonly tools: readonly vscode.LanguageModelChatTool[];
+	/**
+	 * Every tool the session has listed, including ones withdrawn since. The agent's tool block
+	 * leads its prompt cache, so dropping a tool from the list would miss the whole cache.
+	 */
+	readonly listed: ReadonlyMap<string, vscode.LanguageModelChatTool>;
 	readonly execute: McpToolExecutor;
 }
 
@@ -75,33 +81,38 @@ export class McpBridge implements vscode.Disposable {
 		await this.ensureStarted();
 
 		const token = crypto.randomUUID();
-		this.sessions.set(token, { tools, execute });
+		this.sessions.set(token, { tools, listed: new Map(tools.map(tool => [tool.name, tool])), execute });
 
 		const address = this.server?.address() as AddressInfo | null;
 		if (!address || typeof address === 'string') {
 			throw new Error("The tool bridge is not listening.");
 		}
 
-		this.log(`Registered MCP session with ${tools.length} tool(s) on port ${address.port}`);
+		this.log(`Registered MCP session with ${tools.length} tool(s) on port ${address.port}`, 'debug');
 		return { url: `http://127.0.0.1:${address.port}/`, token };
 	}
 
 	/**
 	 * Replaces the tool set of an existing ACP session and tells the agent, so a
 	 * tool the user just disabled stops being offered and one just enabled starts
-	 * being callable without starting a new session.
+	 * being callable without starting a new session. A tool taken away stays in the
+	 * list the agent sees, so its cached prompt survives, but a call to it is refused.
 	 */
 	updateTools(token: string, tools: readonly vscode.LanguageModelChatTool[]): void {
 		const session = this.sessions.get(token);
 		if (!session) {
 			return;
 		}
-		this.sessions.set(token, { ...session, tools });
-		if (sameToolNames(session.tools, tools)) {
+		const listed = new Map(session.listed);
+		for (const tool of tools) {
+			listed.set(tool.name, tool);
+		}
+		this.sessions.set(token, { ...session, tools, listed });
+		if (listed.size === session.listed.size && [...listed.keys()].every(name => session.listed.has(name))) {
 			return;
 		}
 
-		this.log(`Tool set of an agent session changed to ${tools.length} tool(s); telling the agent.`);
+		this.log(`Tool set of an agent session grew to ${listed.size} listed tool(s) (${tools.length} callable); telling the agent.`, 'debug');
 		this.notify(token, 'notifications/tools/list_changed');
 	}
 
@@ -264,7 +275,7 @@ export class McpBridge implements vscode.Disposable {
 		const streams = this.streams.get(token) ?? new Set<http.ServerResponse>();
 		streams.add(response);
 		this.streams.set(token, streams);
-		this.log(`Opened a notification stream for an agent session (${streams.size} open).`);
+		this.log(`Opened a notification stream for an agent session (${streams.size} open).`, 'debug');
 
 		const forget = () => {
 			streams.delete(response);
@@ -290,7 +301,7 @@ export class McpBridge implements vscode.Disposable {
 			}
 			stream.write(`event: message\ndata: ${message}\n\n`);
 		}
-		this.log(`Sent ${method} to ${streams.size} notification stream(s).`);
+		this.log(`Sent ${method} to ${streams.size} notification stream(s).`, 'debug');
 	}
 
 	private closeStreams(token: string): void {
@@ -332,10 +343,10 @@ export class McpBridge implements vscode.Disposable {
 				return {};
 
 			case 'tools/list':
-				this.log(`Listing ${session.tools.length} tool(s) for an agent session`);
+				this.log(`Listing ${session.listed.size} tool(s) for an agent session`, 'debug');
 				return {
 					// By name, so a request that lists the same tools in another order does not change the agent's tool block.
-					tools: [...session.tools].sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)).map(tool => ({
+					tools: [...session.listed.values()].sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)).map(tool => ({
 						name: tool.name,
 						description: tool.description,
 						inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
@@ -390,7 +401,7 @@ export class McpBridge implements vscode.Disposable {
 			// agent session.
 			const forwarded = await session.execute(name, request.arguments ?? {}, cancellation.token);
 			if (forwarded) {
-				this.log(`Returned tool ${name} to the caller of the request`);
+				this.log(`Returned tool ${name} to the caller of the request`, 'debug');
 				return {
 					content: toMcpContent(forwarded.content),
 					...(forwarded.isError ? { isError: true } : {}),
@@ -415,15 +426,6 @@ export class McpBridge implements vscode.Disposable {
 
 function isLoopbackHost(host: string | undefined): boolean {
 	return host === undefined || /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(host);
-}
-
-/** Whether two tool sets offer the same names, whatever their order or definitions. */
-function sameToolNames(before: readonly vscode.LanguageModelChatTool[], after: readonly vscode.LanguageModelChatTool[]): boolean {
-	if (before.length !== after.length) {
-		return false;
-	}
-	const names = new Set(before.map(tool => tool.name));
-	return after.every(tool => names.has(tool.name));
 }
 
 export function toMcpContent(content: ReadonlyArray<unknown>): Array<Record<string, unknown>> {
