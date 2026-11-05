@@ -56,3 +56,5 @@ Agent Hub is disabled in VS Code Restricted Mode and requires a trusted workspac
 Run `npm ci`, then `npm run compile` and press **F5** to launch an Extension Development Host. Use `npm test` for unit tests and `npm run package` to create a VSIX.
 
 Agent metadata lives in the [registry](registry/agents.json). After changing it, run `npm run generate` and `npm run generate:check`. Agents with custom behavior implement `AgentAdapter` in `src/adapters` and are registered in `src/core/agents.ts`. For details, see the [design](docs/superpowers/specs/2026-10-30-acp-hub-design.md) and [parity checklist](docs/parity-checklist.md).
+
+To release, set the version in `package.json` and `package-lock.json`, rename the changelog's `Unreleased` section to that version, and commit. Then either run `npx vsce publish` from the repository root with a Marketplace PAT, or run the **Release** workflow in GitHub Actions, which needs a `VSCE_PAT` repository secret.

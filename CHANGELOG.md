@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.4
 
 - Fix skill context arriving separately from its tool result being taken as a new message from the user, which ended the running turn and started a new one. The context now goes to the agent with its tool result.
 - Show an error in the log when a request fails or the agent fails while waiting for a tool result, instead of staying silent.

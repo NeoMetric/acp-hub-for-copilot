@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type publish to publish the version in package.json to the Marketplace'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: inputs.confirm == 'publish'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run generate:check
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run package
+      - name: Publish to the Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        shell: pwsh
+        run: |
+          if (-not $env:VSCE_PAT) {
+            throw 'Add the VSCE_PAT repository secret before publishing.'
+          }
+          npx vsce publish --packagePath (Get-ChildItem *.vsix | Select-Object -First 1).FullName
