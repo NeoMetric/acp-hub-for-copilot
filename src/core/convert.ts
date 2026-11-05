@@ -293,6 +293,19 @@ export function firstMessageAfterReply(messages: readonly vscode.LanguageModelCh
 	return first;
 }
 
+/** Skill context can be emitted separately from its result by the host. */
+export function skillContextAfterReply(messages: readonly vscode.LanguageModelChatRequestMessage[]): { callId: string; text: string } | undefined {
+	const recent = messages.slice(firstMessageAfterReply(messages));
+	const results = recent.flatMap(message => message.content.filter((part): part is vscode.LanguageModelToolResultPart => part instanceof vscode.LanguageModelToolResultPart));
+	const contexts = recent.filter(message => message.role === vscode.LanguageModelChatMessageRole.User)
+		.map(message => textOf(message).trim())
+		.filter(text => /^<skill-context(?:\s[^>]*)?>[\s\S]*<\/skill-context>$/.test(text));
+	if (results.length !== 1 || contexts.length !== 1) {
+		return undefined;
+	}
+	return { callId: results[0].callId, text: contexts[0] };
+}
+
 /**
  * What the user said since the agent's last reply, apart from tool results.
  * Copilot delivers a message typed while a turn runs next to the results of the
@@ -300,13 +313,14 @@ export function firstMessageAfterReply(messages: readonly vscode.LanguageModelCh
  */
 export function userWordsAfterReply(messages: readonly vscode.LanguageModelChatRequestMessage[]): Array<vscode.LanguageModelTextPart | vscode.LanguageModelDataPart> {
 	const words: Array<vscode.LanguageModelTextPart | vscode.LanguageModelDataPart> = [];
+	const skillContext = skillContextAfterReply(messages);
 
 	for (const message of messages.slice(firstMessageAfterReply(messages))) {
 		if (message.role !== vscode.LanguageModelChatMessageRole.User) {
 			continue;
 		}
 		const text = promptTextOf(message).trim();
-		if (text.length > 0) {
+		if (text.length > 0 && text !== skillContext?.text) {
 			words.push(new vscode.LanguageModelTextPart(text));
 		}
 		for (const part of message.content) {

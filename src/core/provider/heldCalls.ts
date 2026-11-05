@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode';
 import type { McpToolResult } from '../bridge';
+import { skillContextAfterReply } from '../convert';
 import type { Log } from '../logging';
 import type { ActiveTurn } from './types';
 
@@ -39,7 +40,7 @@ export function failPendingToolCalls(turn: ActiveTurn, error: Error): void {
  */
 export function handOverToolCall(turn: ActiveTurn | undefined, callId: string, name: string, input: unknown, token: vscode.CancellationToken, log: Log): Promise<McpToolResult | undefined> {
 	if (!turn || turn.finished) {
-		log(`Tool ${name} was requested without a turn (${turn ? 'finished' : 'none'}); running it in the extension.`, 'warn');
+		log(`Tool ${name} was requested without a turn (${turn ? 'finished' : 'none'}); refusing it.`, 'warn');
 		return Promise.resolve(undefined);
 	}
 
@@ -91,6 +92,7 @@ export function releaseHeldToolCalls(turn: ActiveTurn, log: Log): void {
 /** Settles pending tool calls with the results Copilot just returned. */
 export function resolveToolResults(turn: ActiveTurn, messages: readonly vscode.LanguageModelChatRequestMessage[], log: Log): boolean {
 	let resolved = 0;
+	const skillContext = skillContextAfterReply(messages);
 
 	// A background-command notification can add an assistant message after a
 	// pending result. Only matching call IDs can settle the current calls.
@@ -107,7 +109,15 @@ export function resolveToolResults(turn: ActiveTurn, messages: readonly vscode.L
 				continue;
 			}
 			turn.pending.delete(part.callId);
-			pending.resolve(part.content, (part as unknown as { isError?: boolean }).isError === true);
+			let content: ReadonlyArray<unknown> = part.content;
+			if (skillContext?.callId === part.callId) {
+				const included = content.some(item => item instanceof vscode.LanguageModelTextPart && item.value.includes(skillContext.text));
+				if (!included) {
+					content = [...content, new vscode.LanguageModelTextPart(skillContext.text)];
+				}
+				log(`Skill context (${skillContext.text.length} characters) ${included ? 'already present in' : 'appended to'} tool result.`, 'debug');
+			}
+			pending.resolve(content, (part as unknown as { isError?: boolean }).isError === true);
 			resolved++;
 		}
 	}

@@ -105,6 +105,9 @@ export class TurnRunner {
 			},
 			error => {
 				turn.error = error;
+				if (!turn.streaming && !token.isCancellationRequested) {
+					this.log(`Agent turn failed while waiting for a tool result: ${describe(error)}`, 'error');
+				}
 				throw error;
 			},
 		).finally(() => {

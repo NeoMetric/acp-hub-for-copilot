@@ -294,6 +294,21 @@ describe('messages since the last reply', () => {
 		expect(words.map(word => (word as { value: string }).value)).toEqual(['<current_datetime>now</current_datetime>\n\nAlso do X']);
 	});
 
+	it('does not treat a skill context returned beside a tool result as a new request', () => {
+		expect(userWordsAfterReply([user('a'), call, user(toolResult('1')), user('<skill-context name="test">instructions</skill-context>')])).toEqual([]);
+	});
+
+	it('keeps a wrapped user request even alongside skill context', () => {
+		const words = userWordsAfterReply([user('a'), call, user(toolResult('1')), user('<skill-context name="test">instructions</skill-context>'), user('<context>now</context><userRequest>Also do X</userRequest>')]);
+		expect(words.map(word => (word as { value: string }).value)).toEqual(['<context>now</context>\n\nAlso do X']);
+	});
+
+	it('does not discard skill context when its tool result is ambiguous', () => {
+		const context = '<skill-context name="test">instructions</skill-context>';
+		const words = userWordsAfterReply([user('a'), call, user(toolResult('1'), toolResult('2')), user(context)]);
+		expect(words.map(word => (word as { value: string }).value)).toEqual([context]);
+	});
+
 	it('keeps an image the user attached', () => {
 		const picture = image([1, 2]);
 

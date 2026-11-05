@@ -9,7 +9,7 @@ import type { AgentAdapter, AgentSettings, LaunchContext } from './adapter';
 import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentSession, type CreateSessionOptions } from './agentClient';
 import type { McpToolResult } from './bridge';
 import type { RequestMeasurement } from './cache';
-import { carriesToolResults, characterCountOf, diverged, fingerprint, lastUserMessageIndex, userWordsAfterReply } from './convert';
+import { carriesToolResults, characterCountOf, diverged, fingerprint, lastUserMessageIndex, skillContextAfterReply, userWordsAfterReply } from './convert';
 import type { Log } from './logging';
 import { acpModelValue, effortOf } from './models';
 import { createRequestDump, summarizeRequest } from './requestDump';
@@ -185,6 +185,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		try {
 			await this.respond(model, messages, options, progress, token);
 		} catch (error) {
+			this.log(`Language model request failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
 			if (error instanceof AdapterNotInstalledError) {
 				throw new vscode.LanguageModelError(error.message);
 			}
@@ -236,7 +237,14 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		// A message the user typed while the turn ran comes next to those results. As
 		// natively, it ends the turn and starts a new one, so it falls through below.
 		const userWords = session?.turn ? userWordsAfterReply(messages) : [];
-		if (session && session.turn && userWords.length === 0 && resolveToolResults(session.turn, messages, this.log)) {
+		const skillContext = session?.turn ? skillContextAfterReply(messages) : undefined;
+		if (skillContext && session?.turn && !session.turn.pending.has(skillContext.callId)) {
+			this.log(`Skill context could not be matched to a pending tool call for ${key}.`, 'error');
+			await this.turns.abort(session);
+			throw new vscode.LanguageModelError('Skill context could not be matched to its tool call. Please retry your request.');
+		}
+		const resolved = session?.turn ? resolveToolResults(session.turn, messages, this.log) : false;
+		if (session && session.turn && userWords.length === 0 && resolved) {
 			this.markSeen(session, fingerprints);
 			this.applyTools(session, tools);
 			await applyEffort(this.agent, this.adapter.modelPolicy, session, effort, this.log);

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Fix skill context arriving separately from its tool result being taken as a new message from the user, which ended the running turn and started a new one. The context now goes to the agent with its tool result.
+- Show an error in the log when a request fails or the agent fails while waiting for a tool result, instead of staying silent.
+- Show a clear "please retry" error when skill context cannot be matched to its tool call, instead of hanging.
+
 ## 0.0.3
 
 - Add a "Replace the system prompt" toggle to the Claude and Codex cards (off by default). On, the agent's own prompt is replaced by Copilot's guidance and a one-line identity; Antigravity can only append, so it has no toggle.
