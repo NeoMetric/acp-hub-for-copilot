@@ -64,6 +64,10 @@ export function guidanceHashOf(guidance: string | undefined): string {
 	return shortHash(squashGuidance(guidance));
 }
 
+/** The line in which Copilot names the mode the chat runs in, and the block that holds its instructions. */
+const MODE_LINE = /^You are currently running in "(.+)" mode\./;
+const MODE_BLOCK = /<modeInstructions>[\s\S]*?<\/modeInstructions>/g;
+
 /** The distinct non-empty lines of the guidance, each with the hash it is compared by. */
 function guidanceLines(guidance: string | undefined): Array<{ text: string; hash: string }> {
 	const seen = new Set<string>();
@@ -87,13 +91,40 @@ export function guidanceLineHashes(guidance: string | undefined): string[] {
  * What the guidance gained and lost since a session was saved. A session saved
  * without its line hashes cannot say, so all of the current guidance counts as new.
  */
-export function guidanceChangeOf(savedLines: readonly string[] | undefined, guidance: string | undefined): GuidanceChange {
+export function guidanceChangeOf(savedLines: readonly string[] | undefined, guidance: string | undefined, previous?: string): GuidanceChange {
 	const current = guidanceLines(guidance);
 	const before = new Set(savedLines);
 	const now = new Set(current.map(line => line.hash));
-	return {
+	const change = {
 		added: current.filter(line => !before.has(line.hash)).map(line => line.text),
 		removed: savedLines ? savedLines.filter(hash => !now.has(hash)).length : 0,
+	};
+	if (previous === undefined) {
+		return change;
+	}
+
+	// The instructions of a mode that was left are retracted by naming the mode, not by repeating them.
+	const gone = guidanceLines(previous).filter(line => !now.has(line.hash));
+	const leftMode = gone.map(line => MODE_LINE.exec(line.text)?.[1]).find(name => name !== undefined);
+	const modeLines = leftMode === undefined ? new Set<string>() : new Set(guidanceLines([...previous.matchAll(MODE_BLOCK)].map(match => match[0]).join('\n')).map(line => line.hash));
+	return {
+		...change,
+		...(leftMode === undefined ? {} : { leftMode }),
+		goneLines: gone.filter(line => !modeLines.has(line.hash)).map(line => line.text),
+	};
+}
+
+/** Puts a change that has not been sent yet together with the one that follows it. */
+export function mergeGuidanceChange(first: GuidanceChange, second: GuidanceChange): GuidanceChange {
+	const added = [...new Set([...first.added, ...second.added])];
+	const leftMode = second.leftMode ?? first.leftMode;
+	const stillInMode = leftMode !== undefined && added.some(line => MODE_LINE.exec(line)?.[1] === leftMode);
+	const gone = [...(first.goneLines ?? []), ...(second.goneLines ?? [])].filter(line => !added.includes(line));
+	return {
+		added,
+		removed: first.removed + second.removed,
+		...(leftMode === undefined || stillInMode ? {} : { leftMode }),
+		...(first.goneLines || second.goneLines ? { goneLines: [...new Set(gone)] } : {}),
 	};
 }
 

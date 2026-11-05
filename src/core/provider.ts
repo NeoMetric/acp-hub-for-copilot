@@ -19,7 +19,7 @@ import { createSessionPrompt } from './systemPrompt';
 import { buildPromptBlocks } from './provider/assemble';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './provider/heldCalls';
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESSION_IDLE_MS } from './provider/idle';
-import { chatContextOf, chatIdOf, chatLabelOf, describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, sessionKey, toolChangeOf, toolsDiffer } from './provider/keys';
+import { chatContextOf, chatIdOf, chatLabelOf, describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, sessionKey, toolChangeOf, toolsDiffer } from './provider/keys';
 import { ModelList } from './provider/modelList';
 import { findReusable, promptHashOf } from './provider/reuse';
 import { applyEffort, applyModel, describe, switchModelInPlace } from './provider/sessionOptions';
@@ -621,12 +621,10 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	 * as having been told the new guidance.
 	 */
 	private sendGuidanceChange(key: string, session: ChatSession, guidance: string | undefined): void {
-		const change = guidanceChangeOf(guidanceLineHashes(session.context.guidance), guidance);
+		const change = guidanceChangeOf(guidanceLineHashes(session.context.guidance), guidance, session.context.guidance ?? '');
 		const pending = session.guidanceChange;
 		if (change.added.length > 0 || change.removed > 0) {
-			session.guidanceChange = pending
-				? { added: [...new Set([...pending.added, ...change.added])], removed: pending.removed + change.removed }
-				: change;
+			session.guidanceChange = pending ? mergeGuidanceChange(pending, change) : change;
 		}
 		const hash = guidanceHashOf(guidance);
 		this.log(`The guidance of chat ${key} changed (${session.guidanceHash} -> ${hash}): ${change.added.length} line(s) new, ${change.removed} gone; sending the change with the next prompt.`, 'debug');

@@ -2,7 +2,7 @@
 	"name": "acp-hub-for-copilot",
 	"displayName": "ACP Hub for Copilot",
 	"description": "Use Claude, Codex and Antigravity ACP agents in GitHub Copilot Chat, with one sidebar to install, sign in, configure and monitor them.",
-	"version": "0.0.4",
+	"version": "0.0.5",
 	"publisher": "NeoMetric",
 	"license": "MIT",
 	"icon": "media/icon.png",

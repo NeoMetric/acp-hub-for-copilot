@@ -6,6 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import type * as vscode from 'vscode';
 import { guidanceChangeOf, guidanceLineHashes } from '../../src/core/provider';
+import { guidanceChangeBlock } from '../../src/core/provider/assemble';
+import { mergeGuidanceChange } from '../../src/core/provider/keys';
 import { describeToolChange, toolChangeOf } from '../../src/core/provider/keys';
 import { findForkSource, hashAll, isPrefixOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/core/sessionStore';
 
@@ -68,6 +70,67 @@ describe('guidanceChangeOf', () => {
 
 	it('treats everything as new when the saved lines are unknown', () => {
 		expect(guidanceChangeOf(undefined, 'a\nb')).toEqual({ added: ['a', 'b'], removed: 0 });
+	});
+
+	const rules = 'Rules\nUse tabs';
+	const planning = `${rules}\n<modeInstructions>\nYou are currently running in "Plan" mode. Below are your instructions.\nDo not edit files.\nAsk before acting.\n</modeInstructions>`;
+
+	it('names the mode that was left instead of listing its lines', () => {
+		const change = guidanceChangeOf(guidanceLineHashes(planning), rules, planning);
+
+		expect(change.leftMode).toBe('Plan');
+		expect(change.goneLines).toEqual([]);
+		expect(change.removed).toBe(5);
+	});
+
+	it('names the old mode and adds the new one when the mode changes', () => {
+		const reviewing = `${rules}\n<modeInstructions>\nYou are currently running in "Review" mode. Below are your instructions.\nOnly read.\n</modeInstructions>`;
+		const change = guidanceChangeOf(guidanceLineHashes(planning), reviewing, planning);
+
+		expect(change.leftMode).toBe('Plan');
+		expect(change.added).toContain('Only read.');
+		expect(change.goneLines).toEqual([]);
+	});
+
+	it('lists the other lines that are gone and names no mode when none was left', () => {
+		const change = guidanceChangeOf(guidanceLineHashes(planning), planning.replace('Use tabs', 'Use spaces'), planning);
+
+		expect(change.leftMode).toBeUndefined();
+		expect(change.goneLines).toEqual(['Use tabs']);
+	});
+
+	it('merges a change that was not sent yet with the next one', () => {
+		const left = guidanceChangeOf(guidanceLineHashes(planning), rules, planning);
+		const back = guidanceChangeOf(guidanceLineHashes(rules), planning, rules);
+		const merged = mergeGuidanceChange(left, back);
+
+		expect(merged.leftMode).toBeUndefined();
+		expect(merged.added).toContain('Do not edit files.');
+	});
+});
+
+describe('guidanceChangeBlock', () => {
+	it('retracts a mode by name and sends the instructions of the new one whole', () => {
+		const long = 'x'.repeat(20_000);
+		const block = guidanceChangeBlock({ added: ['You are currently running in "Review" mode.', long], removed: 5, leftMode: 'Plan', goneLines: [] });
+
+		expect(block.text).toContain('You are no longer in "Plan" mode; its instructions no longer apply.');
+		expect(block.text).toContain(long);
+		expect(block.text).not.toContain('line(s) of the earlier guidance');
+	});
+
+	it('shows a short preview of the other lines that are gone, and counts the rest', () => {
+		const gone = Array.from({ length: 25 }, (_, index) => `rule ${index} ${'y'.repeat(100)}`);
+		const text = guidanceChangeBlock({ added: [], removed: 25, goneLines: gone }).text;
+
+		expect(text).toContain('These lines of the earlier guidance no longer apply:');
+		expect(text).toContain(`- rule 0 ${'y'.repeat(73)}…`);
+		expect(text).toContain('- … and 5 more');
+		expect(text).not.toContain('<guidance_update>');
+	});
+
+	it('only counts the lines that are gone when the earlier guidance is unknown', () => {
+		expect(guidanceChangeBlock({ added: ['a'], removed: 3 }).text).toContain('3 line(s) of the earlier guidance no longer apply.');
 	});
 });
 

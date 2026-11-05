@@ -4,27 +4,44 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type * as vscode from 'vscode';
-import { chatContextBlock, customInstructionsBlock, firstUserWordsIn, readTranscriptOptions, toAcpContentBlocks, toTranscriptBlock, type AcpContentBlock } from '../convert';
+import { chatContextBlock, customInstructionsBlock, firstUserWordsIn, readTranscriptOptions, toAcpContentBlocks, toTranscriptBlock, type AcpContentBlock, type AcpTextBlock } from '../convert';
 import type { Log } from '../logging';
 import { shortHash } from '../sessionStore';
 import type { ChatSession, GuidanceChange } from './types';
 
-const GUIDANCE_CHANGE_MAX_CHARACTERS = 8_000;
+/** Roomy enough for the instructions of a long custom mode, which must arrive whole. */
+const GUIDANCE_CHANGE_MAX_CHARACTERS = 40_000;
+const GONE_LINES_SHOWN = 20;
+const GONE_LINE_PREVIEW_CHARACTERS = 80;
 
 /** Tells a resumed session how the host's guidance has changed since the session was opened. */
-function guidanceChangeBlock(change: GuidanceChange): AcpContentBlock {
-	const added = change.added.join('\n');
-	const shown = added.length > GUIDANCE_CHANGE_MAX_CHARACTERS ? `${added.slice(0, GUIDANCE_CHANGE_MAX_CHARACTERS)}\n…` : added;
-	return {
-		type: 'text',
-		text: [
-			'The workspace guidance for this conversation changed since your session was opened. These lines are new or reworded, and they take precedence over the earlier guidance:',
-			'<guidance_update>',
-			shown,
-			'</guidance_update>',
-			...(change.removed > 0 ? [`${change.removed} line(s) of the earlier guidance no longer apply.`] : []),
-		].join('\n'),
-	};
+export function guidanceChangeBlock(change: GuidanceChange): AcpTextBlock {
+	const header = 'The workspace guidance for this conversation changed since your session was opened.';
+	const lines: string[] = [];
+
+	if (change.added.length > 0) {
+		const added = change.added.join('\n');
+		const shown = added.length > GUIDANCE_CHANGE_MAX_CHARACTERS ? `${added.slice(0, GUIDANCE_CHANGE_MAX_CHARACTERS)}\n…` : added;
+		lines.push(`${header} These lines are new or reworded, and they take precedence over the earlier guidance:`, '<guidance_update>', shown, '</guidance_update>');
+	} else {
+		lines.push(header);
+	}
+
+	// The instructions of a mode that was left are named, not repeated: they are in the session already.
+	if (change.leftMode !== undefined) {
+		lines.push(`You are no longer in "${change.leftMode}" mode; its instructions no longer apply.`);
+	}
+	if (change.goneLines === undefined) {
+		if (change.removed > 0) {
+			lines.push(`${change.removed} line(s) of the earlier guidance no longer apply.`);
+		}
+	} else if (change.goneLines.length > 0) {
+		const previews = change.goneLines.slice(0, GONE_LINES_SHOWN).map(line => `- ${line.length > GONE_LINE_PREVIEW_CHARACTERS ? `${line.slice(0, GONE_LINE_PREVIEW_CHARACTERS)}…` : line}`);
+		const more = change.goneLines.length - previews.length;
+		lines.push('These lines of the earlier guidance no longer apply:', ...previews, ...(more > 0 ? [`- … and ${more} more`] : []));
+	}
+
+	return { type: 'text', text: lines.join('\n') };
 }
 
 /**

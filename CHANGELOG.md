@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.0.5
 
 - Add a "Cache misses" counter to each agent card, with the tokens that were billed at full price instead of read from the cache, and a separate count for misses after the chat sat idle longer than the cache lives.
 - Fix toggling Copilot's tools, such as Search Tools, rebuilding the chat session and missing the cache. The reminder Copilot adds to the end of a request when tools are deferred is no longer taken as a change to the chat.
+- Fix a mode switch leaving the old mode's instructions in force. The agent is now told it has left the mode by name, without repeating its instructions, and other guidance lines that are gone are listed by a short preview. The guidance change sent for a new mode is no longer cut at 8,000 characters.
 - Move per-request log lines (requests, tool and guidance changes, session reuse details, usage) from the info to the debug level and drop duplicates, so the log shows what matters.
 
 ## 0.0.4

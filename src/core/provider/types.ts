@@ -102,6 +102,10 @@ export interface GuidanceChange {
 	readonly added: readonly string[];
 	/** How many lines it saw that are gone. */
 	readonly removed: number;
+	/** The mode the agent was in until now, when the guidance no longer puts it there. */
+	readonly leftMode?: string;
+	/** The text of the lines that are gone, apart from those of the mode that was left; known only when the earlier guidance is. */
+	readonly goneLines?: readonly string[];
 }
 
 /** A stored conversation that a request can continue instead of starting over. */
