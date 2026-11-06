@@ -43,9 +43,24 @@ export function logReuseVerdict(session: ChatSession, usage: AcpTokenUsage, unit
 	log(`[reuse] First ${unit} after the session was ${session.reused.how} from ${session.reused.from}: ${verdict} (${describeUsage(usage)} of ${total}).`);
 }
 
-/** Logs the cache split of a model call, or of a whole turn for agents that only report the turn. */
-export function logCache(label: 'Model call' | 'Turn cache', usage: AcpTokenUsage, log: Log): void {
-	log(`${label}: ${hitRateOf(usage).toFixed(1)}% hit (${describeUsage(usage)}).`);
+/**
+ * Logs the cache split of a model call, or of a whole turn for agents that only report the turn.
+ * A turn figure is the sum over every model call of the turn, each of which sends the whole context
+ * again, so `calls` (when known) says how many calls it adds up.
+ */
+export function logCache(label: 'Model call' | 'Turn cache', usage: AcpTokenUsage, log: Log, calls = 0): void {
+	const sum = label === 'Turn cache' && calls > 0 ? `, summed over ${calls} model call(s)` : '';
+	log(`${label}: ${hitRateOf(usage).toFixed(1)}% hit (${describeUsage(usage)}${sum}).`);
+}
+
+/**
+ * Logs one model call of an agent that reports only the context it sent (`usage_update`) and the cache
+ * split of the whole turn, so the turn's total can be traced to the calls that make it up.
+ */
+export function logContextCall(turn: ActiveTurn, used: number, size: number | undefined, log: Log): void {
+	turn.contextCalls++;
+	turn.contextSent += used;
+	log(`Model call #${turn.contextCalls}: ${used} token(s) in context${size ? ` of ${size}` : ''}; ${turn.contextSent} token(s) sent so far this turn.`);
 }
 
 /** Warns when the model calls of a turn do not add up to the turn's own figure. */

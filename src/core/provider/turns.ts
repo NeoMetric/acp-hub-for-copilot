@@ -17,7 +17,7 @@ import type { ModelList } from './modelList';
 import { rememberSession } from './reuse';
 import { describe } from './sessionOptions';
 import type { ActiveTurn, AgentApi, ChatSession, FinishedTurn } from './types';
-import { addModelCall, logCache, logReuseVerdict, reportUsage, warnIfCallsMissing } from './usageReport';
+import { addModelCall, logCache, logContextCall, logReuseVerdict, reportUsage, warnIfCallsMissing } from './usageReport';
 
 /**
  * How long to collect tool calls before handing a turn back to Copilot, so
@@ -98,7 +98,7 @@ export class TurnRunner {
 			result => {
 				turn.result = result;
 				if (result.usage && !this.reportsEachModelCall) {
-					logCache('Turn cache', result.usage, this.log);
+					logCache('Turn cache', result.usage, this.log, turn.contextCalls);
 					logReuseVerdict(session, result.usage, 'turn', this.log);
 				}
 				return result;
@@ -127,6 +127,8 @@ export class TurnRunner {
 			waiters: [],
 			toolCalls: 0,
 			characters: 0,
+			contextCalls: 0,
+			contextSent: 0,
 			reportedTokens: 0,
 			contextUsed: session.contextUsed,
 			startedAt: Date.now(),
@@ -149,6 +151,9 @@ export class TurnRunner {
 		if (typeof update.used === 'number') {
 			turn.contextUsed = update.used;
 			session.contextUsed = update.used;
+			if (!this.reportsEachModelCall) {
+				logContextCall(turn, update.used, update.size, this.log);
+			}
 		}
 		if (typeof update.size === 'number' && update.size !== turn.contextSize) {
 			turn.contextSize = update.size;

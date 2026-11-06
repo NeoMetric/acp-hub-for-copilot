@@ -81,6 +81,9 @@ export interface ActiveTurn {
 	contextSize?: number;
 	/** Token counts of the model calls this turn has made so far, added up (agents that report each call). */
 	requestUsage?: AcpTokenUsage;
+	/** Model calls seen through `usage_update` and the tokens they sent, added up (agents that report only the turn's cache split). */
+	contextCalls: number;
+	contextSent: number;
 	/** Completion tokens already reported to Copilot. */
 	reportedTokens: number;
 	startedAt: number;
