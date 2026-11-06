@@ -136,6 +136,14 @@ describe('claude sessionParams', () => {
 		expect(claudeAdapter.disableBuiltInTools?.({})).toBe(true);
 	});
 
+	it('keeps the transcript of a session unless it is ephemeral', () => {
+		const optionsOf = (input: SessionParamsInput) => (claudeAdapter.sessionParams?.(input) as { _meta: { claudeCode: { options: Record<string, unknown> } } })._meta.claudeCode.options;
+
+		expect(optionsOf(sessionInput)).not.toHaveProperty('persistSession');
+		expect(optionsOf({ ...sessionInput, ephemeral: false })).not.toHaveProperty('persistSession');
+		expect(optionsOf({ ...sessionInput, ephemeral: true }).persistSession).toBe(false);
+	});
+
 	it('replaces the Claude Code prompt with a string when the setting is on', () => {
 		const replaced = claudeAdapter.sessionParams?.({ ...sessionInput, replaceSystemPrompt: true, systemPromptAppend: 'guidance' }) as { _meta: { systemPrompt: unknown } };
 		const bare = claudeAdapter.sessionParams?.({ ...sessionInput, replaceSystemPrompt: true }) as { _meta: { systemPrompt: unknown } };

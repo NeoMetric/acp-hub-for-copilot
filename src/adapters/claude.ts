@@ -61,6 +61,10 @@ function sessionParams(input: SessionParamsInput): Record<string, unknown> {
 	if (input.model) {
 		claudeCodeOptions.model = input.model;
 	}
+	if (input.ephemeral) {
+		// Otherwise every session, even a `/usage` read, leaves a transcript under ~/.claude/projects.
+		claudeCodeOptions.persistSession = false;
+	}
 
 	const claudeCode: Record<string, unknown> = { options: claudeCodeOptions };
 	if (input.reportEachModelCall) {

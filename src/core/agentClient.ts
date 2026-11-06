@@ -117,6 +117,8 @@ export interface CreateSessionOptions {
 	readonly systemPromptAppend?: string;
 	/** Whether the usage of each model call is reported as it happens, not only when the turn ends. */
 	readonly reportEachModelCall?: boolean;
+	/** The session is never resumed, so an agent that can may skip keeping its transcript. */
+	readonly ephemeral?: boolean;
 }
 
 export interface PromptHandlers {
@@ -410,6 +412,7 @@ export class AgentClient implements vscode.Disposable {
 			model: options.model,
 			disableBuiltInTools: this.adapter.disableBuiltInTools?.(this.ctx.settings) ?? false,
 			reportEachModelCall: options.reportEachModelCall ?? false,
+			ephemeral: options.ephemeral ?? false,
 			settings: this.ctx.settings,
 			isNewSession,
 		});

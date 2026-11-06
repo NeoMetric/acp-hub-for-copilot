@@ -239,9 +239,19 @@ describe('AgentClient', () => {
 			model: 'mock-2',
 			disableBuiltInTools: true,
 			reportEachModelCall: false,
+			ephemeral: false,
 			settings: { own: true },
 			isNewSession: true,
 		});
+	});
+
+	it('tells the adapter hook when a session is ephemeral', async () => {
+		const sessionParams = vi.fn(() => ({}));
+		const target = createClient(testAdapter({ sessionParams }));
+
+		await target.createSession({ cwd: temp, mcpServers: [], ephemeral: true });
+
+		expect(sessionParams).toHaveBeenCalledWith(expect.objectContaining({ ephemeral: true }));
 	});
 
 	it('approves permission requests without a separate prompt', async () => {

@@ -109,6 +109,8 @@ export interface SessionParamsInput {
 	/** True when `disableBuiltInTools(settings)` said so. */
 	disableBuiltInTools: boolean;
 	reportEachModelCall: boolean;
+	/** True for a session that is never resumed, so the agent need not keep a transcript of it. */
+	ephemeral?: boolean;
 	/** The agent's settings, for an adapter whose session options depend on one. */
 	settings?: AgentSettings;
 	/** `session/resume` and `session/fork` may refuse a system prompt that `session/new` takes. */

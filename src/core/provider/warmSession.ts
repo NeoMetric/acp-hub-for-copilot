@@ -89,11 +89,11 @@ export class WarmSession {
 		const agent = await this.host.agentClient();
 		const cwd = this.host.cwd();
 		if (!this.host.adapter.declaresBridgeOnModelLookup) {
-			return agent.createSession({ cwd, mcpServers: [] });
+			return agent.createSession({ cwd, mcpServers: [], ephemeral: true });
 		}
 		const endpoint = await this.host.bridge.registerSession([], async () => undefined);
 		try {
-			const session = await agent.createSession({ cwd, mcpServers: [bridgeServer(endpoint)] });
+			const session = await agent.createSession({ cwd, mcpServers: [bridgeServer(endpoint)], ephemeral: true });
 			this.endpoint = endpoint;
 			return session;
 		} catch (error) {
