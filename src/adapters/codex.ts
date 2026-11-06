@@ -66,6 +66,14 @@ const DISABLED_BUILT_IN_FEATURES: Readonly<Record<string, false>> = {
 const EXCLUDED_CODE_MODE_NAMESPACES: readonly string[] = ['functions', 'clock'];
 
 /**
+ * How long an `exec` cell runs before it yields, which is 30 seconds by default. A tool call
+ * waits for Copilot to run the tool, and a question waits for the user to answer. A cell that
+ * yields meanwhile returns "Script running with cell ID ..." with no output, and the agent may
+ * carry on without calling `wait`, so the answer arrives in a cell nobody reads.
+ */
+const EXEC_YIELD_TIME_MS = 30 * 60_000;
+
+/**
  * The `model_context_window` asked for when `maxContextWindow` is on. Codex has
  * one such value for all models and clamps it to each model's own `max_context_window`,
  * so a number no model reaches means "the most this model allows".
@@ -80,6 +88,9 @@ function launch(ctx: LaunchContext): LaunchSpec {
 	const env: Record<string, string> = {
 		INITIAL_AGENT_MODE: SESSION_MODE,
 		CODEX_HOME: ensureCodexHome(ctx.storageDir),
+		// The config of that home names the bridge to give its calls more time, and the adapter
+		// otherwise leaves out a server the config names, which would leave the bridge unreachable.
+		DISABLE_MCP_CONFIG_FILTERING: 'true',
 	};
 	if (ctx.apiKey && !usesChatGptOnly(ctx.settings)) {
 		env.CODEX_API_KEY = ctx.apiKey;
@@ -115,9 +126,9 @@ function readUserConfig(existing: string | undefined): Record<string, unknown> {
  * `mcp_servers` is left alone on purpose. The bridge is handed to the agent as a
  * session's MCP server, and the adapter turns that into Codex's `mcp_servers.vscode`
  * entry, which carries no `tool_timeout_sec`. Naming the server here does not add a
- * timeout to it: Codex refuses a `mcp_servers` entry with no transport ("invalid
- * transport"), so `session/new` fails and the agent offers no models at all, and the
- * adapter skips a session's server whose name the config already defines.
+ * timeout to it: the adapter replaces `mcp_servers` of the session config whole. The
+ * timeout comes from the `config.toml` of the agent's home instead (see `codexHome.ts`),
+ * which Codex merges with the entry of the session.
  */
 export function mergeCodexConfig(existing: string | undefined, maxContextWindow: boolean, baseInstructionsFile?: string): string {
 	const config = readUserConfig(existing);
@@ -132,7 +143,7 @@ export function mergeCodexConfig(existing: string | undefined, maxContextWindow:
 	}
 	const features = { ...asRecord(config.features), ...DISABLED_BUILT_IN_FEATURES };
 	// Code mode stays on: it is the only way the model reaches the bridge's tools.
-	features.code_mode = { ...asRecord(features.code_mode), enabled: true, excluded_tool_namespaces: EXCLUDED_CODE_MODE_NAMESPACES };
+	features.code_mode = { default_exec_yield_time_ms: EXEC_YIELD_TIME_MS, ...asRecord(features.code_mode), enabled: true, excluded_tool_namespaces: EXCLUDED_CODE_MODE_NAMESPACES };
 	config.features = features;
 	config.tools = { ...asRecord(config.tools), experimental_request_user_input: { enabled: false } };
 	config.agents = { ...asRecord(config.agents), enabled: false };
@@ -223,6 +234,8 @@ export const codexAdapter: AgentAdapter = {
 	usage: codexUsage,
 	mergeConfig,
 	sessionParams,
+	// The config of its home names the bridge, and Codex refuses a session whose config names a server with no transport.
+	declaresBridgeOnModelLookup: true,
 	defaultSessionMode: SESSION_MODE,
 	authenticate,
 };

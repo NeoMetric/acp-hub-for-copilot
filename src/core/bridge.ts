@@ -18,6 +18,12 @@ export interface McpServerEndpoint {
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 const KNOWN_PROTOCOL_VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25']);
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
+/**
+ * How often an idle notification stream gets a comment line. Claude Code ends a silent stream
+ * after about 6 minutes and then gives up on every tool call still waiting 90 seconds later,
+ * which loses the answer to a question the user is still thinking about.
+ */
+const STREAM_HEARTBEAT_MS = 20_000;
 
 /** The content of one tool call, in the shape the caller returned it. */
 export interface McpToolResult {
@@ -74,7 +80,7 @@ export class McpBridge implements vscode.Disposable {
 	private readonly streams = new Map<string, Set<http.ServerResponse>>();
 	private disposed = false;
 
-	constructor(private readonly log: Log) { }
+	constructor(private readonly log: Log, private readonly heartbeatMs = STREAM_HEARTBEAT_MS) { }
 
 	/** Registers a tool set for a new ACP session and returns its endpoint. */
 	async registerSession(tools: readonly vscode.LanguageModelChatTool[], execute: McpToolExecutor): Promise<McpServerEndpoint> {
@@ -277,7 +283,15 @@ export class McpBridge implements vscode.Disposable {
 		this.streams.set(token, streams);
 		this.log(`Opened a notification stream for an agent session (${streams.size} open).`, 'debug');
 
+		const heartbeat = setInterval(() => {
+			if (!response.writableEnded && !response.destroyed) {
+				response.write(': ping\n\n');
+			}
+		}, this.heartbeatMs);
+		heartbeat.unref();
+
 		const forget = () => {
+			clearInterval(heartbeat);
 			streams.delete(response);
 			if (streams.size === 0 && this.streams.get(token) === streams) {
 				this.streams.delete(token);

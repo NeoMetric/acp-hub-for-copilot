@@ -140,6 +140,44 @@ describe('McpBridge', () => {
 		await reader.cancel();
 	});
 
+	it('keeps writing to an idle notification stream, so the agent does not take it for a dead connection', async () => {
+		bridge.dispose();
+		bridge = new McpBridge(message => logs.push(message), 20);
+		endpoint = await bridge.registerSession(tools, execute);
+
+		const response = await fetch(endpoint.url, { headers: { authorization: `Bearer ${endpoint.token}` } });
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let seen = '';
+		const deadline = Date.now() + 2_000;
+		while (seen.split(': ping').length < 3 && Date.now() < deadline) {
+			const { value, done } = await reader.read();
+			if (done) {
+				break;
+			}
+			seen += decoder.decode(value, { stream: true });
+		}
+
+		expect(seen.split(': ping').length - 1).toBeGreaterThanOrEqual(2);
+		await reader.cancel();
+	});
+
+	it('stops the heartbeat when the stream closes', async () => {
+		bridge.dispose();
+		bridge = new McpBridge(message => logs.push(message), 20);
+		endpoint = await bridge.registerSession(tools, execute);
+		const clear = vi.spyOn(globalThis, 'clearInterval');
+
+		const response = await fetch(endpoint.url, { headers: { authorization: `Bearer ${endpoint.token}` } });
+		const reader = response.body!.getReader();
+		await reader.read();
+		bridge.unregisterSession(endpoint.token);
+		await expect(reader.read()).resolves.toMatchObject({ done: true });
+
+		await vi.waitFor(() => expect(clear).toHaveBeenCalled());
+		clear.mockRestore();
+	});
+
 	it('stays quiet when the same tools arrive again in another order', () => {
 		const two = [{ name: 'a', description: '' }, { name: 'b', description: '' }] as unknown as vscode.LanguageModelChatTool[];
 		bridge.updateTools(endpoint.token, two);

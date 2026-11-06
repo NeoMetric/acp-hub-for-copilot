@@ -66,8 +66,18 @@ describe('codex launch', () => {
 		expect(spec.command).toBe(process.execPath);
 		expect(spec.args).toEqual([ctx.entryPath]);
 		expect(spec.shell).toBeUndefined();
-		expect(spec.env).toEqual({ INITIAL_AGENT_MODE: 'agent-full-access', CODEX_HOME: path.join(storage, 'codex-home') });
+		expect(spec.env).toEqual({ INITIAL_AGENT_MODE: 'agent-full-access', CODEX_HOME: path.join(storage, 'codex-home'), DISABLE_MCP_CONFIG_FILTERING: 'true' });
 		expect(fs.statSync(path.join(storage, 'codex-home')).isDirectory()).toBe(true);
+	});
+
+	it('has the adapter add the bridge to a session although the config of its home already names it', () => {
+		// Without this the adapter skips its own entry for `vscode`, and the call timeout in the config has no address to apply to.
+		expect(codexAdapter.launch(launchContext()).env.DISABLE_MCP_CONFIG_FILTERING).toBe('true');
+		expect(codexAdapter.mergeConfig?.({}, { DISABLE_MCP_CONFIG_FILTERING: 'true' }).DISABLE_MCP_CONFIG_FILTERING).toBe('true');
+	});
+
+	it('declares the bridge on the session that reads the models, as the config of its home names the bridge', () => {
+		expect(codexAdapter.declaresBridgeOnModelLookup).toBe(true);
 	});
 
 	it('hands the saved key to the agent as CODEX_API_KEY', () => {
@@ -90,9 +100,19 @@ describe('codex mergeConfig', () => {
 
 		expect(config.mcp_servers).toBeUndefined();
 		expect(config.features.shell_tool).toBe(false);
-		expect(config.features.code_mode).toEqual({ enabled: true, excluded_tool_namespaces: ['functions', 'clock'] });
+		expect(config.features.code_mode).toEqual({ enabled: true, excluded_tool_namespaces: ['functions', 'clock'], default_exec_yield_time_ms: 30 * 60_000 });
 		expect(config.web_search).toBe('disabled');
 		expect(config.model_context_window).toBeUndefined();
+	});
+
+	it('keeps an `exec` cell open while the user answers, instead of yielding it after 30 seconds', () => {
+		expect(configOf({}).features.code_mode.default_exec_yield_time_ms).toBeGreaterThan(30_000);
+	});
+
+	it('keeps a yield time the user configured', () => {
+		const user = JSON.stringify({ features: { code_mode: { default_exec_yield_time_ms: 5_000 } } });
+
+		expect(configOf({ CODEX_CONFIG: user }).features.code_mode.default_exec_yield_time_ms).toBe(5_000);
 	});
 
 	it('keeps what the user already configured', () => {
