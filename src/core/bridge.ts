@@ -49,6 +49,13 @@ interface McpSession {
 	 */
 	readonly listed: ReadonlyMap<string, vscode.LanguageModelChatTool>;
 	readonly execute: McpToolExecutor;
+	/** The most characters of text a result may carry to the agent; absent passes results whole. */
+	readonly maxResultChars?: number;
+}
+
+/** What an agent session needs from the bridge besides its tools. */
+export interface McpSessionOptions {
+	readonly maxResultChars?: number;
 }
 
 interface JsonRpcMessage {
@@ -83,11 +90,11 @@ export class McpBridge implements vscode.Disposable {
 	constructor(private readonly log: Log, private readonly heartbeatMs = STREAM_HEARTBEAT_MS) { }
 
 	/** Registers a tool set for a new ACP session and returns its endpoint. */
-	async registerSession(tools: readonly vscode.LanguageModelChatTool[], execute: McpToolExecutor): Promise<McpServerEndpoint> {
+	async registerSession(tools: readonly vscode.LanguageModelChatTool[], execute: McpToolExecutor, options: McpSessionOptions = {}): Promise<McpServerEndpoint> {
 		await this.ensureStarted();
 
 		const token = crypto.randomUUID();
-		this.sessions.set(token, { tools, listed: new Map(tools.map(tool => [tool.name, tool])), execute });
+		this.sessions.set(token, { tools, listed: new Map(tools.map(tool => [tool.name, tool])), execute, maxResultChars: options.maxResultChars });
 
 		const address = this.server?.address() as AddressInfo | null;
 		if (!address || typeof address === 'string') {
@@ -416,8 +423,9 @@ export class McpBridge implements vscode.Disposable {
 			const forwarded = await session.execute(name, request.arguments ?? {}, cancellation.token);
 			if (forwarded) {
 				this.log(`Returned tool ${name} to the caller of the request`, 'debug');
+				const content = toMcpContent(forwarded.content);
 				return {
-					content: toMcpContent(forwarded.content),
+					content: session.maxResultChars === undefined ? content : limitTextContent(content, session.maxResultChars, this.log),
 					...(forwarded.isError ? { isError: true } : {}),
 				};
 			}
@@ -462,6 +470,40 @@ export function toMcpContent(content: ReadonlyArray<unknown>): Array<Record<stri
 	}
 
 	return blocks;
+}
+
+/**
+ * Cuts the text of a result to `maxChars` and appends a note on how to read the rest, so the agent
+ * gets the start of the result in place of one it would take out of the conversation. Images stay.
+ */
+export function limitTextContent(content: Array<Record<string, unknown>>, maxChars: number, log?: Log): Array<Record<string, unknown>> {
+	const total = content.reduce((sum, block) => sum + (block.type === 'text' ? String(block.text).length : 0), 0);
+	if (total <= maxChars) {
+		return content;
+	}
+
+	const limited: Array<Record<string, unknown>> = [];
+	let remaining = maxChars;
+	for (const block of content) {
+		if (block.type !== 'text') {
+			limited.push(block);
+			continue;
+		}
+		const text = String(block.text);
+		if (text.length <= remaining) {
+			limited.push(block);
+			remaining -= text.length;
+		} else if (remaining > 0) {
+			// Whole lines when there is one to end on, so a cut does not leave half a line to be mistaken for the real one.
+			const newline = text.lastIndexOf('\n', remaining);
+			limited.push({ ...block, text: text.slice(0, newline > 0 ? newline : remaining) });
+			remaining = 0;
+		}
+	}
+	const shown = limited.reduce((sum, block) => sum + (block.type === 'text' ? String(block.text).length : 0), 0);
+	limited.push({ type: 'text', text: `\n[Output cut: ${shown} of ${total} characters shown. Ask for a smaller part of it to read the rest, for example a \`view_range\` of a file or a narrower search.]` });
+	log?.(`A tool result of ${total} character(s) was cut to ${shown} for the agent.`, 'debug');
+	return limited;
 }
 
 function stringify(value: unknown): string {

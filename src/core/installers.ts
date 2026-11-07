@@ -88,6 +88,15 @@ export async function findInstalled(adapter: AgentAdapter, env: InstallEnvironme
 	return found ? { entryPath: found, installDir: '' } : undefined;
 }
 
+/** Whether an older install of the agent is in use and the current version still has to be fetched. A command the user set is never replaced. */
+export async function needsUpdate(adapter: AgentAdapter, env: InstallEnvironment): Promise<boolean> {
+	const spec = adapter.install;
+	if (spec.kind !== 'download' || !spec.needsUpdate || adapter.findCommandOverride?.(env.settings ?? {})) {
+		return false;
+	}
+	return spec.needsUpdate(contextFor(adapter, env));
+}
+
 export async function getInstallState(adapter: AgentAdapter, env: InstallEnvironment): Promise<InstallState> {
 	return (await findInstalled(adapter, env)) ? 'installed' : 'not-installed';
 }

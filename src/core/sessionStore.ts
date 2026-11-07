@@ -8,6 +8,29 @@ import type * as vscode from 'vscode';
 
 const MAX_SAVED_SESSIONS = 40;
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+/** The newest checkpoints of one session that are kept; a chat that long forks from its recent turns. */
+const MAX_CHECKPOINTS_PER_SESSION = 50;
+/** Across all sessions; the oldest sessions give up their oldest checkpoints first. */
+const MAX_CHECKPOINTS = 400;
+/** The layout of {@link SavedSession} that is written now; an entry without a version is the first one, with no checkpoints. */
+export const SAVED_SESSION_VERSION = 2;
+
+/**
+ * The end of a finished turn: a point a chat can be forked from. The agent finds the
+ * message by its id, or by what it said when the id is no use any more.
+ */
+export interface Checkpoint {
+	/** How many Copilot messages the session holds there, counting the agent's reply that ended the turn. */
+	readonly messages: number;
+	/** The agent's id of the last message of the turn. */
+	readonly messageId: string;
+	/** `sha256:<hex>` of that message's text. */
+	readonly fingerprint: string;
+	/** Which of the agent's messages with that fingerprint this is, counting from 1. */
+	readonly occurrence: number;
+	/** Message occurrences through this point, including intermediate agent messages. */
+	readonly messageCounts?: Readonly<Record<string, number>>;
+}
 
 /**
  * What is remembered of a chat's agent session so that a later request can pick
@@ -16,6 +39,8 @@ const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
  * transcript on disk; only the way back to it is stored here.
  */
 export interface SavedSession {
+	/** Absent in entries written before checkpoints existed. */
+	readonly version?: number;
 	readonly key: string;
 	/** The agent's id of the session, which names its transcript. */
 	readonly sessionId: string;
@@ -30,11 +55,20 @@ export interface SavedSession {
 	readonly promptHash: string;
 	/** Hashes of the lines of the guidance, so a later window can tell what changed when the guidance hash differs. */
 	readonly guidanceLines?: readonly string[];
+	/** The ends of the turns the session has finished, oldest first. */
+	readonly checkpoints?: readonly Checkpoint[];
+	/** Set when the extension made this session by forking, so it may remove it from the agent once the entry expires. */
+	readonly forked?: boolean;
 	readonly savedAt: number;
 }
 
 export function shortHash(text: string): string {
 	return createHash('sha1').update(text).digest('hex').slice(0, 12);
+}
+
+/** The fingerprint of the text of an agent message, as the agent expects it in a fork point. */
+export function messageFingerprintOf(text: string): string {
+	return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
 }
 
 export function hashAll(values: readonly string[]): string[] {
@@ -100,14 +134,89 @@ export function findForkSource(saved: readonly SavedSession[], incoming: readonl
 	return best;
 }
 
+/** A checkpoint of a saved session that a request continues from. */
+export interface CheckpointMatch {
+	readonly saved: SavedSession;
+	readonly checkpoint: Checkpoint;
+}
+
+/**
+ * The deepest checkpoint, across `candidates`, whose messages are the start of the request and
+ * leave the newest user message for the prompt. A checkpoint inside the saved history is held to
+ * the reply message too, and the one at its end only to the messages before the reply, which the
+ * history has no hash for. A session counts only when it is in the same folder; the tools and the
+ * guidance may differ, since a fork opens with the ones of the request.
+ */
+export function findCheckpoint(candidates: readonly SavedSession[], incoming: readonly string[], lastUser: number, check: ReuseCheck): CheckpointMatch | undefined {
+	let best: CheckpointMatch | undefined;
+	for (const saved of candidates) {
+		if (mismatchOf(saved, check, { ignoreGuidance: true, ignoreTools: true })) {
+			continue;
+		}
+		for (const checkpoint of saved.checkpoints ?? []) {
+			if (checkpoint.messages <= 0 || checkpoint.messages > lastUser || !isPrefixOf(saved.history.slice(0, checkpoint.messages), incoming)) {
+				continue;
+			}
+			const deeper = !best || checkpoint.messages > best.checkpoint.messages || (checkpoint.messages === best.checkpoint.messages && saved.savedAt > best.saved.savedAt);
+			if (deeper) {
+				best = { saved, checkpoint };
+			}
+		}
+	}
+	return best;
+}
+
+function isCheckpoint(value: unknown): value is Checkpoint {
+	const checkpoint = value as Partial<Checkpoint> | undefined;
+	return typeof checkpoint?.messages === 'number' && typeof checkpoint.messageId === 'string' && typeof checkpoint.fingerprint === 'string' && typeof checkpoint.occurrence === 'number';
+}
+
+/** An entry in the current layout; an older one has no checkpoints. */
+function upgraded(entry: SavedSession): SavedSession {
+	if (entry.version === SAVED_SESSION_VERSION) {
+		return entry;
+	}
+	return { ...entry, version: SAVED_SESSION_VERSION, checkpoints: Array.isArray(entry.checkpoints) ? entry.checkpoints.filter(isCheckpoint) : [] };
+}
+
+/** Keeps the newest checkpoints of each session and `MAX_CHECKPOINTS` in all, taking from the oldest sessions first. */
+function trimCheckpoints(entries: readonly SavedSession[]): SavedSession[] {
+	const trimmed = entries.map(entry => (entry.checkpoints?.length ?? 0) > MAX_CHECKPOINTS_PER_SESSION ? { ...entry, checkpoints: entry.checkpoints?.slice(-MAX_CHECKPOINTS_PER_SESSION) } : entry);
+	let excess = trimmed.reduce((total, entry) => total + (entry.checkpoints?.length ?? 0), 0) - MAX_CHECKPOINTS;
+	if (excess <= 0) {
+		return trimmed;
+	}
+	const byAge = trimmed.map((entry, index) => ({ entry, index })).sort((a, b) => a.entry.savedAt - b.entry.savedAt);
+	const result = [...trimmed];
+	for (const { entry, index } of byAge) {
+		if (excess <= 0) {
+			break;
+		}
+		const drop = Math.min(excess, entry.checkpoints?.length ?? 0);
+		result[index] = { ...entry, checkpoints: entry.checkpoints?.slice(drop) };
+		excess -= drop;
+	}
+	return result;
+}
+
 /** The saved sessions, kept in extension state so they outlive the window. */
 export class SavedSessionStore {
 	/** storeKey keeps the sessions of different agents apart in the shared extension state. */
 	constructor(private readonly state: vscode.Memento | undefined, private readonly storeKey: string) { }
 
+	private get deletionKey(): string {
+		return `${this.storeKey}.deletions`;
+	}
+
+	/** The entries that have not expired, in the current layout; the first read of an older layout writes it back. */
 	all(): SavedSession[] {
 		const now = Date.now();
-		return (this.state?.get<SavedSession[]>(this.storeKey) ?? []).filter(entry => now - entry.savedAt < MAX_AGE_MS);
+		const stored = this.state?.get<SavedSession[]>(this.storeKey) ?? [];
+		const entries = stored.filter(entry => now - entry.savedAt < MAX_AGE_MS).map(upgraded);
+		if (stored.some(entry => entry.version !== SAVED_SESSION_VERSION) || entries.length !== stored.length) {
+			this.write(entries, stored);
+		}
+		return entries;
 	}
 
 	find(key: string): SavedSession | undefined {
@@ -115,14 +224,36 @@ export class SavedSessionStore {
 	}
 
 	save(entry: SavedSession): void {
-		const others = this.all().filter(existing => existing.key !== entry.key);
-		void this.state?.update(this.storeKey, [...others, entry].slice(-MAX_SAVED_SESSIONS));
+		const all = this.all();
+		const others = all.filter(existing => existing.key !== entry.key);
+		this.write(trimCheckpoints([...others, upgraded(entry)].slice(-MAX_SAVED_SESSIONS)), all);
 	}
 
 	forget(key: string): void {
 		const all = this.all();
 		if (all.some(entry => entry.key === key)) {
-			void this.state?.update(this.storeKey, all.filter(entry => entry.key !== key));
+			this.write(all.filter(entry => entry.key !== key), all);
+		}
+	}
+
+	/** Ids of sessions the extension forked whose entry is gone, which the agent may still hold. */
+	pendingDeletions(): string[] {
+		return this.state?.get<string[]>(this.deletionKey) ?? [];
+	}
+
+	settleDeletions(ids: readonly string[]): void {
+		const pending = this.pendingDeletions();
+		if (pending.some(id => ids.includes(id))) {
+			void this.state?.update(this.deletionKey, pending.filter(id => !ids.includes(id)));
+		}
+	}
+
+	/** Writes the entries; a forked session that no entry names any more is queued for deletion from the agent. */
+	private write(entries: readonly SavedSession[], previous: readonly SavedSession[]): void {
+		const orphaned = previous.filter(old => old.forked && !entries.some(entry => entry.sessionId === old.sessionId)).map(old => old.sessionId);
+		void this.state?.update(this.storeKey, entries);
+		if (orphaned.length > 0) {
+			void this.state?.update(this.deletionKey, [...new Set([...this.pendingDeletions(), ...orphaned])].slice(-MAX_SAVED_SESSIONS * 2));
 		}
 	}
 }

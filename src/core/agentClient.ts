@@ -76,6 +76,8 @@ export interface AcpSessionUpdate {
 	readonly asyncTaskId?: string;
 	readonly state?: string;
 	readonly content?: AcpUpdateContent | null;
+	/** Names the agent message a chunk belongs to; every chunk of one message carries the same id. */
+	readonly messageId?: string;
 	readonly toolCallId?: string;
 	readonly title?: string;
 	readonly used?: number;
@@ -119,6 +121,15 @@ export interface CreateSessionOptions {
 	readonly reportEachModelCall?: boolean;
 	/** The session is never resumed, so an agent that can may skip keeping its transcript. */
 	readonly ephemeral?: boolean;
+}
+
+/** Where in a stored conversation a fork is taken: after one agent message, named by id and by what it said. */
+export interface ForkPoint {
+	readonly messageId: string;
+	/** `sha256:<hex>` of the message's text, for an agent that no longer knows the id. */
+	readonly messageFingerprint: string;
+	/** Which of the messages with that fingerprint is meant, counting from 1. */
+	readonly messageOccurrence: number;
 }
 
 export interface PromptHandlers {
@@ -208,7 +219,8 @@ interface AcpQuotaTokenCount extends Partial<AcpTokenUsage> {
 
 interface AcpPromptResponse {
 	readonly stopReason?: string;
-	readonly usage?: Partial<AcpTokenUsage>;
+	/** `thoughtTokens` is how an agent that counts thinking apart from the answer names it (the Antigravity server). */
+	readonly usage?: Partial<AcpTokenUsage> & { readonly thoughtTokens?: number };
 	readonly _meta?: { readonly quota?: { readonly token_count?: AcpQuotaTokenCount | null } };
 }
 
@@ -258,6 +270,8 @@ export class AgentClient implements vscode.Disposable {
 	private readonly seenCalls = new Set<string>();
 	private readonly backgroundTasks = new Map<string, Set<string>>();
 	private authMethods: readonly AcpAuthMethod[] = [];
+	/** `agentCapabilities.sessionCapabilities` of the running process: which session methods beyond the basic ones it supports. */
+	private sessionCapabilities: unknown;
 	private authStatus: unknown;
 	private signInRequired = false;
 	/** True while `signInWithMethod` runs, the only time a page request from the agent is honoured. */
@@ -359,17 +373,52 @@ export class AgentClient implements vscode.Disposable {
 		return this.openSession('session/resume', sessionId, options);
 	}
 
-	/** Copies the stored conversation `sessionId`, up to its latest message, into a session of its own. */
-	async forkSession(sessionId: string, options: CreateSessionOptions): Promise<AgentSession> {
-		return this.openSession('session/fork', sessionId, options);
+	/**
+	 * Copies the stored conversation `sessionId` into a session of its own: up to `point` when
+	 * given, otherwise up to its latest message. The source stays as it is.
+	 */
+	async forkSession(sessionId: string, options: CreateSessionOptions, point?: ForkPoint): Promise<AgentSession> {
+		return this.openSession('session/fork', sessionId, options, point);
 	}
 
-	private async openSession(method: 'session/new' | 'session/resume' | 'session/fork', sourceId: string | undefined, options: CreateSessionOptions): Promise<AgentSession> {
+	/** Whether the agent said in `initialize` that it can fork a session; one that did not would answer without forking. */
+	get supportsFork(): boolean {
+		return this.advertises('fork');
+	}
+
+	/** Whether the agent said in `initialize` that it can delete a stored session. */
+	get supportsDelete(): boolean {
+		return this.advertises('delete');
+	}
+
+	private advertises(capability: string): boolean {
+		const value = (this.sessionCapabilities as Record<string, unknown> | undefined)?.[capability];
+		return value !== undefined && value !== null && value !== false;
+	}
+
+	/** Removes a stored session from the agent; only for an agent that advertises it. Best effort: returns whether it was removed. */
+	async deleteSession(sessionId: string): Promise<boolean> {
+		if (!this.supportsDelete || !this.rpc) {
+			return false;
+		}
+		this.beginOperation();
+		try {
+			await this.rpc.request('session/delete', { sessionId }, { timeoutMs: CLOSE_SESSION_TIMEOUT_MS });
+			return true;
+		} catch (error) {
+			this.log(`Could not delete session ${sessionId}: ${describeError(error)}`, 'debug');
+			return false;
+		} finally {
+			this.endOperation();
+		}
+	}
+
+	private async openSession(method: 'session/new' | 'session/resume' | 'session/fork', sourceId: string | undefined, options: CreateSessionOptions, point?: ForkPoint): Promise<AgentSession> {
 		this.beginOperation();
 		try {
 			const rpc = await this.ensureStarted();
 			const extra = this.sessionExtras(options, method === 'session/new');
-			const params = { ...(sourceId ? { sessionId: sourceId } : {}), cwd: options.cwd, mcpServers: options.mcpServers, ...extra };
+			const params = { ...(sourceId ? { sessionId: sourceId } : {}), cwd: options.cwd, mcpServers: options.mcpServers, ...withForkPoint(extra, point) };
 
 			let response: Partial<AcpNewSessionResponse> | undefined;
 			try {
@@ -383,10 +432,14 @@ export class AgentClient implements vscode.Disposable {
 				throw this.adapter.mapError?.(error) ?? error;
 			}
 
-			// A resume answers without the id: the session keeps its own.
-			const sessionId = response?.sessionId ?? sourceId;
+			// A resume answers without the id: the session keeps its own. A fork must name a new one,
+			// or the chat would go on in the session it was meant to leave untouched.
+			const sessionId = method === 'session/fork' ? response?.sessionId : response?.sessionId ?? sourceId;
 			if (!sessionId) {
 				throw new Error('The agent opened a session without telling its id.');
+			}
+			if (method === 'session/fork' && sessionId === sourceId) {
+				throw new Error('The agent answered a fork with the id of the session it was asked to copy.');
 			}
 			let configOptions = response?.configOptions ?? [];
 			configOptions = await this.applyDefaultMode(sessionId, configOptions);
@@ -714,6 +767,7 @@ export class AgentClient implements vscode.Disposable {
 			}, { timeoutMs: INITIALIZE_TIMEOUT_MS });
 
 			this.authMethods = response.authMethods ?? [];
+			this.sessionCapabilities = response.agentCapabilities?.sessionCapabilities;
 			this.log(`Initialized ACP protocol ${response.protocolVersion ?? ACP_PROTOCOL_VERSION} with ${response.agentInfo?.title ?? response.agentInfo?.name ?? this.adapter.displayName} ${response.agentInfo?.version ?? ''}`.trim());
 			this.log(`Auth methods: ${this.authMethods.map(method => method.id ?? method.name ?? 'unknown').join(', ') || 'none'}`);
 			await this.authenticate(rpc);
@@ -807,6 +861,7 @@ export class AgentClient implements vscode.Disposable {
 		this.child = undefined;
 		this.rpc = undefined;
 		this.starting = undefined;
+		this.sessionCapabilities = undefined;
 		this.generation++;
 		this.turnSinks.clear();
 		this.usageSinks.clear();
@@ -957,6 +1012,18 @@ function offersValue(option: AcpConfigOption, value: string): boolean {
 	return false;
 }
 
+/** Adds the fork point to the `_meta` of a session request, next to what the adapter put there. */
+function withForkPoint(extra: Record<string, unknown>, point: ForkPoint | undefined): Record<string, unknown> {
+	if (!point) {
+		return extra;
+	}
+	const meta = (extra._meta ?? {}) as Record<string, unknown>;
+	const jetbrains = (meta.jetbrains ?? {}) as Record<string, unknown>;
+	const air = (jetbrains.air ?? {}) as Record<string, unknown>;
+	const fork = { version: 1, messageId: point.messageId, messageFingerprint: point.messageFingerprint, messageOccurrence: point.messageOccurrence };
+	return { ...extra, _meta: { ...meta, jetbrains: { ...jetbrains, air: { ...air, fork } } } };
+}
+
 function numberSetting(settings: AgentSettings, key: string, fallback: number): number {
 	const value = settings[key];
 	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
@@ -982,6 +1049,7 @@ export function readTokenUsage(response: AcpPromptResponse): AcpTokenUsage | und
 	}
 
 	const count = (value: unknown): number => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+	const thoughtTokens = (usage as { thoughtTokens?: unknown }).thoughtTokens;
 	const inputTokens = count(usage.inputTokens);
 	const outputTokens = count(usage.outputTokens);
 	// The quota breakdown names the cache counts `cachedInputTokens` and
@@ -996,6 +1064,6 @@ export function readTokenUsage(response: AcpPromptResponse): AcpTokenUsage | und
 		cachedReadTokens,
 		cachedWriteTokens,
 		totalTokens: count(usage.totalTokens) || inputTokens + outputTokens + cachedReadTokens + cachedWriteTokens,
-		reasoningOutputTokens: typeof usage.reasoningOutputTokens === 'number' ? usage.reasoningOutputTokens : undefined,
+		reasoningOutputTokens: typeof usage.reasoningOutputTokens === 'number' ? usage.reasoningOutputTokens : typeof thoughtTokens === 'number' ? thoughtTokens : undefined,
 	};
 }

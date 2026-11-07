@@ -32,7 +32,7 @@ describe('claudeAdapter', () => {
 			manifestDirectory: 'adapters/claude',
 		});
 		expect(claudeAdapter.usage).toBe(claudeUsage);
-		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'toolSearch', 'replaceSystemPrompt']);
+		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'toolSearch', 'showThinking', 'replaceSystemPrompt']);
 	});
 
 	it('lists its sign-in methods', () => {
@@ -128,6 +128,7 @@ describe('claude sessionParams', () => {
 						allowedTools: ['mcp__vscode__*'],
 						strictMcpConfig: true,
 						settingSources: [],
+						thinking: { type: 'adaptive', display: 'summarized' },
 						model: 'claude-x',
 					},
 				},
@@ -142,6 +143,20 @@ describe('claude sessionParams', () => {
 		expect(optionsOf(sessionInput)).not.toHaveProperty('persistSession');
 		expect(optionsOf({ ...sessionInput, ephemeral: false })).not.toHaveProperty('persistSession');
 		expect(optionsOf({ ...sessionInput, ephemeral: true }).persistSession).toBe(false);
+	});
+
+	it('asks for the thinking text on a chat session but not on an ephemeral one', () => {
+		const optionsOf = (input: SessionParamsInput) => (claudeAdapter.sessionParams?.(input) as { _meta: { claudeCode: { options: Record<string, unknown> } } })._meta.claudeCode.options;
+
+		expect(optionsOf(sessionInput).thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+		expect(optionsOf({ ...sessionInput, ephemeral: true })).not.toHaveProperty('thinking');
+	});
+
+	it('leaves the thinking text out when the setting is off', () => {
+		const optionsOf = (input: SessionParamsInput) => (claudeAdapter.sessionParams?.(input) as { _meta: { claudeCode: { options: Record<string, unknown> } } })._meta.claudeCode.options;
+
+		expect(optionsOf({ ...sessionInput, settings: { showThinking: false } })).not.toHaveProperty('thinking');
+		expect(optionsOf({ ...sessionInput, settings: { showThinking: true } }).thinking).toEqual({ type: 'adaptive', display: 'summarized' });
 	});
 
 	it('replaces the Claude Code prompt with a string when the setting is on', () => {

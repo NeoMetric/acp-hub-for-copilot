@@ -11,13 +11,14 @@ import type { AcpContentBlock } from '../convert';
 import type { Log } from '../logging';
 import { RpcConnectionClosedError } from '../rpc';
 import type { SavedSessionStore } from '../sessionStore';
+import { checkpointOf, noteAgentUpdate } from './checkpoints';
 import { CANCELLED_TOOL_CALL, clearToolDeadline, disposeCancellations, failPendingToolCalls, releaseHeldToolCalls, sleepUntilActivity, trackCancellation, wakeTurn, watchToolCalls } from './heldCalls';
 import { keepsSessionAfterFailure } from './keys';
 import type { ModelList } from './modelList';
 import { rememberSession } from './reuse';
 import { describe } from './sessionOptions';
 import type { ActiveTurn, AgentApi, ChatSession, FinishedTurn } from './types';
-import { addModelCall, logCache, logContextCall, logReuseVerdict, reportUsage, warnIfCallsMissing } from './usageReport';
+import { addModelCall, logCache, logContextCall, logReuseVerdict, logTokens, reportUsage, warnIfCallsMissing } from './usageReport';
 
 /**
  * How long to collect tool calls before handing a turn back to Copilot, so
@@ -82,6 +83,7 @@ export class TurnRunner {
 			},
 			onThought: text => {
 				firstOutput('thinking');
+				turn.thoughtCharacters = (turn.thoughtCharacters ?? 0) + text.length;
 				if (turn.streaming) {
 					reportThinking(turn.progress, text);
 				}
@@ -97,7 +99,9 @@ export class TurnRunner {
 		}).then(
 			result => {
 				turn.result = result;
-				if (result.usage && !this.reportsEachModelCall) {
+				if (result.usage && this.host.adapter.reportsCache === false) {
+					logTokens(result.usage, this.log);
+				} else if (result.usage && !this.reportsEachModelCall) {
 					logCache('Turn cache', result.usage, this.log, turn.contextCalls);
 					logReuseVerdict(session, result.usage, 'turn', this.log);
 				}
@@ -130,6 +134,7 @@ export class TurnRunner {
 			contextCalls: 0,
 			contextSent: 0,
 			reportedTokens: 0,
+			agentMessages: [],
 			contextUsed: session.contextUsed,
 			startedAt: Date.now(),
 		};
@@ -141,6 +146,7 @@ export class TurnRunner {
 	}
 
 	private handleUpdate(session: ChatSession, turn: ActiveTurn, update: AcpSessionUpdate): void {
+		noteAgentUpdate(turn.agentMessages, update);
 		if (update.sessionUpdate === 'tool_call') {
 			turn.toolCalls++;
 			return;
@@ -219,6 +225,14 @@ export class TurnRunner {
 		session.history.length = 0;
 		session.history.push(...fingerprints);
 		session.failures = 0;
+		// The agent's reply that ends the turn is the message after the last one of the request.
+		const checkpoint = checkpointOf(turn.agentMessages, session.messageCounts, fingerprints.length + 1);
+		if (checkpoint) {
+			session.checkpoints.push(checkpoint);
+			this.log(`[checkpoint] ${key}: after ${checkpoint.messages} message(s), agent message ${checkpoint.messageId}, ${checkpoint.fingerprint.slice(0, 15)}… occurrence ${checkpoint.occurrence}.`, 'debug');
+		} else {
+			this.log(`[checkpoint] ${key}: the turn did not end on a message of the agent's; no fork point recorded.`, 'debug');
+		}
 		rememberSession(this.host.saved, key, session, fingerprints, this.log);
 
 		reportUsage(turn, this.log);
@@ -229,7 +243,7 @@ export class TurnRunner {
 		this.host.finished({ usage: reported, background: session.toolCount === 0, chat: session.chat, model: session.model, contextUsed: turn.contextUsed, contextSize: turn.contextSize });
 
 		const stopReason = turn.result?.stopReason ?? 'unknown';
-		this.log(`Turn finished in ${Date.now() - turn.startedAt}ms: ${turn.characters} character(s), ${turn.toolCalls} tool call(s), stop reason "${stopReason}".`);
+		this.log(`Turn finished in ${Date.now() - turn.startedAt}ms: ${turn.characters} character(s), ${turn.thoughtCharacters ?? 0} of thinking, ${turn.toolCalls} tool call(s), stop reason "${stopReason}".`);
 		if (stopReason === 'cancelled' && !token.isCancellationRequested) {
 			this.log('The agent cancelled the turn on its own.', 'warn');
 		}

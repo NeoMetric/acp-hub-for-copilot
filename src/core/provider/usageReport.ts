@@ -53,6 +53,12 @@ export function logCache(label: 'Model call' | 'Turn cache', usage: AcpTokenUsag
 	log(`${label}: ${hitRateOf(usage).toFixed(1)}% hit (${describeUsage(usage)}${sum}).`);
 }
 
+/** Logs the tokens of a turn for an agent whose cache counts mean nothing, so no hit rate is shown. */
+export function logTokens(usage: AcpTokenUsage, log: Log): void {
+	const thinking = usage.reasoningOutputTokens ? `, ${usage.reasoningOutputTokens} of thinking` : '';
+	log(`Turn tokens: ${usage.inputTokens} in, ${usage.outputTokens} out${thinking}.`);
+}
+
 /**
  * Logs one model call of an agent that reports only the context it sent (`usage_update`) and the cache
  * split of the whole turn, so the turn's total can be traced to the calls that make it up.

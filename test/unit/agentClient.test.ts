@@ -274,6 +274,86 @@ describe('AgentClient', () => {
 	});
 });
 
+describe('AgentClient forking', () => {
+	const point = { messageId: 'm1', messageFingerprint: `sha256:${'a'.repeat(64)}`, messageOccurrence: 2 };
+
+	it('only offers forking and deleting when the agent advertised them', async () => {
+		const plain = createClient();
+		await plain.ensureStarted();
+		expect(plain.supportsFork).toBe(false);
+		expect(plain.supportsDelete).toBe(false);
+		plain.dispose();
+
+		mockMode = 'fork';
+		const forking = createClient();
+		await forking.ensureStarted();
+		expect(forking.supportsFork).toBe(true);
+		expect(forking.supportsDelete).toBe(true);
+	});
+
+	it('sends the fork point in _meta next to what the adapter adds, and returns the new session', async () => {
+		mockMode = 'fork';
+		const target = createClient(testAdapter({ sessionParams: () => ({ _meta: { claudeCode: { options: { tools: [] } }, jetbrains: { other: 1 } } }) }));
+		const source = await target.createSession({ cwd: temp, mcpServers: [] });
+
+		const fork = await target.forkSession(source.sessionId, { cwd: temp, mcpServers: [] }, point);
+
+		expect(fork.sessionId).not.toBe(source.sessionId);
+		expect(JSON.parse(await reply(target, fork.sessionId, 'meta'))).toEqual({
+			claudeCode: { options: { tools: [] } },
+			jetbrains: { other: 1, air: { fork: { version: 1, ...point } } },
+		});
+	});
+
+	it('forks without a fork point when none is given', async () => {
+		mockMode = 'fork';
+		const target = createClient();
+		const source = await target.createSession({ cwd: temp, mcpServers: [] });
+
+		const fork = await target.forkSession(source.sessionId, { cwd: temp, mcpServers: [] });
+
+		expect(JSON.parse(await reply(target, fork.sessionId, 'meta'))).toBeNull();
+	});
+
+	it('fails a fork the agent answered without a session id', async () => {
+		mockMode = 'fork-empty';
+		const target = createClient();
+		const source = await target.createSession({ cwd: temp, mcpServers: [] });
+
+		await expect(target.forkSession(source.sessionId, { cwd: temp, mcpServers: [] }, point)).rejects.toThrow('without telling its id');
+	});
+
+	it('fails a fork the agent answered with the id of the source', async () => {
+		mockMode = 'fork-same';
+		const target = createClient();
+		const source = await target.createSession({ cwd: temp, mcpServers: [] });
+
+		await expect(target.forkSession(source.sessionId, { cwd: temp, mcpServers: [] }, point)).rejects.toThrow('id of the session it was asked to copy');
+	});
+
+	it('still lets a resume answer without an id', async () => {
+		const target = createClient();
+
+		const resumed = await target.resumeSession('s9', { cwd: temp, mcpServers: [] });
+
+		expect(resumed.sessionId).toBe('s9');
+	});
+
+	it('deletes a session only where the agent advertised it', async () => {
+		const plain = createClient();
+		await plain.ensureStarted();
+		expect(await plain.deleteSession('s1')).toBe(false);
+		plain.dispose();
+
+		mockMode = 'fork';
+		const target = createClient();
+		const session = await target.createSession({ cwd: temp, mcpServers: [] });
+
+		expect(await target.deleteSession('s7')).toBe(true);
+		expect(JSON.parse(await reply(target, session.sessionId, 'deleted'))).toEqual(['s7']);
+	});
+});
+
 describe('readTokenUsage', () => {
 	it('prefers the quota breakdown and names its cache fields', () => {
 		const usage = readTokenUsage({
@@ -289,6 +369,12 @@ describe('readTokenUsage', () => {
 
 		expect(usage?.outputTokens).toBe(0);
 		expect(usage?.totalTokens).toBe(9);
+	});
+
+	it('reads the usage the Antigravity server puts in the prompt result, with its thinking tokens', () => {
+		const usage = readTokenUsage({ usage: { inputTokens: 120, outputTokens: 30, thoughtTokens: 45, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195 } as never });
+
+		expect(usage).toEqual({ inputTokens: 120, outputTokens: 30, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195, reasoningOutputTokens: 45 });
 	});
 
 	it('returns undefined without any usage', () => {

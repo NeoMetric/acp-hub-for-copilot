@@ -8,7 +8,7 @@ import { REGISTRY, registryAgent } from '../core/registry';
 import { vendorOf } from '../core/vendors';
 import { claudeModelPolicy } from './claudeModels';
 import { claudeUsage } from './claudeUsage';
-import { stringSetting } from './settingValues';
+import { booleanSetting, stringSetting } from './settingValues';
 
 const ID = 'claude';
 
@@ -64,6 +64,9 @@ function sessionParams(input: SessionParamsInput): Record<string, unknown> {
 	if (input.ephemeral) {
 		// Otherwise every session, even a `/usage` read, leaves a transcript under ~/.claude/projects.
 		claudeCodeOptions.persistSession = false;
+	} else if (booleanSetting(input.settings ?? {}, 'showThinking', true)) {
+		// Recent models leave the thinking text out of the stream unless asked, so the chat would show none.
+		claudeCodeOptions.thinking = { type: 'adaptive', display: 'summarized' };
 	}
 
 	const claudeCode: Record<string, unknown> = { options: claudeCodeOptions };
@@ -172,6 +175,7 @@ export const claudeAdapter: AgentAdapter = {
 	},
 	usage: claudeUsage,
 	refreshesTools: true,
+	forkChats: true,
 	signInCompleted,
 	disableBuiltInTools: () => true,
 	mergeConfig,

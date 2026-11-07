@@ -9,11 +9,12 @@ import type { AcpTokenUsage, AgentClient, AgentClientDeps, AgentSession, PromptR
 import type { McpBridge, McpServerEndpoint } from '../bridge';
 import type { ChatIdentity } from '../cache';
 import type { Log } from '../logging';
-import type { SavedSession } from '../sessionStore';
+import type { Checkpoint, SavedSession } from '../sessionStore';
+import type { AgentMessage } from './checkpoints';
 
 /** The part of {@link AgentClient} the provider uses; tests hand in a fake. */
 export type AgentApi = Pick<AgentClient,
-	'ensureStarted' | 'createSession' | 'resumeSession' | 'forkSession' | 'closeSession' | 'setConfigOption' | 'setSessionModel'
+	'ensureStarted' | 'createSession' | 'resumeSession' | 'forkSession' | 'deleteSession' | 'supportsFork' | 'supportsDelete' | 'closeSession' | 'setConfigOption' | 'setSessionModel'
 	| 'prompt' | 'cancel' | 'restart' | 'stopWhenIdle' | 'hasBackgroundTasks' | 'isRunning' | 'requiresSignIn' | 'onDidChange'
 	| 'updateContext' | 'signInWithMethod' | 'dispose'>;
 
@@ -76,6 +77,8 @@ export interface ActiveTurn {
 	waiters: Array<() => void>;
 	toolCalls: number;
 	characters: number;
+	/** Characters of thinking text the agent streamed this turn. */
+	thoughtCharacters?: number;
 	/** Token counts of the last model call, as reported by the agent. */
 	contextUsed?: number;
 	contextSize?: number;
@@ -84,6 +87,8 @@ export interface ActiveTurn {
 	/** Model calls seen through `usage_update` and the tokens they sent, added up (agents that report only the turn's cache split). */
 	contextCalls: number;
 	contextSent: number;
+	/** What the agent said this turn, message by message, for the checkpoint the turn leaves. */
+	readonly agentMessages: AgentMessage[];
 	/** Completion tokens already reported to Copilot. */
 	reportedTokens: number;
 	startedAt: number;
@@ -115,6 +120,8 @@ export interface GuidanceChange {
 export interface Reuse {
 	readonly kind: 'resume' | 'fork';
 	readonly saved: SavedSession;
+	/** Where a fork is taken; a fork without one copies the saved session up to its latest message. */
+	readonly checkpoint?: Checkpoint;
 	/** Set when the chat resumes its own session although the guidance differs; the change is sent with the next prompt. */
 	readonly guidanceChange?: GuidanceChange;
 	/** The messages of the request that the stored conversation already holds. */
@@ -127,6 +134,12 @@ export interface ChatSession {
 	/** The guidance in it is what the agent has been told, so it follows the guidance changes sent to the session. */
 	context: ChatContext;
 	readonly history: string[];
+	/** The ends of the turns the session holds, which a later request can fork from. */
+	checkpoints: Checkpoint[];
+	/** How often each agent message text occurs in the session, to number the occurrences in a fork point. */
+	readonly messageCounts: Map<string, number>;
+	/** Whether the extension made the session by forking, which lets it delete the session when its entry expires. */
+	forked?: boolean;
 	model: string;
 	/** How many tools Copilot offered with the latest request; none marks a request Copilot made for itself. */
 	toolCount: number;

@@ -125,6 +125,11 @@ describe('codex mergeConfig', () => {
 		expect(config.features.goals).toBe(false);
 	});
 
+	it('asks for reasoning summaries, and keeps the value the user configured', () => {
+		expect(configOf({}).model_reasoning_summary).toBe('concise');
+		expect(configOf({ CODEX_CONFIG: JSON.stringify({ model_reasoning_summary: 'none' }) }).model_reasoning_summary).toBe('none');
+	});
+
 	it('asks for the largest context window when the setting is on', () => {
 		expect(configOf({}, { maxContextWindow: true }).model_context_window).toBe(10_000_000);
 	});

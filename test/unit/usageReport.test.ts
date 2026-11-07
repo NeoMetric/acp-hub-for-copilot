@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { logCache, logContextCall } from '../../src/core/provider/usageReport';
+import { logCache, logContextCall, logTokens } from '../../src/core/provider/usageReport';
 import type { ActiveTurn } from '../../src/core/provider/types';
 
 const usage = { inputTokens: 1000, outputTokens: 50, cachedReadTokens: 9000, cachedWriteTokens: 0, totalTokens: 10050 };
@@ -28,5 +28,14 @@ describe('logCache', () => {
 			'Turn cache: 90.0% hit (9000 cached, 1000 fresh, 0 written).',
 			'Model call: 90.0% hit (9000 cached, 1000 fresh, 0 written).',
 		]);
+	});
+});
+
+describe('logTokens', () => {
+	it('lists the tokens without a cache hit rate', () => {
+		const lines: string[] = [];
+		logTokens({ inputTokens: 120, outputTokens: 30, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195, reasoningOutputTokens: 45 }, line => lines.push(line));
+		logTokens({ inputTokens: 5, outputTokens: 2, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 7 }, line => lines.push(line));
+		expect(lines).toEqual(['Turn tokens: 120 in, 30 out, 45 of thinking.', 'Turn tokens: 5 in, 2 out.']);
 	});
 });

@@ -2,6 +2,8 @@
 
 ## 0.0.6
 
+- Continue edited and forked chats from a saved conversation checkpoint when the agent supports it. Antigravity requires the separately installed Antigravity CLI; otherwise the chat is rebuilt from its transcript.
+- Fix Antigravity taking minutes over a few steps of a turn. The agent saves a tool result of about 4,000 characters or more, such as a file read in full, to a file and hands the model only the path. With its own file tools off, the model then reasoned for 4,000 to 20,000 tokens about how to get at the content. Results are now cut to 3,500 characters with a note on how to ask for the rest, and the same eight-step test went from about 3.5 minutes to about 1 minute.
 - Fix an answer to a question never reaching Codex. Codex's `exec` tool yielded after 30 seconds, before the user had answered, and the agent went on without reading the answer. It now stays open for up to 30 minutes, and a yield time set in `CODEX_CONFIG` is kept.
 - Fix an answer to a question that took longer than 5 minutes being lost with "timed out awaiting tools/call after 300s". Codex now gives a call to the Copilot tools up to 24 hours, set in the `config.toml` of the extension's own Codex home. The extension keeps that file up to date until its first line is removed.
 - Fix an answer to a question never reaching Claude when the user took several minutes. Claude Code closes a silent tool notification stream after about 6 minutes and then drops the pending call ("transport dropped mid-call"). The bridge now keeps the stream alive.

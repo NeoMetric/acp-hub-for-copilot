@@ -1,4 +1,4 @@
-import type { AcpAuthMethod, AcpTokenUsage } from './agentClient';
+import type { AcpAuthMethod, AcpTokenUsage, ForkPoint } from './agentClient';
 import type { Log } from './logging';
 
 /** Values of an agent's settings, after defaults are applied. */
@@ -19,8 +19,30 @@ export interface InstallContext {
  */
 export type InstallSpec =
 	| { kind: 'npm'; packageName: string; version: string; manifestDirectory: string; entry?: string }
-	| { kind: 'download'; version: string; find(ctx: InstallContext): Promise<string | undefined>; install(ctx: InstallContext): Promise<string> }
+	| { kind: 'download'; version: string; find(ctx: InstallContext): Promise<string | undefined>; install(ctx: InstallContext): Promise<string>; /** Whether an older install is in use and the current version is not there yet; the extension then fetches it unasked. */ needsUpdate?(ctx: InstallContext): Promise<boolean> }
 	| { kind: 'existing-cli'; command: string };
+
+/** What a conversation fork needs: the session to copy, where to cut it, and the folder the copy belongs to. */
+export interface ConversationForkRequest {
+	readonly sessionId: string;
+	readonly point: ForkPoint;
+	readonly cwd: string;
+}
+
+/**
+ * A way to fork a stored conversation for an agent that does not answer `session/fork`: a program
+ * on the machine copies it, and the agent then opens the copy with `session/resume`.
+ */
+export interface ConversationForker {
+	/** Changing this setting clears a previous decision not to use the external forker. */
+	commandSetting?: string;
+	/** The program that forks, or `undefined` when this machine has none. */
+	locate(settings: AgentSettings, log: Log): Promise<string | undefined>;
+	/** Copies the conversation up to the fork point and returns the id of the copy. */
+	fork(program: string, request: ConversationForkRequest, log: Log): Promise<string>;
+	/** What the user is told once, the first time a chat needs a fork and `locate` finds nothing. */
+	missing: { message: string; helpLabel: string; helpUrl: string; declineLabel: string };
+}
 
 export interface LaunchContext {
 	/** What the install produced: the adapter's entry file, the downloaded program, or the CLI command. */
@@ -161,13 +183,19 @@ export interface AgentAdapter {
 	systemPrompt: { toolAccess: string; listRequiredArguments: boolean };
 	listModels?(session: AgentSessionInfo): ModelChoice[];
 	usage?: UsageSource;
+	/** Whether the token counts the agent reports tell what the prompt cache served; `false` for one whose cache counts are always 0, so no hit rate is claimed. */
+	reportsCache?: boolean;
 	rebuildExpiredSessions?: boolean;
-	/** Whether a chat copied from another chat can continue the stored conversation with `session/fork`. */
+	/** Whether a chat copied from another chat, or edited above its last message, can continue the stored conversation with `session/fork`; the agent must also advertise it. */
 	forkChats?: boolean;
+	/** Forks chats by other means than `session/fork`, for an agent that lacks it; used only where the program is installed. */
+	forker?: ConversationForker;
 	/** Whether the agent fetches the tool list again on `tools/list_changed`, so a changed tool set needs no new session. */
 	refreshesTools?: boolean;
 	/** How long (ms) a tool call may wait for Copilot to pick it up before it is failed; absent waits for as long as the agent does. */
 	toolWaitTimeoutMs?: number;
+	/** The most characters of text a tool result may carry to the agent; more is cut with a note on how to read the rest. Absent passes results whole. */
+	maxToolResultChars?: number;
 	/** Whether the session that reads the model list must declare the tool bridge (the agent's own config names it). */
 	declaresBridgeOnModelLookup?: boolean;
 	/** Whether the agent's own tools must be turned off for this session (the chat's tools are used instead). */

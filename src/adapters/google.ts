@@ -4,6 +4,7 @@ import type { AcpAuthMethod } from '../core/agentClient';
 import type { AgentAdapter, AgentSettings, InstallContext, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
 import { REGISTRY, registryAgent } from '../core/registry';
 import { vendorOf } from '../core/vendors';
+import { googleForker } from './googleFork';
 import { googleModelPolicy } from './googleModels';
 import { mapQuotaError } from './googleQuota';
 import { googleUsage } from './googleUsage';
@@ -155,9 +156,17 @@ function sessionParams(input: SessionParamsInput): Record<string, unknown> {
 
 const installer = (ctx: InstallContext): ServerInstaller => new ServerInstaller(ctx.storageDir, ctx.log);
 
+/** The current server, or an earlier one that stays usable until the update is installed. */
 async function findServer(ctx: InstallContext): Promise<string | undefined> {
-	const server = await installer(ctx).find();
+	const found = installer(ctx);
+	const server = await found.find() ?? await found.findPrevious();
 	return server?.file;
+}
+
+/** Whether an earlier server is installed and the current version is not, so the update is worth fetching unasked. */
+async function serverNeedsUpdate(ctx: InstallContext): Promise<boolean> {
+	const found = installer(ctx);
+	return await found.find() === undefined && await found.findPrevious() !== undefined;
 }
 
 async function installServer(ctx: InstallContext): Promise<string> {
@@ -182,7 +191,7 @@ export const googleAdapter: AgentAdapter = {
 	id: ID,
 	displayName: registry.displayName,
 	vendor: vendorOf(ID),
-	install: { kind: 'download', version: SERVER_VERSION, find: findServer, install: installServer },
+	install: { kind: 'download', version: SERVER_VERSION, find: findServer, needsUpdate: serverNeedsUpdate, install: installServer },
 	launch,
 	findCommandOverride: settings => stringSetting(settings, 'command').trim() || undefined,
 	auth: [
@@ -194,11 +203,18 @@ export const googleAdapter: AgentAdapter = {
 	// The agent offers its Claude and GPT-OSS models only to clients on its allowlist, of which Zed is the generic ACP one.
 	clientIdentity: { name: 'zed', title: 'Zed' },
 	usage: googleUsage,
+	// The server reports the tokens of a turn but its cache counts stay 0, which says nothing about the cache.
+	reportsCache: false,
 	systemPrompt: {
 		toolAccess: 'The tools of the MCP server named `vscode` are VS Code\'s own and act on the user\'s workspace; reach them only through `call_mcp_tool`.',
 		listRequiredArguments: true,
 	},
 	rebuildExpiredSessions: true,
+	// The server cannot fork a session, but the Antigravity CLI can, where it is installed.
+	forker: { ...googleForker, commandSetting: 'agyCommand' },
+	// The agent saves a tool result of about 4,000 characters or more to a file and hands the model only its path. With its own
+	// file tools off the model then reasons for minutes about how to get at the content, so results are cut below that size.
+	maxToolResultChars: 3_500,
 	disableBuiltInTools: settings => !booleanSetting(settings, 'useAgentBuiltInTools'),
 	mapError: mapQuotaError,
 	mergeConfig,

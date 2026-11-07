@@ -132,6 +132,8 @@ function readUserConfig(existing: string | undefined): Record<string, unknown> {
  */
 export function mergeCodexConfig(existing: string | undefined, maxContextWindow: boolean, baseInstructionsFile?: string): string {
 	const config = readUserConfig(existing);
+	// Every model of the catalogue defaults to no reasoning summary, so the chat would show no thinking.
+	config.model_reasoning_summary ??= 'concise';
 	if (maxContextWindow) {
 		config.model_context_window = RAISED_CONTEXT_WINDOW;
 	}
@@ -232,6 +234,7 @@ export const codexAdapter: AgentAdapter = {
 		listRequiredArguments: false,
 	},
 	usage: codexUsage,
+	forkChats: true,
 	mergeConfig,
 	sessionParams,
 	// The config of its home names the bridge, and Codex refuses a session whose config names a server with no transport.

@@ -5,7 +5,7 @@ import type { AgentAdapter, LaunchContext } from './core/adapter';
 import { signIn, signOut, terminalMethodsFrom } from './core/auth';
 import { pickSignInChoice, runInVsCodeTerminal } from './core/authPrompts';
 import { McpBridge } from './core/bridge';
-import { findInstalled, getInstallState, installAgent, uninstallAgent } from './core/installers';
+import { findInstalled, getInstallState, installAgent, needsUpdate, uninstallAgent } from './core/installers';
 import { scopedLog } from './core/logging';
 import { killAllChildren, killStrayAgents } from './core/processes';
 import { AcpProvider } from './core/provider';
@@ -93,7 +93,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			}),
 			provider.onDidMeasureRequest(measurement => usage.recordRequest(adapter.id, measurement)),
 			provider.onDidFinishTurn(turn => {
-				usage.recordTurn(adapter.id, turn.usage, turn.background);
+				usage.recordTurn(adapter.id, adapter.reportsCache === false ? undefined : turn.usage, turn.background);
 				if (!turn.background && adapter.usage) { void refreshUsage(adapter.id, false); }
 			}),
 			vscode.lm.registerLanguageModelChatProvider(adapter.vendor, provider),
@@ -163,15 +163,36 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('acpHub.refreshUsage', async () => { for (const adapter of ADAPTERS) { await refreshUsage(adapter.id); } }),
 		vscode.workspace.onDidChangeConfiguration(event => {
 			for (const adapter of ADAPTERS) {
+				const commandSetting = adapter.forker?.commandSetting;
+				if (commandSetting && event.affectsConfiguration(`acpHub.${settingKey(adapter.id, commandSetting)}`)) {
+					void context.globalState.update(`acpHub.forkNotice.${adapter.id}`, undefined);
+				}
 				if (event.affectsConfiguration(`acpHub.agents.${adapter.id}`)) { void providers.get(adapter.id)?.restart(); providers.get(adapter.id)?.refresh(); }
 			}
 		}),
 		secrets.onDidChange(id => { void providers.get(id)?.restart(); providers.get(id)?.refresh(); }),
 	);
+	// An agent downloaded by version stays usable at the older one until the newer one is in place.
+	async function updateOutdated(adapter: AgentAdapter): Promise<void> {
+		const env = { ...installEnv, settings: settingsFor(adapter) };
+		if (!await needsUpdate(adapter, env)) { return; }
+		log(`${adapter.displayName} has an update; installing it while the installed version stays in use.`);
+		let shown = 0;
+		await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Updating ${adapter.displayName}` }, async progress => {
+			await installAgent(adapter, installEnv, update => {
+				if (update.state !== 'progress') { return; }
+				const fraction = update.fraction ?? shown;
+				progress.report({ message: update.message, increment: Math.max(0, fraction - shown) });
+				shown = Math.max(shown, fraction);
+			});
+		});
+		providers.get(adapter.id)?.refresh();
+	}
 	for (const adapter of ADAPTERS) {
 		if (adapter.usage && vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(adapter.id, 'enabled'), true)) {
 			void refreshUsage(adapter.id, false).catch(error => log(`Could not start usage refresh for ${adapter.id}: ${String(error)}`, 'warn'));
 		}
+		void updateOutdated(adapter).catch(error => log(`Could not update ${adapter.displayName}: ${error instanceof Error ? error.message : String(error)}`, 'warn'));
 	}
 }
 

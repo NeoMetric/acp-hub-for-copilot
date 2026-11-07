@@ -6,7 +6,7 @@
 import * as http from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
-import { McpBridge, toMcpContent, type McpServerEndpoint, type McpToolExecutor } from '../../src/core/bridge';
+import { McpBridge, limitTextContent, toMcpContent, type McpServerEndpoint, type McpToolExecutor } from '../../src/core/bridge';
 import { LanguageModelDataPart, LanguageModelTextPart } from './vscode-mock';
 
 const tools = [
@@ -262,6 +262,61 @@ describe('McpBridge', () => {
 		bridge.dispose();
 
 		await expect(bridge.registerSession(tools, execute)).rejects.toThrow('disposed');
+	});
+});
+
+describe('limitTextContent', () => {
+	const lines = Array.from({ length: 10 }, (_, index) => `line ${index}`).join('\n');
+
+	it('passes a result within the limit untouched', () => {
+		const content = [{ type: 'text', text: lines }];
+
+		expect(limitTextContent(content, lines.length)).toBe(content);
+	});
+
+	it('cuts at a line end and says how much was shown', () => {
+		const [shown, note] = limitTextContent([{ type: 'text', text: lines }], 25);
+
+		expect(shown).toEqual({ type: 'text', text: 'line 0\nline 1\nline 2' });
+		expect(note.text).toContain(`[Output cut: 20 of ${lines.length} characters shown.`);
+	});
+
+	it('counts all text blocks together and keeps images', () => {
+		const image = { type: 'image', data: 'AQI=', mimeType: 'image/png' };
+
+		const limited = limitTextContent([{ type: 'text', text: 'aaaa' }, image, { type: 'text', text: 'bbbb' }, { type: 'text', text: 'cccc' }], 6);
+
+		expect(limited.slice(0, 3)).toEqual([{ type: 'text', text: 'aaaa' }, image, { type: 'text', text: 'bb' }]);
+		expect(limited).toHaveLength(4);
+	});
+});
+
+describe('McpBridge result limit', () => {
+	let bridge: McpBridge;
+
+	afterEach(() => bridge.dispose());
+
+	const call = async (maxResultChars: number | undefined) => {
+		bridge = new McpBridge(() => undefined);
+		const execute = vi.fn<McpToolExecutor>().mockResolvedValue({ content: [new LanguageModelTextPart('x'.repeat(100))] });
+		const endpoint = await bridge.registerSession(tools, execute, { maxResultChars });
+		const response = await fetch(endpoint.url, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${endpoint.token}`, 'content-type': 'application/json' },
+			body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'read_file' } }),
+		});
+		return (await response.json() as { result: { content: Array<{ text: string }> } }).result.content;
+	};
+
+	it('cuts a long result for a session that has a limit', async () => {
+		const content = await call(40);
+
+		expect(content[0].text).toHaveLength(40);
+		expect(content[1].text).toContain('40 of 100 characters shown');
+	});
+
+	it('returns the whole result when the session has no limit', async () => {
+		expect(await call(undefined)).toEqual([{ type: 'text', text: 'x'.repeat(100) }]);
 	});
 });
 

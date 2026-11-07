@@ -5,8 +5,8 @@
 
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
-import type { AgentAdapter, AgentSettings, LaunchContext } from './adapter';
-import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentSession, type CreateSessionOptions } from './agentClient';
+import type { AgentAdapter, AgentSettings, ConversationForker, LaunchContext } from './adapter';
+import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentSession, type CreateSessionOptions, type ForkPoint } from './agentClient';
 import type { McpToolResult } from './bridge';
 import type { RequestMeasurement } from './cache';
 import { carriesToolResults, characterCountOf, diverged, lastUserMessageIndex, persistentFingerprints, skillContextAfterReply, userWordsAfterReply } from './convert';
@@ -21,7 +21,8 @@ import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOver
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESSION_IDLE_MS } from './provider/idle';
 import { chatContextOf, chatIdOf, chatLabelOf, describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, sessionKey, toolChangeOf, toolsDiffer } from './provider/keys';
 import { ModelList } from './provider/modelList';
-import { findReusable, promptHashOf } from './provider/reuse';
+import { countsOf } from './provider/checkpoints';
+import { findEditFork, findReusable, promptHashOf } from './provider/reuse';
 import { applyEffort, applyModel, describe, switchModelInPlace } from './provider/sessionOptions';
 import { startLaps, type Lap } from './provider/timing';
 import { TurnRunner } from './provider/turns';
@@ -285,7 +286,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			session = undefined;
 		}
 		if (!session) {
-			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, this.adapter.forkChats === true, this.log) : undefined;
+			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, await this.canFork(), this.log) : undefined;
 			session = await this.createChatSession(key, model, tools, context, reuse, effort, lap);
 			lap('chat session created');
 		} else if (tools.length > 0 && guidanceDiffers(session.context.guidance, context.guidance)) {
@@ -303,13 +304,21 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 
 		if (session.history.length > fingerprints.length || diverged(session.history, fingerprints)) {
 			const at = session.history.findIndex((fingerprint, index) => fingerprint !== fingerprints[index]);
-			this.log(`Chat history changed for ${key}; starting a fresh ACP session. The session had seen ${session.history.length} message(s), the request has ${fingerprints.length}; ${at < 0 ? 'the request is shorter and otherwise the same' : `the first difference is message #${at + 1}: was ${(session.history[at] ?? '').slice(0, 120)}, now ${(fingerprints[at] ?? '').slice(0, 120)}`}.`, 'warn');
+			this.log(`Chat history changed for ${key}. The session had seen ${session.history.length} message(s), the request has ${fingerprints.length}; ${at < 0 ? 'the request is shorter and otherwise the same' : `the first difference is message #${at + 1}, shown in full next`}.`, 'warn');
+			if (at >= 0) {
+				this.log(`[reuse] Message #${at + 1} was: ${session.history[at] ?? ''}`, 'warn');
+				this.log(`[reuse] Message #${at + 1} is now: ${fingerprints[at] ?? ''}`, 'warn');
+			}
+			// The session is left for a fork of the turn the edit still agrees with; with none, or
+			// when the fork fails, the chat gets a new session and is restored as a transcript.
+			const reuse = tools.length > 0 && await this.canFork() ? findEditFork(this.saved, key, fingerprints, lastUser, context, this.log) : undefined;
+			this.log(reuse ? `[reuse] Chat ${key} was edited; forking from the checkpoint after ${reuse.checkpoint?.messages} message(s).` : `[reuse] Chat ${key} was edited and has no checkpoint to fork from; starting a fresh ACP session.`, 'debug');
 			await this.destroySession(key);
-			session = await this.createChatSession(key, model, tools, context, undefined, effort);
+			session = await this.createChatSession(key, model, tools, context, reuse, effort);
 			this.applyTools(session, tools);
 			await applyEffort(this.agent, this.adapter.modelPolicy, session, effort, this.log);
-			startIndex = lastUser;
-			restoreContext = true;
+			restoreContext = session.history.length === 0;
+			startIndex = restoreContext ? lastUser : session.history.length;
 		}
 
 		const blocks = buildPromptBlocks(messages, startIndex, lastUser, restoreContext, session, this.log);
@@ -509,7 +518,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 
 	private async createChatSession(key: string, model: vscode.LanguageModelChatInformation, tools: readonly vscode.LanguageModelChatTool[], context: ChatContext, reuse?: Reuse, effort?: string, lap?: Lap): Promise<ChatSession> {
 		const agent = this.agent;
-		const endpoint = await this.deps.bridge.registerSession(tools, (name, input, toolToken) => this.executeTool(key, name, input, toolToken));
+		const endpoint = await this.deps.bridge.registerSession(tools, (name, input, toolToken) => this.executeTool(key, name, input, toolToken), { maxResultChars: this.adapter.maxToolResultChars });
 		lap?.(`tool bridge registered (${tools.length} tool(s))`);
 		try {
 			// A request that offers no tools is Copilot's own, such as a chat title: the
@@ -535,11 +544,18 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 					this.log(`[reuse] The session prompt differs from the saved one (${reuse.saved.promptHash} -> ${promptHash}); the first model call will show whether the cache still served it.`);
 				}
 				try {
-					acp = reuse.kind === 'resume'
+					const point = reuse.checkpoint && { messageId: reuse.checkpoint.messageId, messageFingerprint: reuse.checkpoint.fingerprint, messageOccurrence: reuse.checkpoint.occurrence };
+					// A fork that cannot be made (the source is mid-turn, or the tool that forks is missing) leaves `opened` empty: the chat gets a new session.
+					const opened = reuse.kind === 'resume'
 						? await agent.resumeSession(reuse.saved.sessionId, options)
-						: await agent.forkSession(reuse.saved.sessionId, options);
-					reused = { how: reuse.kind === 'resume' ? 'resumed' : 'forked', from: reuse.saved.sessionId, logged: false };
-					this.log(`[reuse] ${reuse.kind === 'resume' ? 'Resumed' : `Forked ${reuse.saved.sessionId} into`} ACP session ${acp.sessionId}; the first model call will show whether the cache served it.`);
+						: await this.fork(reuse, options, point);
+					if (opened) {
+						acp = opened;
+						reused = { how: reuse.kind === 'resume' ? 'resumed' : 'forked', from: reuse.saved.sessionId, logged: false };
+						this.log(`[reuse] ${reuse.kind === 'resume' ? 'Resumed' : `Forked ${reuse.saved.sessionId}${point ? ` after ${reuse.checkpoint?.messages} message(s)` : ''} into`} ACP session ${acp.sessionId}; the first model call will show whether the cache served it.`);
+					} else {
+						this.log(`[reuse] No fork of saved session ${reuse.saved.sessionId} was made; starting a new session and restoring the chat as a transcript.`, 'debug');
+					}
 				} catch (error) {
 					// The agent no longer has the stored conversation (it expired, or the agent was
 					// reinstalled): the chat is rebuilt from Copilot's messages in a new session.
@@ -553,9 +569,14 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			lap?.('agent session opened');
 
 			const history = reused && reuse ? [...reuse.history] : [];
+			// A fork holds the turns up to its fork point only, so it keeps the checkpoints of those.
+			const inherited = !reused || !reuse ? [] : reuse.kind === 'resume' ? reuse.saved.checkpoints ?? [] : (reuse.saved.checkpoints ?? []).filter(checkpoint => checkpoint.messages <= (reuse.checkpoint?.messages ?? 0));
 			const toolNames = tools.map(tool => tool.name);
 			const session: ChatSession = {
 				acp, endpoint, context, history,
+				checkpoints: [...inherited],
+				messageCounts: countsOf(inherited),
+				forked: reused?.how === 'forked' && !this.adapter.forker ? true : reused && reuse ? reuse.saved.forked : undefined,
 				model: model.id,
 				toolCount: tools.length,
 				openedTools: new Set(toolNames),
@@ -578,6 +599,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			this.log(`Created chat session for ${key} in ${context.cwd}${context.folders ? '' : ' (the window\'s folder; the request named none)'}`, 'debug');
 			this.evictIdleSessions(key);
 			this.scheduleIdleSweep();
+			void this.deleteOrphanedForks().catch(error => this.log(`Could not delete expired forked sessions: ${describe(error)}`, 'debug'));
 			return session;
 		} catch (error) {
 			this.deps.bridge.unregisterSession(endpoint.token);
@@ -589,6 +611,100 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			}
 			throw error;
 		}
+	}
+
+	/**
+	 * Opens a copy of the stored conversation, or returns `undefined` when it cannot be copied now:
+	 * the program that forks for this agent is missing.
+	 * Whatever fails throws, and the caller falls back to a new session.
+	 */
+	private async fork(reuse: Reuse, options: CreateSessionOptions, point: ForkPoint | undefined): Promise<AgentSession | undefined> {
+		const source = reuse.saved.sessionId;
+		const running = [...this.sessions.values()].find(session => session.acp.sessionId === source && session.turn);
+		if (running) {
+			// A chat the user stopped, or left, to branch off may still be winding down. The fork point is a
+			// finished turn, so what the turn in flight said is no part of the copy; it is cancelled and settled first.
+			this.log(`[reuse] Saved session ${source} is in the middle of a turn; cancelling it before the fork.`, 'warn');
+			await this.turns.abort(running);
+		}
+		const forker = this.adapter.forker;
+		if (!forker) {
+			return this.agent.forkSession(source, options, point);
+		}
+		// Without a fork point there is no step to cut at.
+		if (!point || this.forkNoticeState() === 'declined') {
+			return undefined;
+		}
+		const program = await forker.locate(this.settings ?? {}, this.log);
+		if (!program) {
+			this.noteMissingForker(forker);
+			return undefined;
+		}
+		const copy = await forker.fork(program, { sessionId: source, point, cwd: options.cwd }, this.log);
+		return this.agent.resumeSession(copy, options);
+	}
+
+	private forkNoticeState(): string | undefined {
+		return this.deps.state?.get<string>(`acpHub.forkNotice.${this.adapter.id}`);
+	}
+
+	/**
+	 * Tells the user once that forking needs a program that is not installed, with a way to get it.
+	 * A user who declines is not asked again, and the chat falls back to a transcript either way.
+	 */
+	private noteMissingForker(forker: ConversationForker): void {
+		if (this.forkNoticeState() !== undefined) {
+			return;
+		}
+		void this.deps.state?.update(`acpHub.forkNotice.${this.adapter.id}`, 'shown');
+		const { message, helpLabel, helpUrl, declineLabel } = forker.missing;
+		void vscode.window.showInformationMessage(message, helpLabel, declineLabel).then(choice => {
+			if (choice === helpLabel) {
+				void vscode.env.openExternal(vscode.Uri.parse(helpUrl));
+			} else if (choice === declineLabel) {
+				void this.deps.state?.update(`acpHub.forkNotice.${this.adapter.id}`, 'declined');
+			}
+		});
+	}
+
+	/** Deletes the sessions the extension forked whose saved entry expired, for an agent that can; each is tried once. */
+	private async deleteOrphanedForks(): Promise<void> {
+		const pending = this.saved.pendingDeletions();
+		if (pending.length === 0 || !this.agent.supportsDelete) {
+			return;
+		}
+		const inUse = new Set([...this.sessions.values()].map(session => session.acp.sessionId));
+		const saved = new Set(this.saved.all().map(entry => entry.sessionId));
+		const attempted = pending.filter(id => !inUse.has(id));
+		for (const id of attempted.filter(id => !saved.has(id))) {
+			if (await this.agent.deleteSession(id)) {
+				this.log(`Deleted the expired forked session ${id}.`, 'debug');
+			}
+		}
+		this.saved.settleDeletions(attempted);
+	}
+
+	/**
+	 * Whether a chat may continue from a stored conversation by forking: the adapter allows it and
+	 * the running agent said in `initialize` that it can. Starts the agent to find out.
+	 */
+	private async canFork(): Promise<boolean> {
+		if (this.adapter.forker) {
+			return true;
+		}
+		if (this.adapter.forkChats !== true) {
+			return false;
+		}
+		try {
+			await this.agent.ensureStarted();
+		} catch {
+			// Opening the session starts the agent again and reports why it cannot.
+			return false;
+		}
+		if (!this.agent.supportsFork) {
+			this.log(`[reuse] ${this.adapter.displayName} did not advertise session forking; chats are not forked.`, 'debug');
+		}
+		return this.agent.supportsFork;
 	}
 
 	/** A chat still starts when the customization files cannot be read; it just has no extras. */

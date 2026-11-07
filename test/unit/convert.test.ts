@@ -234,6 +234,24 @@ describe('fingerprint and diverged', () => {
 		expect(diverged([fingerprint(before)], [fingerprint(after)])).toBe(false);
 	});
 
+	it('does not count a changed IDE selection or opened file as an edit', () => {
+		// A resend carries the selection as it is now; the words of the user are the same.
+		const before = user('<ide_selection>The user selected lines 1 to 2 of a.ts</ide_selection>\nfix the bug');
+		const after = user('<ide_selection>The user selected lines 9 to 12 of b.ts</ide_selection>\nfix the bug');
+		const opened = user('<ide_opened_file>The user opened a.ts</ide_opened_file>fix the bug');
+
+		expect(fingerprint(after)).toBe(fingerprint(before));
+		expect(fingerprint(opened)).toBe(fingerprint(user('fix the bug')));
+		expect(diverged([fingerprint(before)], [fingerprint(after)])).toBe(false);
+	});
+
+	it('still sees an edit of the words next to an IDE selection', () => {
+		const before = user('<ide_selection>lines 1 to 2</ide_selection>\nfix the bug');
+		const after = user('<ide_selection>lines 1 to 2</ide_selection>\nfix the other bug');
+
+		expect(fingerprint(after)).not.toBe(fingerprint(before));
+	});
+
 	it('leaves a trailing message that only holds a reminder out of the history', () => {
 		// With deferred tools, Copilot ends a request with a reminder-only user message and drops it from the next one.
 		const reminder = user('<system_reminder>\nThe deferred tools: a, b\n</system_reminder>');

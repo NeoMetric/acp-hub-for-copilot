@@ -71,6 +71,36 @@ describe('ServerInstaller', () => {
 		expect(await new ServerInstaller(temp, vi.fn(), archive).find()).toBeUndefined();
 	});
 
+	function installOlder(root: string, version: string): string {
+		const directory = path.join(root, `v${version}`);
+		fs.mkdirSync(directory, { recursive: true });
+		fs.writeFileSync(path.join(directory, 'server.exe'), '');
+		fs.writeFileSync(path.join(directory, 'installed-version'), version);
+		return path.join(directory, 'server.exe');
+	}
+
+	it('keeps the newest complete older install usable until the current one is there', async () => {
+		installOlder(temp, '1.4.1');
+		const newer = installOlder(temp, '1.4.10');
+		fs.mkdirSync(path.join(temp, 'v1.4.9'), { recursive: true });
+		const installer = new ServerInstaller(temp, vi.fn(), archive);
+
+		expect(await installer.find()).toBeUndefined();
+		expect(await installer.findPrevious()).toEqual({ file: newer, args: ['--flag'] });
+	});
+
+	it('has no earlier install to fall back on when none is complete or the current one is the only one', async () => {
+		const installer = new ServerInstaller(temp, vi.fn(), archive);
+		expect(await installer.findPrevious()).toBeUndefined();
+
+		fs.mkdirSync(path.join(temp, 'v1.0.0'), { recursive: true });
+		fs.writeFileSync(path.join(temp, 'v1.0.0', 'installed-version'), '1.0.0');
+		expect(await installer.findPrevious()).toBeUndefined();
+
+		installFake(temp);
+		expect(await installer.findPrevious()).toBeUndefined();
+	});
+
 	it('does not download when the current version is installed', async () => {
 		const file = installFake(temp);
 		const installer = new ServerInstaller(temp, vi.fn(), { ...archive, url: 'http://not-used.example/x.zip' });

@@ -181,6 +181,11 @@
 						"Send every tool's description with every request."
 					]
 				},
+				"acpHub.agents.claude.showThinking": {
+					"description": "On: the chat shows a summary of Claude's reasoning in a collapsed Thinking block. Off: the chat shows no thinking text, as when Claude leaves it out of the stream. The model thinks and the tokens are billed the same either way. Changing it restarts the agent.",
+					"default": true,
+					"type": "boolean"
+				},
 				"acpHub.agents.claude.replaceSystemPrompt": {
 					"description": "On: Claude's built-in Claude Code prompt is replaced by Copilot's guidance for the chat; only the agent's one-line identity stays. Off: Copilot's guidance is added to the end of the Claude Code prompt. Changing it restarts the agent.",
 					"default": false,
@@ -267,6 +272,11 @@
 					"items": {
 						"type": "string"
 					}
+				},
+				"acpHub.agents.google.agyCommand": {
+					"description": "Path of the Antigravity CLI. When it is installed, an edit, /fork or side chat continues the stored conversation instead of sending the whole chat again. Leave empty to find agy on the PATH or in ~/.gemini/bin. Setting a path also switches this back on after \"Use transcript instead\".",
+					"default": "",
+					"type": "string"
 				},
 				"acpHub.agents.google.useAgentBuiltInTools": {
 					"description": "Let the Antigravity agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them so Copilot chat tools can do the work. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.",

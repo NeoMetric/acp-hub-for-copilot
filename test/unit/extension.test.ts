@@ -11,13 +11,14 @@ const mocks = vi.hoisted(() => ({
   installedIds: new Set<string>(),
   sidebarDeps: [] as Array<{ getUsage: (id: string) => { status: string; reading?: { windows: Array<{ usedPercent: number }> } } }>,
   providerDeps: [] as Array<{ isEnabled: () => boolean }>,
+  configurationChanged: undefined as ((event: { affectsConfiguration: (key: string) => boolean }) => void) | undefined,
 }));
 
 vi.mock('vscode', () => ({
   lm: { registerLanguageModelChatProvider: mocks.register },
   window: { createOutputChannel: () => mocks.output, registerWebviewViewProvider: mocks.registerView },
   commands: { registerCommand: mocks.registerCommand },
-  workspace: { onDidChangeConfiguration: () => ({ dispose() {} }), getConfiguration: () => ({ get: (key: string, fallback?: unknown) => key.endsWith('.enabled') ? mocks.enabled && !mocks.disabledIds.has(key.split('.')[1]) : fallback }) },
+  workspace: { onDidChangeConfiguration: (callback: typeof mocks.configurationChanged) => { mocks.configurationChanged = callback; return { dispose() {} }; }, getConfiguration: () => ({ get: (key: string, fallback?: unknown) => key.endsWith('.enabled') ? mocks.enabled && !mocks.disabledIds.has(key.split('.')[1]) : fallback }) },
   Uri: { joinPath: (...parts: unknown[]) => parts[0] },
 }));
 vi.mock('../../src/core/provider', () => ({
@@ -27,6 +28,8 @@ vi.mock('../../src/core/provider', () => ({
     onDidRequireSignIn() { return { dispose() {} }; }
     onDidFinishTurn() { return { dispose() {} }; }
     publishModels() { return Promise.resolve(); }
+    restart() { return Promise.resolve(); }
+    refresh() {}
     prepareAgent() { return Promise.resolve(true); }
     askAgent(prompt: string) {
       if (this.adapter.id === 'google' && prompt === '/usage') {return Promise.resolve('### Quota Limits\n- **Gemini Models**\n  - **Weekly Limit Remaining:** 75% remaining');}
@@ -80,6 +83,21 @@ it('registers a provider for every contributed vendor and the sidebar', () => {
   expect(mocks.providerDeps[0].isEnabled()).toBe(true);
   mocks.enabled = false;
   expect(mocks.providerDeps[0].isEnabled()).toBe(false);
+});
+
+it('reenables external forks when the CLI path setting changes', () => {
+  const update = vi.fn(async () => undefined);
+  activate({
+    subscriptions: [],
+    globalStorageUri: { fsPath: 'storage' },
+    extensionUri: { fsPath: 'extension' },
+    extension: { packageJSON: { version: '1' } },
+    globalState: { get: () => undefined, update },
+    secrets: {},
+  } as never);
+
+  mocks.configurationChanged?.({ affectsConfiguration: key => key === 'acpHub.agents.google.agyCommand' || key === 'acpHub.agents.google' });
+  expect(update).toHaveBeenCalledWith('acpHub.forkNotice.google', undefined);
 });
 
 it('loads the usage of installed, enabled agents into the sidebar at startup', async () => {

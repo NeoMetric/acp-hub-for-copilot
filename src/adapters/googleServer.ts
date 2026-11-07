@@ -9,7 +9,7 @@ import type { Log } from '../core/logging';
  * (id `antigravity-acp`, https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json).
  * Bump the version and the URLs together when the registry moves on.
  */
-export const SERVER_VERSION = '1.4.1';
+export const SERVER_VERSION = '1.4.5';
 
 const DOWNLOAD_ROOT = 'https://dl.google.com/agy-extensions/releases';
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
@@ -88,6 +88,38 @@ export class ServerInstaller {
 		}
 	}
 
+	/**
+	 * The newest fully installed server of an earlier version, or `undefined`. It stays in use
+	 * until the current version is installed, and is removed only after that.
+	 */
+	async findPrevious(): Promise<InstalledServer | undefined> {
+		if (!this.archive) {
+			return undefined;
+		}
+		let names: string[];
+		try {
+			names = await fs.promises.readdir(this.root);
+		} catch {
+			return undefined;
+		}
+		const current = path.basename(this.versionDirectory);
+		const older = names.filter(name => /^v\d+(\.\d+)*$/.test(name) && name !== current).sort(compareVersionsNewestFirst);
+		for (const name of older) {
+			try {
+				const directory = path.join(this.root, name);
+				const marker = await fs.promises.readFile(path.join(directory, MARKER_FILE), 'utf8');
+				const file = path.join(directory, this.archive.command);
+				await fs.promises.access(file);
+				if (marker.trim() === name.slice(1)) {
+					return { file, args: this.archive.args };
+				}
+			} catch {
+				// An incomplete or damaged install is not one to fall back on.
+			}
+		}
+		return undefined;
+	}
+
 	/** Downloads and unpacks the server unless the current version is already there. */
 	async install(onProgress?: DownloadProgress): Promise<InstalledServer> {
 		const existing = await this.find();
@@ -160,6 +192,20 @@ export class ServerInstaller {
 			});
 		}
 	}
+}
+
+/** Orders folder names such as `v1.4.10` and `v1.4.5` by their numbers, newest first. */
+function compareVersionsNewestFirst(a: string, b: string): number {
+	const parts = (name: string) => name.slice(1).split('.').map(Number);
+	const left = parts(a);
+	const right = parts(b);
+	for (let index = 0; index < Math.max(left.length, right.length); index++) {
+		const difference = (right[index] ?? 0) - (left[index] ?? 0);
+		if (difference !== 0) {
+			return difference;
+		}
+	}
+	return 0;
 }
 
 /** Downloads over HTTPS only, following a few redirects, and checks the size when the server states it. */

@@ -74,6 +74,7 @@ export class JsonRpcConnection {
 	private notificationHandler: NotificationHandler | undefined;
 	private buffer = '';
 	private nextId = 1;
+	private lastRequest: { readonly method: string; readonly sentAt: number; noted: boolean } | undefined;
 	private disposed = false;
 	private readonly onData: (chunk: string) => void;
 	private readonly onInputClose: () => void;
@@ -109,10 +110,13 @@ export class JsonRpcConnection {
 		}
 
 		const id = this.nextId++;
+		const sentAt = Date.now();
+		this.lastRequest = { method, sentAt, noted: false };
 		return new Promise<T>((resolve, reject) => {
 			let timer: NodeJS.Timeout | undefined;
 			const settle = <R>(action: (value: R) => void) => (value: R) => {
 				clearTimeout(timer);
+				this.log(`[timing] rpc ${method} answered ${Date.now() - sentAt}ms after it was sent`, 'debug');
 				action(value);
 			};
 
@@ -215,6 +219,7 @@ export class JsonRpcConnection {
 			if (hasId) {
 				void this.handleRequest(message.id as RpcId, message.method, message.params);
 			} else if (this.notificationHandler) {
+				this.noteFirstNotification(message.method, message.params);
 				this.notificationHandler(message.method, message.params);
 			}
 			return;
@@ -236,6 +241,17 @@ export class JsonRpcConnection {
 		} else {
 			pending.resolve(message.result);
 		}
+	}
+
+	/** Logs how long the agent took to send anything after the latest request, so its own start-up and the model's first answer can be told apart. */
+	private noteFirstNotification(method: string, params: unknown): void {
+		const last = this.lastRequest;
+		if (!last || last.noted) {
+			return;
+		}
+		last.noted = true;
+		const kind = (params as { update?: { sessionUpdate?: unknown } } | undefined)?.update?.sessionUpdate;
+		this.log(`[timing] first agent message after ${last.method}: ${method}${typeof kind === 'string' ? `/${kind}` : ''} +${Date.now() - last.sentAt}ms`, 'debug');
 	}
 
 	private async handleRequest(id: RpcId, method: string, params: unknown): Promise<void> {

@@ -102,6 +102,9 @@ const CHAT_CONTEXT = /<(environment_info|workspace_info|userMemory|sessionMemory
 /** Reminders Copilot adds to a user message, such as the tools or guidance in force. */
 const SYSTEM_REMINDERS = /<system_reminder>[\s\S]*?<\/system_reminder>\s*/g;
 
+/** What the editor had selected or open when the message was sent; it changes with the cursor, not with what was said. */
+const IDE_CONTEXT = /<(ide_selection|ide_opened_file)>[\s\S]*?<\/\1>\s*/g;
+
 const CUSTOM_INSTRUCTIONS = /(?:^[^\n<]*user provided coding instructions[^\n]*\r?\n)?<instructions>[\s\S]*?<\/instructions>|<modeInstructions>[\s\S]*?<\/modeInstructions>/gm;
 
 /**
@@ -234,8 +237,9 @@ export function fingerprint(message: vscode.LanguageModelChatRequestMessage): st
 
 	// The instructions of the mode change when the user switches modes, which is no rewrite of the chat.
 	// Copilot also adds reminders about the tools and guidance to a user message, so a tool toggle
-	// rewrites an earlier message; those reminders are no change to what was said either.
-	return `${message.role}:${textOf(message).replace(CUSTOM_INSTRUCTIONS, '').replace(SYSTEM_REMINDERS, '')}:${imageFingerprint(message)}:${parts.join(',')}`;
+	// rewrites an earlier message; those reminders are no change to what was said either. Nor is the
+	// IDE selection, which a resend carries as it is at that moment.
+	return `${message.role}:${textOf(message).replace(CUSTOM_INSTRUCTIONS, '').replace(SYSTEM_REMINDERS, '').replace(IDE_CONTEXT, '')}:${imageFingerprint(message)}:${parts.join(',')}`;
 }
 
 /**

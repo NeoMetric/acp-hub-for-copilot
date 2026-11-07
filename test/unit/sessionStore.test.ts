@@ -3,13 +3,14 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type * as vscode from 'vscode';
 import { guidanceChangeOf, guidanceLineHashes } from '../../src/core/provider';
 import { guidanceChangeBlock } from '../../src/core/provider/assemble';
 import { mergeGuidanceChange } from '../../src/core/provider/keys';
 import { describeToolChange, toolChangeOf } from '../../src/core/provider/keys';
-import { findForkSource, hashAll, isPrefixOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/core/sessionStore';
+import { findCheckpoint, findForkSource, hashAll, isPrefixOf, messageFingerprintOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/core/sessionStore';
 
 const check: ReuseCheck = { cwd: '/work', toolsHash: toolsHashOf(['a', 'b']), guidanceHash: 'g1' };
 
@@ -160,6 +161,54 @@ describe('findForkSource', () => {
 	});
 });
 
+describe('findCheckpoint', () => {
+	const checkpoint = (messages: number, id = `m${messages}`) => ({ messages, messageId: id, fingerprint: messageFingerprintOf(id), occurrence: 1 });
+	// The session ran u1 a1 u2 a2 u3, so it holds sys u1 a1 u2 a2 u3 and has a checkpoint after each reply.
+	const source = saved('src', ['sys', 'u1', 'a1', 'u2', 'a2', 'u3'], { checkpoints: [checkpoint(3), checkpoint(5), checkpoint(7)] });
+
+	it('picks the deepest checkpoint the request starts with', () => {
+		const incoming = hashAll(['sys', 'u1', 'a1', 'u2', 'a2', 'u3', 'a3', 'u4']);
+		expect(findCheckpoint([source], incoming, 7, check)?.checkpoint.messages).toBe(7);
+		expect(findCheckpoint([source], hashAll(['sys', 'u1', 'a1', 'u2', 'a2', 'u3x']), 5, check)?.checkpoint.messages).toBe(5);
+	});
+
+	it('leaves the newest user message for the prompt', () => {
+		const incoming = hashAll(['sys', 'u1', 'a1', 'u2', 'a2', 'u3']);
+		expect(findCheckpoint([source], incoming, 5, check)?.checkpoint.messages).toBe(5);
+		expect(findCheckpoint([source], hashAll(['sys']), 0, check)).toBeUndefined();
+	});
+
+	it('holds a checkpoint inside the history to the reply message as well', () => {
+		const edited = hashAll(['sys', 'u1', 'a1-other', 'u2x']);
+		expect(findCheckpoint([source], edited, 3, check)).toBeUndefined();
+		expect(findCheckpoint([source], hashAll(['sys', 'u1', 'a1', 'u2x']), 3, check)?.checkpoint.messages).toBe(3);
+	});
+
+	it('finds nothing for an edit above the first checkpoint, another folder, or a session without checkpoints', () => {
+		expect(findCheckpoint([source], hashAll(['sys', 'u1x', 'a1', 'u2']), 3, check)).toBeUndefined();
+		expect(findCheckpoint([{ ...source, cwd: '/other' }], hashAll(['sys', 'u1', 'a1', 'u2']), 3, check)).toBeUndefined();
+		expect(findCheckpoint([saved('old', ['sys', 'u1'])], hashAll(['sys', 'u1', 'a1', 'u2']), 3, check)).toBeUndefined();
+	});
+
+	it('ignores other tools and guidance, which a fork opens with anew', () => {
+		const other = { ...source, toolsHash: 'other', guidanceHash: 'other' };
+		expect(findCheckpoint([other], hashAll(['sys', 'u1', 'a1', 'u2']), 3, check)?.checkpoint.messages).toBe(3);
+	});
+
+	it('prefers the more recent session when two reach the same depth', () => {
+		const older = { ...source, sessionId: 'older', savedAt: 1 };
+		const newer = { ...source, sessionId: 'newer', savedAt: 2 };
+		expect(findCheckpoint([older, newer], hashAll(['sys', 'u1', 'a1', 'u2']), 3, check)?.saved.sessionId).toBe('newer');
+	});
+});
+
+describe('messageFingerprintOf', () => {
+	it('is the lowercase hex sha256 of the UTF-8 text', () => {
+		expect(messageFingerprintOf('abc')).toBe('sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+		expect(messageFingerprintOf('é')).toBe(`sha256:${createHash('sha256').update(Buffer.from([0xc3, 0xa9])).digest('hex')}`);
+	});
+});
+
 describe('SavedSessionStore', () => {
 	function memento(): vscode.Memento {
 		const values = new Map<string, unknown>();
@@ -184,6 +233,64 @@ describe('SavedSessionStore', () => {
 		const store = new SavedSessionStore(memento(), 'test.savedSessions');
 		store.save({ ...saved('old', ['u1']), savedAt: Date.now() - 30 * 24 * 60 * 60 * 1000 });
 		expect(store.all()).toHaveLength(0);
+	});
+
+	it('reads an entry saved before checkpoints existed and upgrades it in place', () => {
+		const state = memento();
+		void state.update('test.savedSessions', [{ ...saved('k', ['u1']), savedAt: Date.now() }]);
+		const store = new SavedSessionStore(state, 'test.savedSessions');
+
+		const [entry] = store.all();
+
+		expect(entry).toMatchObject({ version: 2, key: 'k', sessionId: 's-k', checkpoints: [] });
+		expect((state.get<SavedSession[]>('test.savedSessions') ?? [])[0]).toMatchObject({ version: 2, checkpoints: [] });
+	});
+
+	it('drops checkpoints that are malformed', () => {
+		const state = memento();
+		const good = { messages: 3, messageId: 'm', fingerprint: 'sha256:x', occurrence: 1 };
+		void state.update('test.savedSessions', [{ ...saved('k', ['u1']), savedAt: Date.now(), checkpoints: [good, { messages: 'x' }, null] }]);
+
+		expect(new SavedSessionStore(state, 'test.savedSessions').all()[0].checkpoints).toEqual([good]);
+	});
+
+	it('keeps the newest checkpoints of a session and a bounded number in all', () => {
+		const state = memento();
+		const store = new SavedSessionStore(state, 'test.savedSessions');
+		const checkpoints = (count: number, start = 1) => Array.from({ length: count }, (_, index) => ({ messages: start + index, messageId: `m${start + index}`, fingerprint: 'sha256:x', occurrence: 1 }));
+
+		store.save({ ...saved('long', ['u1']), savedAt: Date.now(), checkpoints: checkpoints(80) });
+		expect(store.find('long')?.checkpoints).toHaveLength(50);
+		expect(store.find('long')?.checkpoints?.[0].messages).toBe(31);
+
+		for (let index = 0; index < 10; index++) {
+			store.save({ ...saved(`chat-${index}`, ['u1']), savedAt: Date.now() + index, checkpoints: checkpoints(50) });
+		}
+		const total = store.all().reduce((sum, entry) => sum + (entry.checkpoints?.length ?? 0), 0);
+		expect(total).toBeLessThanOrEqual(400);
+		expect(store.find('chat-9')?.checkpoints).toHaveLength(50);
+		expect(store.find('long')?.checkpoints?.length ?? 0).toBeLessThan(50);
+	});
+
+	it('queues a forked session for deletion once its entry expires or is replaced, and not before', () => {
+		const state = memento();
+		const store = new SavedSessionStore(state, 'test.savedSessions');
+		store.save({ ...saved('k', ['u1']), sessionId: 'forked', forked: true, savedAt: Date.now() });
+		store.save({ ...saved('k', ['u1']), sessionId: 'forked', forked: true, savedAt: Date.now() });
+		expect(store.pendingDeletions()).toEqual([]);
+
+		store.save({ ...saved('k', ['u1', 'u2']), sessionId: 'next', savedAt: Date.now() });
+		expect(store.pendingDeletions()).toEqual(['forked']);
+		store.settleDeletions(['forked']);
+		expect(store.pendingDeletions()).toEqual([]);
+
+		store.save({ ...saved('own', ['u1']), sessionId: 'plain', savedAt: Date.now() - 30 * 24 * 60 * 60 * 1000 });
+		store.all();
+		expect(store.pendingDeletions()).toEqual([]);
+
+		store.save({ ...saved('old', ['u1']), sessionId: 'old-fork', forked: true, savedAt: Date.now() - 30 * 24 * 60 * 60 * 1000 });
+		store.all();
+		expect(store.pendingDeletions()).toEqual(['old-fork']);
 	});
 
 	it('does nothing without extension state', () => {

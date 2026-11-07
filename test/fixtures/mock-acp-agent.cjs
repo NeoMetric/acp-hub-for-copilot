@@ -11,7 +11,12 @@
 //   garbage            writes a line that is not JSON before every message
 //   slow               a prompt only ends once session/cancel arrives
 //   usage              like normal; also answers account/rateLimits/read with fixed numbers
+//   fork               like normal; advertises session forking and deletion, and session/fork answers a new session id
+//   fork-empty         advertises forking, but session/fork answers {}
+//   fork-same          advertises forking, but session/fork answers the id of the session it was asked to copy
 // Prompt text with a special meaning:
+//   meta         replies with the _meta of the last session/fork request, as JSON
+//   deleted      replies with the ids removed by session/delete, as JSON
 //   env:<NAME>   replies with the value of that environment variable
 //   count        replies with the number of session/new requests received
 //   permission   asks the client for permission first, then replies with the outcome
@@ -34,6 +39,8 @@ let permissionRequests = 0;
 const awaitingPermission = new Map();
 const knownSessions = new Set();
 const slowPrompts = new Map();
+const deletedSessions = [];
+let lastForkMeta;
 
 function send(message) {
 	if (mode === 'garbage') {
@@ -107,6 +114,10 @@ function handlePrompt(message) {
 		text(sessionId, process.env[prompt.slice(4)] ?? 'unset');
 	} else if (prompt === 'count') {
 		text(sessionId, `new:${newRequests}`);
+	} else if (prompt === 'meta') {
+		text(sessionId, JSON.stringify(lastForkMeta ?? null));
+	} else if (prompt === 'deleted') {
+		text(sessionId, JSON.stringify(deletedSessions));
 	} else {
 		text(sessionId, 'hello');
 	}
@@ -124,6 +135,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 			protocolVersion: 1,
 			authMethods: [{ id: 'mock-login', name: 'Mock login' }],
 			agentInfo: { name: 'mock-acp-agent', title: 'Mock agent', version: '0.0.0' },
+			...(mode.startsWith('fork') ? { agentCapabilities: { sessionCapabilities: { fork: {}, delete: {} } } } : {}),
 		});
 	} else if (message.method === 'authenticate') {
 		if (message.params.methodId === 'mock-login' && (mode !== 'key-auth' || process.env.MOCK_API_KEY === 'fixture-key')) { authenticated = true; reply(message.id, {}); }
@@ -140,6 +152,20 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 	} else if (message.method === 'session/resume') {
 		knownSessions.add(message.params.sessionId);
 		reply(message.id, { configOptions });
+	} else if (message.method === 'session/fork') {
+		lastForkMeta = message.params._meta;
+		if (mode === 'fork-empty') {
+			reply(message.id, {});
+		} else if (mode === 'fork-same') {
+			reply(message.id, { sessionId: message.params.sessionId, configOptions });
+		} else {
+			const sessionId = `f${++sessions}`;
+			knownSessions.add(sessionId);
+			reply(message.id, { sessionId, configOptions });
+		}
+	} else if (message.method === 'session/delete') {
+		deletedSessions.push(message.params.sessionId);
+		reply(message.id, {});
 	} else if (message.method === 'session/set_config_option') {
 		reply(message.id, { configOptions });
 	} else if (message.method === 'session/close') {
