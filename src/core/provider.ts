@@ -78,6 +78,8 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	private readonly closing = new Map<string, Promise<void>>();
 	private sweepTimer: NodeJS.Timeout | undefined;
 	private signInWarningShown = false;
+	/** Set when the idle shutdown stopped the agent, so the user's return starts it again; see {@link wakeAfterIdle}. */
+	private stoppedForIdle = false;
 	private disposed = false;
 
 	constructor(
@@ -407,6 +409,23 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		}
 		await this.ensureWarmSession();
 		return true;
+	}
+
+	/**
+	 * Starts the agent again, with its warm session, when the idle shutdown stopped it and the user is
+	 * back in the window. Starting takes seconds (Codex reaches its servers before it opens a session,
+	 * and longer on a slow connection), which the next chat would otherwise wait for. Once per stop.
+	 */
+	wakeAfterIdle(): void {
+		if (!this.stoppedForIdle || this.disposed) {
+			return;
+		}
+		this.stoppedForIdle = false;
+		if (this.client?.isRunning || this.deps.isEnabled?.() === false) {
+			return;
+		}
+		this.log(`The window is in use again; starting the ${this.adapter.displayName} agent it stopped for being idle.`);
+		void this.prepareAgent().catch(error => this.log(`Could not start the ${this.adapter.displayName} agent again: ${describe(error)}`, 'debug'));
 	}
 
 	/**
@@ -850,6 +869,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		// conversation from Copilot's history otherwise.
 		const what = change === 'restarted' ? 'was restarted' : change === 'idle' ? 'was stopped for being idle' : 'exited';
 		this.log(`The agent ${what}; dropping its sessions.`);
+		this.stoppedForIdle = change === 'idle';
 		for (const key of [...this.sessions.keys()]) {
 			void this.destroySession(key);
 		}

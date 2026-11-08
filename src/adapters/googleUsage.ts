@@ -70,8 +70,11 @@ function windowsOf(summary: QuotaSummary): UsageWindow[] {
  * Reads the account's quota from the Antigravity CLI's language server (`RetrieveUserQuotaSummary`),
  * started for this read and stopped afterwards. It costs no model call.
  */
-export function quotaUsage(environment: QuotaEnvironment = realEnvironment): UsageSource {
+export function quotaUsage(environment: QuotaEnvironment = realEnvironment, platform: NodeJS.Platform = process.platform): UsageSource {
 	return {
+		// The language server the CLI starts for the hub opens a console of its own, which Windows Terminal
+		// shows as a window for as long as the read lasts, whatever the extension asks of the process.
+		onDemandOnly: platform === 'win32',
 		async read(ctx, signal): Promise<UsageReading> {
 			const { launch } = ctx;
 			if (launch.apiKey && stringSetting(launch.settings, 'authPreference', 'auto') !== 'oauth') {

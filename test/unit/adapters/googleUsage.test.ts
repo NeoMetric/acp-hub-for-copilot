@@ -55,6 +55,14 @@ function environment(...answers: Array<unknown>) {
 const signal = new AbortController().signal;
 
 describe('Google usage', () => {
+	it('is read only on demand on Windows, where the language server it starts opens a console window', () => {
+		const { env } = environment(summary);
+
+		expect(quotaUsage(env, 'win32').onDemandOnly).toBe(true);
+		expect(quotaUsage(env, 'linux').onDemandOnly).toBe(false);
+		expect(quotaUsage(env, 'darwin').onDemandOnly).toBe(false);
+	});
+
 	it('turns each quota bucket into a usage window', async () => {
 		const { env } = environment(summary);
 

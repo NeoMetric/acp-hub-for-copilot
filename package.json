@@ -141,7 +141,7 @@
 					"minimum": 0
 				},
 				"acpHub.agents.claude.idleShutdownMinutes": {
-					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again on the next request.",
+					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again when you come back to the window, or on the next request.",
 					"default": 30,
 					"type": "number",
 					"minimum": 0
@@ -203,7 +203,7 @@
 					"minimum": 0
 				},
 				"acpHub.agents.codex.idleShutdownMinutes": {
-					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again on the next request.",
+					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again when you come back to the window, or on the next request.",
 					"default": 30,
 					"type": "number",
 					"minimum": 0
@@ -250,7 +250,7 @@
 					"minimum": 0
 				},
 				"acpHub.agents.google.idleShutdownMinutes": {
-					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again on the next request.",
+					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again when you come back to the window, or on the next request.",
 					"default": 30,
 					"type": "number",
 					"minimum": 0

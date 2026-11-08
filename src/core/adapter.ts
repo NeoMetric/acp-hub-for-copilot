@@ -105,6 +105,11 @@ export interface UsageContext {
 }
 
 export interface UsageSource {
+	/**
+	 * Set when a read is visible to the user, so it runs only when they ask (the Refresh button, a
+	 * sign-in) and not on startup or after every turn.
+	 */
+	onDemandOnly?: boolean;
 	read(ctx: UsageContext, signal: AbortSignal): Promise<UsageReading | undefined>;
 }
 

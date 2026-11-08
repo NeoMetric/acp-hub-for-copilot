@@ -41,9 +41,33 @@ export interface ForkEnvironment {
 	home: string;
 	startHub(agy: string, cwd: string): Promise<Hub>;
 	call(hub: Hub, method: string, body: object): Promise<unknown>;
+	wait(ms: number): Promise<void>;
 }
 
-const realEnvironment = (): ForkEnvironment => ({ home: os.homedir(), startHub, call: callHub });
+const realEnvironment = (): ForkEnvironment => ({ home: os.homedir(), startHub, call: callHub, wait: ms => new Promise<void>(resolve => setTimeout(resolve, ms)) });
+
+/**
+ * What the CLI's language server answers while it is still loading its models or the conversation
+ * (seen as `unknown model key …` and `failed to clone trajectory`); the same call works a moment
+ * later. Giving up on these would rebuild the chat from a transcript, which misses the prompt cache.
+ */
+const TRANSIENT_HUB_ERROR = /unknown model key|model not found|failed to clone trajectory|not logged into Antigravity/i;
+const HUB_ATTEMPTS = 4;
+const HUB_RETRY_MS = 2_500;
+
+async function callHubPatiently(environment: ForkEnvironment, hub: Hub, method: string, body: object, log: Log): Promise<unknown> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return await environment.call(hub, method, body);
+		} catch (error) {
+			if (attempt >= HUB_ATTEMPTS || !TRANSIENT_HUB_ERROR.test(error instanceof Error ? error.message : String(error))) {
+				throw error;
+			}
+			log(`[reuse] The Antigravity CLI is not ready for ${method} yet; trying again (${attempt}/${HUB_ATTEMPTS - 1}).`, 'debug');
+			await environment.wait(HUB_RETRY_MS);
+		}
+	}
+}
 
 async function stepsOf(environment: ForkEnvironment, hub: Hub, cascadeId: string): Promise<HubStep[]> {
 	const trajectory = await environment.call(hub, 'GetCascadeTrajectorySteps', { cascadeId }) as { steps?: HubStep[] };
@@ -61,6 +85,8 @@ async function stepsOf(environment: ForkEnvironment, hub: Hub, cascadeId: string
 export async function forkConversation(agy: string, request: ConversationForkRequest, log: Log, environment: ForkEnvironment = realEnvironment()): Promise<ForkResult> {
 	const source = request.sessionId;
 	const hub = await environment.startHub(agy, request.cwd);
+	let copy: string | undefined;
+	let sourceRewound = false;
 	try {
 		const steps = await stepsOf(environment, hub, source);
 		const index = forkStepIndex(steps, request.point);
@@ -69,9 +95,12 @@ export async function forkConversation(agy: string, request: ConversationForkReq
 		}
 		// Keeping the source's id needs the source rewound, which needs a process that reads it again.
 		const cut = request.keepSourceId ? steps.length - 1 : index;
-		const copied = await environment.call(hub, 'ForkConversation', { sourceCascadeId: source, forkAtStepIndex: cut }) as { newCascadeId?: unknown; forkedAtStepIndex?: unknown };
-		const copy = copied.newCascadeId;
-		if (typeof copy !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(copy) || copy === source) {
+		const copied = await callHubPatiently(environment, hub, 'ForkConversation', { sourceCascadeId: source, forkAtStepIndex: cut }, log) as { newCascadeId?: unknown; forkedAtStepIndex?: unknown };
+		const made = copied.newCascadeId;
+		if (typeof made === 'string' && /^[a-zA-Z0-9_-]+$/.test(made) && made !== source) {
+			copy = made;
+		}
+		if (!copy) {
 			throw new Error('The Antigravity CLI did not return the id of a new conversation.');
 		}
 		if ((copied.forkedAtStepIndex ?? 0) !== cut) {
@@ -85,12 +114,20 @@ export async function forkConversation(agy: string, request: ConversationForkReq
 			return { sessionId: copy };
 		}
 
-		await environment.call(hub, 'RevertToCascadeStep', { cascadeId: source, stepIndex: index, conversationOnly: true, suppressErrorStep: true });
+		await callHubPatiently(environment, hub, 'RevertToCascadeStep', { cascadeId: source, stepIndex: index, conversationOnly: true, suppressErrorStep: true }, log);
+		sourceRewound = true;
 		if ((await stepsOf(environment, hub, source)).length !== index + 1) {
 			throw new Error('The Antigravity CLI did not rewind the conversation to the fork point.');
 		}
 		log(`[reuse] The Antigravity CLI copied ${source} into ${copy} and rewound ${source} to step ${index}.`, 'debug');
 		return { sessionId: source, sourceMovedTo: copy };
+	} catch (error) {
+		// A copy of a source that was not rewound is a duplicate nobody will open, and every failed fork would leave one behind.
+		// Once the source was rewound the copy is the only whole record of it, so it stays.
+		if (copy && !sourceRewound) {
+			await environment.call(hub, 'DeleteCascadeTrajectory', { cascadeId: copy }).catch(() => undefined);
+		}
+		throw error;
 	} finally {
 		await hub.stop();
 	}

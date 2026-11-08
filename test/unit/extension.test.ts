@@ -12,11 +12,17 @@ const mocks = vi.hoisted(() => ({
   sidebarDeps: [] as Array<{ getUsage: (id: string) => { status: string; reading?: { windows: Array<{ usedPercent: number }> } } }>,
   providerDeps: [] as Array<{ isEnabled: () => boolean }>,
   configurationChanged: undefined as ((event: { affectsConfiguration: (key: string) => boolean }) => void) | undefined,
+  windowStateChanged: undefined as ((state: { focused: boolean; active: boolean }) => void) | undefined,
+  woken: [] as string[],
 }));
 
 vi.mock('vscode', () => ({
   lm: { registerLanguageModelChatProvider: mocks.register },
-  window: { createOutputChannel: () => mocks.output, registerWebviewViewProvider: mocks.registerView },
+  window: {
+    createOutputChannel: () => mocks.output,
+    registerWebviewViewProvider: mocks.registerView,
+    onDidChangeWindowState: (callback: typeof mocks.windowStateChanged) => { mocks.windowStateChanged = callback; return { dispose() {} }; },
+  },
   commands: { registerCommand: mocks.registerCommand },
   workspace: { onDidChangeConfiguration: (callback: typeof mocks.configurationChanged) => { mocks.configurationChanged = callback; return { dispose() {} }; }, getConfiguration: () => ({ get: (key: string, fallback?: unknown) => key.endsWith('.enabled') ? mocks.enabled && !mocks.disabledIds.has(key.split('.')[1]) : fallback }) },
   Uri: { joinPath: (...parts: unknown[]) => parts[0] },
@@ -31,6 +37,7 @@ vi.mock('../../src/core/provider', () => ({
     restart() { return Promise.resolve(); }
     refresh() {}
     prepareAgent() { return Promise.resolve(true); }
+    wakeAfterIdle() { mocks.woken.push(this.adapter.id); }
     askAgent(prompt: string) {
       if (this.adapter.id === 'codex' && prompt === '/status') {return Promise.resolve('**5h limit:** 58% left');}
       if (this.adapter.id === 'claude' && prompt === '/usage') {return Promise.resolve('**5-hour limit** — **42%**');}
@@ -70,6 +77,25 @@ beforeEach(() => {
   mocks.sidebarDeps.length = 0;
   mocks.register.mockClear();
   mocks.registerView.mockClear();
+  mocks.woken.length = 0;
+});
+
+it('wakes the agents when the user is back in the window, not when it loses focus or goes idle', () => {
+  activate({
+    subscriptions: [],
+    globalStorageUri: { fsPath: 'storage' },
+    extensionUri: { fsPath: 'extension' },
+    extension: { packageJSON: { version: '1' } },
+    globalState: { get: () => undefined, update: async () => undefined },
+    secrets: {},
+  } as never);
+
+  mocks.windowStateChanged?.({ focused: false, active: false });
+  mocks.windowStateChanged?.({ focused: true, active: false });
+  expect(mocks.woken).toEqual([]);
+
+  mocks.windowStateChanged?.({ focused: true, active: true });
+  expect([...mocks.woken].sort()).toEqual(['claude', 'codex', 'google']);
 });
 
 it('registers a provider for every contributed vendor and the sidebar', () => {
@@ -101,12 +127,19 @@ it('loads the usage of installed, enabled agents into the sidebar at startup', a
     secrets: {},
   } as never);
 
+  // On Windows the Google quota is read on demand: the language server it needs opens a console window.
+  const googleAtStartup = process.platform !== 'win32';
   await vi.waitFor(() => {
     const sidebar = mocks.sidebarDeps[0];
     expect(sidebar.getUsage('claude').reading?.windows[0].usedPercent).toBe(42);
     expect(sidebar.getUsage('codex').reading?.windows[0].usedPercent).toBe(42);
-    expect(sidebar.getUsage('google').reading?.windows[0].usedPercent).toBe(25);
+    if (googleAtStartup) {
+      expect(sidebar.getUsage('google').reading?.windows[0].usedPercent).toBe(25);
+    }
   });
+  if (!googleAtStartup) {
+    expect(mocks.sidebarDeps[0].getUsage('google').status).toBe('idle');
+  }
 });
 
 it('does not start a usage read for disabled or uninstalled agents', async () => {

@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
 import { claudeAdapter } from '../../src/adapters/claude';
+import { codexAdapter } from '../../src/adapters/codex';
 import { googleAdapter } from '../../src/adapters/google';
 import type { AgentAdapter } from '../../src/core/adapter';
 import type { AgentSession, ForkPoint, PromptHandlers } from '../../src/core/agentClient';
@@ -47,7 +48,17 @@ class FakeAgent {
 	hasBackgroundTasks = () => false;
 	isRunning = true;
 	requiresSignIn = false;
-	onDidChange = () => ({ dispose() { } });
+	private changeListeners: Array<(change: 'restarted' | 'exited' | 'idle') => void> = [];
+	onDidChange = (listener: (change: 'restarted' | 'exited' | 'idle') => void) => {
+		this.changeListeners.push(listener);
+		return { dispose() { } };
+	};
+	/** Reports a change of the process, as the client does after an idle stop or a restart. */
+	change(change: 'restarted' | 'exited' | 'idle'): void {
+		for (const listener of this.changeListeners) {
+			listener(change);
+		}
+	}
 
 	createSession = async (): Promise<AgentSession> => {
 		const sessionId = `s${++this.sessions}`;
@@ -601,3 +612,48 @@ describe('forking a chat at a checkpoint', () => {
 		expect(state.values.get(`${storeKey}.deletions`)).toEqual(['f2']);
 	});
 });
+
+describe('starting an agent again that the idle shutdown stopped', () => {
+	it('starts the agent and its warm session when the user is back, so the next chat does not wait for it', async () => {
+		const { agent, send, provider, logs } = harness(codexAdapter);
+		await send(chat(1));
+		agent.isRunning = false;
+		agent.change('idle');
+		const created = agent.created.length;
+
+		provider.wakeAfterIdle();
+
+		await vi.waitFor(() => expect(agent.created).toHaveLength(created + 1));
+		expect(logs.some(line => line.includes('starting the Codex Agent agent it stopped for being idle'))).toBe(true);
+	});
+
+	it('starts it once per idle stop', async () => {
+		const { agent, send, provider } = harness(codexAdapter);
+		await send(chat(1));
+		agent.isRunning = false;
+		agent.change('idle');
+		const created = agent.created.length;
+
+		provider.wakeAfterIdle();
+		await vi.waitFor(() => expect(agent.created).toHaveLength(created + 1));
+		provider.wakeAfterIdle();
+		await Promise.resolve();
+
+		expect(agent.created).toHaveLength(created + 1);
+	});
+
+	it('leaves alone an agent that was never stopped, or that a request already started again', async () => {
+		const { agent, send, provider } = harness(codexAdapter);
+		provider.wakeAfterIdle();
+		await send(chat(1));
+		agent.change('idle');
+		await send(chat(1), 'c2');
+		const created = agent.created.length;
+
+		provider.wakeAfterIdle();
+		await Promise.resolve();
+
+		expect(agent.created).toHaveLength(created);
+	});
+});
+

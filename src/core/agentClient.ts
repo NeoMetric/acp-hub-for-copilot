@@ -643,7 +643,7 @@ export class AgentClient implements vscode.Disposable {
 		if (!this.rpc || this.starting || this.busyOperations > 0) {
 			return;
 		}
-		this.log(`Nothing has used the ${this.adapter.displayName} agent for a while; stopping it. The next request starts it again.`);
+		this.log(`Nothing has used the ${this.adapter.displayName} agent for a while; stopping it. It starts again when the window is in use again, or on the next request.`);
 		await this.stopProcess();
 		// `handleExit` ignores a process that was detached first, so the record is dropped here.
 		forgetAgent(this.agentRegistry);

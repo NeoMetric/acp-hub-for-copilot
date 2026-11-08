@@ -94,7 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			provider.onDidMeasureRequest(measurement => usage.recordRequest(adapter.id, measurement)),
 			provider.onDidFinishTurn(turn => {
 				usage.recordTurn(adapter.id, adapter.reportsCache === false ? undefined : turn.usage, turn.background);
-				if (!turn.background && adapter.usage) { void refreshUsage(adapter.id, false); }
+				if (!turn.background && adapter.usage && !adapter.usage.onDemandOnly) { void refreshUsage(adapter.id, false); }
 			}),
 			vscode.lm.registerLanguageModelChatProvider(adapter.vendor, provider),
 		);
@@ -167,6 +167,10 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 		}),
 		secrets.onDidChange(id => { void providers.get(id)?.restart(); providers.get(id)?.refresh(); }),
+		// The user is back: an agent the idle shutdown stopped starts while they type, not after they send.
+		vscode.window.onDidChangeWindowState(state => {
+			if (state.focused && state.active) { for (const provider of providers.values()) { provider.wakeAfterIdle(); } }
+		}),
 	);
 	// An agent downloaded by version stays usable at the older one until the newer one is in place.
 	async function updateOutdated(adapter: AgentAdapter): Promise<void> {
@@ -185,7 +189,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		providers.get(adapter.id)?.refresh();
 	}
 	for (const adapter of ADAPTERS) {
-		if (adapter.usage && vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(adapter.id, 'enabled'), true)) {
+		if (adapter.usage && !adapter.usage.onDemandOnly && vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(adapter.id, 'enabled'), true)) {
 			void refreshUsage(adapter.id, false).catch(error => log(`Could not start usage refresh for ${adapter.id}: ${String(error)}`, 'warn'));
 		}
 		void updateOutdated(adapter).catch(error => log(`Could not update ${adapter.displayName}: ${error instanceof Error ? error.message : String(error)}`, 'warn'));

@@ -1,7 +1,7 @@
 {
 	"commonSettings": [
 		{ "key": "idleTimeoutSeconds", "type": "number", "label": "Idle session timeout (seconds)", "description": "How long a chat session stays warm after its last request before it is closed. 0 keeps it until the agent stops.", "default": 120 },
-		{ "key": "idleShutdownMinutes", "type": "number", "label": "Idle agent shutdown (minutes)", "description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again on the next request.", "default": 30 },
+		{ "key": "idleShutdownMinutes", "type": "number", "label": "Idle agent shutdown (minutes)", "description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again when you come back to the window, or on the next request.", "default": 30 },
 		{ "key": "dumpRequests", "type": "boolean", "label": "Dump requests (debug)", "description": "Write each request Copilot sends to a JSON file in the extension's storage folder. The files hold the whole prompt, so keep this off unless you are debugging.", "default": false }
 	],
 	"agents": [

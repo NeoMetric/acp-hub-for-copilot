@@ -62,9 +62,17 @@ function harness(steps: HubStep[] = [response('answer'), response('later')]) {
 	const stop = vi.fn(async () => undefined);
 	const hub = { port: 1234, token: 'test-token', stop };
 	const startHub = vi.fn(async () => hub);
-	const server = { steps: [...steps], copyId: 'copy' as unknown, forkedAt: undefined as number | undefined, writesCopy: true, rewinds: true, fails: undefined as string | undefined };
+	const server = { steps: [...steps], copyId: 'copy' as unknown, forkedAt: undefined as number | undefined, writesCopy: true, rewinds: true, fails: undefined as string | undefined, failures: [] as string[], deleted: [] as unknown[] };
 	const call = vi.fn(async (_hub: typeof hub, method: string, body: Record<string, unknown>): Promise<unknown> => {
 		if (method === server.fails) { throw new Error('hub failed'); }
+		if (method !== 'DeleteCascadeTrajectory' && server.failures.length > 0 && method === server.failures[0].split('|')[0]) {
+			throw new Error(server.failures.shift()!.split('|')[1]);
+		}
+		if (method === 'DeleteCascadeTrajectory') {
+			server.deleted.push(body.cascadeId);
+			fs.rmSync(path.join(conversations, `${body.cascadeId}.db`), { force: true });
+			return {};
+		}
 		if (method === 'GetCascadeTrajectorySteps') { return { steps: server.steps }; }
 		if (method === 'ForkConversation') {
 			if (server.writesCopy && typeof server.copyId === 'string' && /^[\w-]+$/.test(server.copyId)) {
@@ -78,9 +86,10 @@ function harness(steps: HubStep[] = [response('answer'), response('later')]) {
 		}
 		throw new Error(`Unexpected method ${method}`);
 	});
-	const environment: ForkEnvironment = { home, startHub, call };
+	const wait = vi.fn(async () => undefined);
+	const environment: ForkEnvironment = { home, startHub, call, wait };
 	const log = vi.fn();
-	return { home, conversations, request, stop, hub, startHub, call, server, environment, log };
+	return { home, conversations, request, stop, hub, startHub, call, server, environment, log, wait };
 }
 
 describe('forkConversation', () => {
@@ -159,5 +168,62 @@ describe('forkConversation', () => {
 		h.server.forkedAt = 0;
 		await expect(forkConversation('agy', h.request, h.log, h.environment)).rejects.toThrow('different step');
 		expect(h.server.steps).toHaveLength(2);
+	});
+
+	it('tries the rewind again when the CLI is still loading its models, instead of giving up the cache', async () => {
+		const h = harness();
+		h.server.failures = ['RevertToCascadeStep|The Antigravity CLI answered RevertToCascadeStep with HTTP 500: unknown model key MODEL_PLACEHOLDER_M318: model not found'];
+
+		expect(await forkConversation('agy', h.request, h.log, h.environment)).toEqual({ sessionId: 'source', sourceMovedTo: 'copy' });
+
+		expect(h.call.mock.calls.filter(([, method]) => method === 'RevertToCascadeStep')).toHaveLength(2);
+		expect(h.wait).toHaveBeenCalledOnce();
+		expect(h.server.deleted).toEqual([]);
+	});
+
+	it('tries the copy again when the CLI cannot clone the conversation yet', async () => {
+		const h = harness();
+		h.server.failures = ['ForkConversation|internal: failed to create forked conversation: failed to clone trajectory'];
+
+		expect(await forkConversation('agy', h.request, h.log, h.environment)).toEqual({ sessionId: 'source', sourceMovedTo: 'copy' });
+		expect(h.call.mock.calls.filter(([, method]) => method === 'ForkConversation')).toHaveLength(2);
+	});
+
+	it('gives up on an error that keeps coming back, and does not retry other errors', async () => {
+		const h = harness();
+		h.server.failures = Array.from({ length: 10 }, () => 'RevertToCascadeStep|unknown model key X');
+		await expect(forkConversation('agy', h.request, h.log, h.environment)).rejects.toThrow('unknown model key');
+		expect(h.call.mock.calls.filter(([, method]) => method === 'RevertToCascadeStep')).toHaveLength(4);
+
+		const other = harness();
+		other.server.failures = ['RevertToCascadeStep|step_index out of bounds'];
+		await expect(forkConversation('agy', other.request, other.log, other.environment)).rejects.toThrow('out of bounds');
+		expect(other.call.mock.calls.filter(([, method]) => method === 'RevertToCascadeStep')).toHaveLength(1);
+		expect(other.wait).not.toHaveBeenCalled();
+	});
+
+	it('deletes the copy when the source could not be rewound, so failed forks do not pile up conversations', async () => {
+		const h = harness();
+		h.server.fails = 'RevertToCascadeStep';
+
+		await expect(forkConversation('agy', h.request, h.log, h.environment)).rejects.toThrow('hub failed');
+
+		expect(h.server.deleted).toEqual(['copy']);
+		expect(fs.readdirSync(h.conversations)).toEqual([]);
+		expect(h.stop).toHaveBeenCalledOnce();
+	});
+
+	it('keeps the copy once the source was rewound, because it is then the only whole record of the conversation', async () => {
+		const h = harness();
+		const original = h.call.getMockImplementation()!;
+		let rewound = false;
+		h.call.mockImplementation(async (hub, method, body) => {
+			if (method === 'RevertToCascadeStep') { rewound = true; }
+			if (method === 'GetCascadeTrajectorySteps' && rewound) { throw new Error('hub failed'); }
+			return original(hub, method, body);
+		});
+
+		await expect(forkConversation('agy', h.request, h.log, h.environment)).rejects.toThrow('hub failed');
+		expect(h.server.deleted).toEqual([]);
 	});
 });
