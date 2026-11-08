@@ -27,6 +27,12 @@ export interface ConversationForkRequest {
 	readonly sessionId: string;
 	readonly point: ForkPoint;
 	readonly cwd: string;
+	/**
+	 * Whether the fork may keep the source's id (so its prompt cache still serves the conversation).
+	 * That needs the agent to read the source afresh, which only a new process does; when another
+	 * chat is in the middle of a turn the fork takes an id of its own instead.
+	 */
+	readonly keepSourceId: boolean;
 }
 
 /**
@@ -208,6 +214,11 @@ export interface AgentAdapter {
 	forkChats?: boolean;
 	/** Forks chats by other means than `session/fork`, for an agent that lacks it; used only where the program is installed. */
 	forker?: ConversationForker;
+	/**
+	 * Whether a fork that rewound the source conversation needs the agent restarted before the copy is
+	 * opened, for an agent that keeps every conversation it opened in memory and never reads one again.
+	 */
+	restartAfterFork?: boolean;
 	/** Whether the agent fetches the tool list again on `tools/list_changed`, so a changed tool set needs no new session. */
 	refreshesTools?: boolean;
 	/** How long (ms) a tool call may wait for Copilot to pick it up before it is failed; absent waits for as long as the agent does. */

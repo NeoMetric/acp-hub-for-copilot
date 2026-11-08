@@ -101,7 +101,7 @@ describe('google launch', () => {
 		const spec = googleLaunchSpec(ctx, {}, 'win32', path.join(temp, 'home'));
 
 		expect(spec.command).toBe(ctx.entryPath);
-		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot', '--process-per-session']);
+		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot']);
 		expect(spec.shell).toBeUndefined();
 		expect(spec.env).toEqual({ GEMINI_API_KEY: 'AIza-key' });
 	});
@@ -110,7 +110,7 @@ describe('google launch', () => {
 		const spec = googleAdapter.launch(launchContext(ownAgent));
 
 		expect(spec.command).toBe(launchContext().entryPath);
-		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot', '--process-per-session']);
+		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot']);
 		expect(spec.env.GEMINI_API_KEY).toBeUndefined();
 	});
 
@@ -149,7 +149,7 @@ describe('google launch', () => {
 		const spec = googleLaunchSpec(launchContext({ command: 'agy-acp', ...ownAgent }), { PATH: temp, PATHEXT: '.exe;.cmd' }, 'win32', path.join(temp, 'home'));
 
 		expect(spec.command).toBe(file);
-		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot', '--process-per-session']);
+		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot']);
 	});
 
 	it('uses a shell only for a .cmd shim, and then refuses arguments cmd.exe would interpret', () => {
@@ -196,7 +196,7 @@ describe('the extension\'s own agent', () => {
 
 		const spec = googleLaunchSpec(launchContext({ useAgentBuiltInTools: true }), {}, 'win32', home);
 
-		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot', '--process-per-session']);
+		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot']);
 		expect(fs.existsSync(path.join(home, '.gemini'))).toBe(false);
 	});
 

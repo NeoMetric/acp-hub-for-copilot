@@ -210,6 +210,83 @@ describe('external conversation forking', () => {
 		expect(agent.prompts.at(-1)).toEqual({ sessionId: 'external-copy', texts: ['edited question'] });
 	});
 
+	it('restarts the agent after a rewind, so it reads the conversation again, before opening the fork', async () => {
+		const order: string[] = [];
+		let closedBeforeFork: string[] = [];
+		const forker = {
+			locate: vi.fn(async () => 'agy'),
+			fork: vi.fn(async (_program: string, request: { keepSourceId: boolean }) => {
+				closedBeforeFork = [...h.agent.closed];
+				order.push(`fork keepSourceId=${request.keepSourceId}`);
+				return { sessionId: 's1', sourceMovedTo: 'full-copy' };
+			}),
+			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
+		};
+		const h = harness({ ...googleAdapter, forker, restartAfterFork: true });
+		h.agent.supportsFork = false;
+		h.agent.restart.mockImplementation(async () => { order.push('restart'); });
+		h.agent.resumeSession = (async (sessionId: string) => { order.push(`resume ${sessionId}`); return { sessionId, configOptions: [] }; }) as never;
+		await h.send(chat(1), 'c1');
+		await h.send(chat(2), 'c1');
+
+		await h.send(chat(3), 'c2');
+
+		expect(closedBeforeFork).toContain('s1');
+		// The restart runs beside the fork and is done before the copy is opened.
+		expect(order).toContain('fork keepSourceId=true');
+		expect(order.at(-1)).toBe('resume s1');
+		expect(order.indexOf('restart')).toBeLessThan(order.indexOf('resume s1'));
+		// Starting the agent again runs beside the fork instead of after it.
+		expect(h.agent.ensureStarted).toHaveBeenCalled();
+		expect(order.indexOf('resume s1')).toBeGreaterThan(order.indexOf('fork keepSourceId=true'));
+		const entries = h.state.values.get(h.storeKey) as SavedSession[];
+		expect(entries.find(entry => entry.key.includes('c1'))?.sessionId).toBe('full-copy');
+	});
+
+	it('rebuilds from the transcript when the restart fails, rather than continue on the whole conversation', async () => {
+		const forker = {
+			locate: vi.fn(async () => 'agy'),
+			fork: vi.fn(async () => ({ sessionId: 's1', sourceMovedTo: 'full-copy' })),
+			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
+		};
+		const h = harness({ ...googleAdapter, forker, restartAfterFork: true });
+		h.agent.supportsFork = false;
+		h.agent.restart.mockImplementation(async () => { throw new Error('restart failed'); });
+		await h.send(chat(1), 'c1');
+		await h.send(chat(2), 'c1');
+
+		await h.send(chat(3), 'c2');
+
+		expect(h.agent.resumed).not.toContain('s1');
+		expect(h.agent.prompts.at(-1)?.texts.join('\n')).toContain('question 1');
+	});
+
+	it('leaves the source id alone when another chat is in the middle of a turn', async () => {
+		let keepSourceId: boolean | undefined;
+		const forker = {
+			locate: vi.fn(async () => 'agy'),
+			fork: vi.fn(async (_program: string, request: { keepSourceId: boolean }) => {
+				keepSourceId = request.keepSourceId;
+				return { sessionId: 'copy-of-other' };
+			}),
+			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
+		};
+		const h = harness({ ...googleAdapter, forker, restartAfterFork: true });
+		h.agent.supportsFork = false;
+		h.agent.hold = true;
+		void h.send(chat(1), 'busy');
+		await vi.waitFor(() => expect(h.agent.prompts).toHaveLength(1));
+		h.agent.hold = false;
+
+		await h.send(chat(1), 'c1');
+		await h.send(chat(2), 'c1');
+		await h.send(chat(3), 'c2');
+
+		expect(keepSourceId).toBe(false);
+		expect(h.agent.restart).not.toHaveBeenCalled();
+		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 'copy-of-other', texts: ['question 3'] });
+	});
+
 	it('continues a fork in the source session when the forker keeps its id, and moves the source chat to the copy', async () => {
 		let closedBeforeFork: string[] = [];
 		const forker = {

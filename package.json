@@ -266,7 +266,7 @@
 					"type": "string"
 				},
 				"acpHub.agents.google.args": {
-					"description": "Arguments for the program. Leave empty for the default (acp --app-data-dir=antigravity-copilot --process-per-session).",
+					"description": "Arguments for the program. Leave empty for the default (acp --app-data-dir=antigravity-copilot).",
 					"default": [],
 					"type": "array",
 					"items": {

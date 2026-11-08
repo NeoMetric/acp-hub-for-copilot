@@ -646,8 +646,29 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 				await this.destroySession(key);
 			}
 		}
-		const forked = await forker.fork(program, { sessionId: source, point, cwd: options.cwd }, this.log);
+		// Rewinding the source only helps if the agent reads it again, which needs a restart; a restart
+		// would end the turn of another chat, so then the fork takes an id of its own instead.
+		const busy = [...this.sessions.values()].some(session => session.turn !== undefined);
+		const keepSourceId = !busy;
+		// The restart runs beside the fork, which uses a language server of its own, and is waited on
+		// before the copy is opened. Should it fail, the rewound conversation is not read again, so the
+		// chat is rebuilt from its transcript rather than continued on the wrong one.
+		const restarting = keepSourceId && this.adapter.restartAfterFork
+			? this.client?.restart().then(() => {
+				// Starting it again takes a few seconds; do that while the fork runs, and let the resume
+				// report a start that fails.
+				void this.agent.ensureStarted().catch(() => undefined);
+				return true;
+			}, error => {
+				this.log(`[reuse] Could not restart the agent for the fork (${describe(error)}); the chat is rebuilt from its transcript.`, 'warn');
+				return false;
+			})
+			: undefined;
+		const forked = await forker.fork(program, { sessionId: source, point, cwd: options.cwd, keepSourceId }, this.log);
 		if (forked.sourceMovedTo) {
+			if (restarting && !await restarting) {
+				return undefined;
+			}
 			this.saved.moveSession(source, forked.sourceMovedTo);
 			this.log(`[reuse] The fork goes on in ${source}; the chats that had it continue in the copy ${forked.sourceMovedTo}.`, 'debug');
 		}

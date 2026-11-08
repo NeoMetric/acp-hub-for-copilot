@@ -67,17 +67,22 @@ export async function forkConversation(agy: string, request: ConversationForkReq
 		if (index === undefined) {
 			throw new Error('No step of the conversation says what the fork point says.');
 		}
-		const last = steps.length - 1;
-		const copied = await environment.call(hub, 'ForkConversation', { sourceCascadeId: source, forkAtStepIndex: last }) as { newCascadeId?: unknown; forkedAtStepIndex?: unknown };
+		// Keeping the source's id needs the source rewound, which needs a process that reads it again.
+		const cut = request.keepSourceId ? steps.length - 1 : index;
+		const copied = await environment.call(hub, 'ForkConversation', { sourceCascadeId: source, forkAtStepIndex: cut }) as { newCascadeId?: unknown; forkedAtStepIndex?: unknown };
 		const copy = copied.newCascadeId;
 		if (typeof copy !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(copy) || copy === source) {
 			throw new Error('The Antigravity CLI did not return the id of a new conversation.');
 		}
-		if ((copied.forkedAtStepIndex ?? 0) !== last) {
+		if ((copied.forkedAtStepIndex ?? 0) !== cut) {
 			throw new Error('The Antigravity CLI copied the conversation at a different step.');
 		}
 		if (!fs.existsSync(path.join(environment.home, '.gemini', APP_DATA_DIR, 'conversations', `${copy}.db`))) {
 			throw new Error('The Antigravity CLI left no conversation file for the copy.');
+		}
+		if (!request.keepSourceId) {
+			log(`[reuse] The Antigravity CLI forked ${source} after step ${index} into ${copy}, which pays one cache miss.`, 'debug');
+			return { sessionId: copy };
 		}
 
 		await environment.call(hub, 'RevertToCascadeStep', { cascadeId: source, stepIndex: index, conversationOnly: true, suppressErrorStep: true });

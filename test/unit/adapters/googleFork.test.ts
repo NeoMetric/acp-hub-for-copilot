@@ -58,7 +58,7 @@ function harness(steps: HubStep[] = [response('answer'), response('later')]) {
 	roots.push(home);
 	const conversations = path.join(home, '.gemini', APP_DATA_DIR, 'conversations');
 	fs.mkdirSync(conversations, { recursive: true });
-	const request: ConversationForkRequest = { sessionId: 'source', cwd: path.resolve('test'), point: point('answer') };
+	const request: ConversationForkRequest = { sessionId: 'source', cwd: path.resolve('test'), point: point('answer'), keepSourceId: true };
 	const stop = vi.fn(async () => undefined);
 	const hub = { port: 1234, token: 'test-token', stop };
 	const startHub = vi.fn(async () => hub);
@@ -98,6 +98,20 @@ describe('forkConversation', () => {
 			['GetCascadeTrajectorySteps', { cascadeId: 'source' }],
 		]);
 		expect(h.server.steps).toHaveLength(3);
+		expect(h.stop).toHaveBeenCalledOnce();
+	});
+
+	it('takes an id of its own, and leaves the source alone, when the agent cannot read it afresh', async () => {
+		const h = harness([response('answer'), response('other'), response('answer'), response('later')]);
+		const request = { ...h.request, point: point('answer', 2), keepSourceId: false };
+
+		expect(await forkConversation('agy', request, h.log, h.environment)).toEqual({ sessionId: 'copy' });
+
+		expect(h.call.mock.calls.map(([, method, body]) => [method, body])).toEqual([
+			['GetCascadeTrajectorySteps', { cascadeId: 'source' }],
+			['ForkConversation', { sourceCascadeId: 'source', forkAtStepIndex: 2 }],
+		]);
+		expect(h.server.steps).toHaveLength(4);
 		expect(h.stop).toHaveBeenCalledOnce();
 	});
 

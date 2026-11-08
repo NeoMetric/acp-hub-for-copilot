@@ -24,12 +24,12 @@ const API_KEY_VARIABLES = ['GEMINI_API_KEY', 'GOOGLE_API_KEY'];
 const SHELL_SAFE_ARGUMENT = /^[\w@+=:,./\\-]+$/;
 
 /**
- * Runs the Antigravity CLI as an ACP server, on conversations of its own. A single process keeps every
+ * Runs the Antigravity CLI as an ACP server, on conversations of its own. One process serves every
+ * conversation, which is what makes opening a chat take milliseconds. The process keeps a
  * conversation it opened in memory and never reads it again, so a fork that rewinds the source on
- * disk (to keep its prompt cache, see `googleFork`) needs a worker per session: closing the session
- * ends its worker, and resuming it reads the conversation afresh.
+ * disk (to keep its prompt cache, see `googleFork`) restarts the agent instead.
  */
-const ACP_ARGS = ['acp', `--app-data-dir=${APP_DATA_DIR}`, '--process-per-session'];
+const ACP_ARGS = ['acp', `--app-data-dir=${APP_DATA_DIR}`];
 
 /**
  * The agent the CLI runs for chats that use the Copilot tools. Its file sits in the CLI's global
@@ -268,6 +268,8 @@ export const googleAdapter: AgentAdapter = {
 	},
 	// `agy acp` cannot fork a session; the CLI's language server copies the conversation instead.
 	forker: googleForker,
+	// Rewinding the source needs the agent to read it afresh, which one process does only on a restart.
+	restartAfterFork: true,
 	// The agent saves a tool result of about 4,000 characters or more to a file and hands the model only its path. With its own
 	// file tools off the model then reasons for minutes about how to get at the content, so results are cut below that size.
 	maxToolResultChars: 3_500,
