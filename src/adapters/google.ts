@@ -31,27 +31,40 @@ const SHELL_SAFE_ARGUMENT = /^[\w@+=:,./\\-]+$/;
 const ACP_ARGS = ['acp', `--app-data-dir=${APP_DATA_DIR}`, '--process-per-session'];
 
 /**
- * The custom agent the CLI runs when the chat replaces Antigravity's prompt. Its file sits in the
- * CLI's global agents folder, and its body replaces the section holding Antigravity's own identity;
+ * The agent the CLI runs for chats that use the Copilot tools. Its file sits in the CLI's global
+ * agents folder, and its `tools` allowlist is what turns Antigravity's own tools off: the CLI
+ * ignores `_meta.antigravity.disabledTools`. Its body replaces the section holding Antigravity's own
+ * identity, which the CLI generates and cannot be reused, so the body states the persona instead;
  * the sections about its skills, artifacts and messaging stay. A name the CLI does not find is
  * ignored without an error, which is why the file is written before every start.
  */
-const REPLACEMENT_AGENT = 'acp-hub-copilot';
+const CUSTOM_AGENT = 'acp-hub-copilot';
 
-/** The `agent.md` of {@link REPLACEMENT_AGENT}: the identity the host's own prompt cannot supply. */
-const REPLACEMENT_AGENT_FILE = `---
-name: ${REPLACEMENT_AGENT}
-description: Created by the ACP Hub for Copilot extension for chats that replace Antigravity's system prompt.
----
+/** The persona the agent keeps while Copilot's guidance is appended to it. */
+const ANTIGRAVITY_PERSONA = 'You are Antigravity, an agentic coding assistant working with the user on their coding task in this workspace.';
 
-${HOST_IDENTITY}
-`;
+export interface CustomAgentOptions {
+	/** Write the empty `tools` allowlist, so the agent has none of Antigravity's tools. */
+	noBuiltInTools: boolean;
+	/** Replace the persona with the identity of the host, for a chat that replaces the prompt. */
+	replacePrompt: boolean;
+}
 
-/** Writes {@link REPLACEMENT_AGENT_FILE} into the CLI's gemini home. */
-function writeReplacementAgent(geminiHome: string): void {
-	const directory = path.join(geminiHome, 'agents', REPLACEMENT_AGENT);
+/** The `agent.md` of {@link CUSTOM_AGENT}. */
+export function customAgentFile(options: CustomAgentOptions): string {
+	const lines = ['---', `name: ${CUSTOM_AGENT}`, 'description: Created by the ACP Hub for Copilot extension to run chats on the chat\'s own tools.'];
+	if (options.noBuiltInTools) {
+		lines.push('tools: []');
+	}
+	lines.push('---', '', options.replacePrompt ? HOST_IDENTITY : ANTIGRAVITY_PERSONA);
+	return `${lines.join('\n')}\n`;
+}
+
+/** Writes the agent into the CLI's gemini home. */
+function writeCustomAgent(geminiHome: string, options: CustomAgentOptions): void {
+	const directory = path.join(geminiHome, 'agents', CUSTOM_AGENT);
 	fs.mkdirSync(directory, { recursive: true });
-	fs.writeFileSync(path.join(directory, 'agent.md'), REPLACEMENT_AGENT_FILE);
+	fs.writeFileSync(path.join(directory, 'agent.md'), customAgentFile(options));
 }
 
 /**
@@ -125,11 +138,15 @@ export function googleLaunchSpec(ctx: LaunchContext, env: NodeJS.ProcessEnv, pla
 		launchEnv.GEMINI_API_KEY = ctx.apiKey;
 	}
 
+	// Antigravity's own tools come from its own agent; the chat's tools need the extension's agent,
+	// whose `tools: []` is the only way to turn them off.
+	const noBuiltInTools = !booleanSetting(ctx.settings, 'useAgentBuiltInTools');
 	const replacePrompt = booleanSetting(ctx.settings, 'replaceSystemPrompt');
-	if (replacePrompt) {
-		writeReplacementAgent(env.GEMINI_HOME || path.join(home, '.gemini'));
+	const customAgent = noBuiltInTools || replacePrompt;
+	if (customAgent) {
+		writeCustomAgent(env.GEMINI_HOME || path.join(home, '.gemini'), { noBuiltInTools, replacePrompt });
 	}
-	const withAgent = (args: string[]) => replacePrompt ? [...args, `--agent=${REPLACEMENT_AGENT}`] : args;
+	const withAgent = (args: string[]) => customAgent ? [...args, `--agent=${CUSTOM_AGENT}`] : args;
 
 	const command = stringSetting(ctx.settings, 'command').trim();
 	if (command === '') {

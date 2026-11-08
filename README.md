@@ -37,7 +37,8 @@ Configure each agent from its card or search for `AgentHub` in VS Code Settings.
 
 Two options control how much each request sends to the model. Both are off by default and restart the agent when changed:
 
-- **Replace the system prompt** (Claude, Codex and Antigravity). Replaces the agent's own built-in prompt with Copilot's guidance for the chat plus a one-line identity, instead of adding Copilot's guidance to the end of the agent's prompt. Antigravity can only replace its identity section, so its sections about skills, artifacts and messaging stay either way; the toggle still drops its slash-command, transcript and subagent guidance.
+- **Replace the system prompt** (Claude, Codex and Antigravity). Replaces the agent's own built-in prompt with Copilot's guidance for the chat plus a one-line identity, instead of adding Copilot's guidance to the end of the agent's prompt. Antigravity generates its prompt and cannot keep it beside a custom agent, so the Google agent keeps a short Antigravity persona when the toggle is off and takes Copilot's identity when it is on; either way Copilot's guidance follows, and Antigravity's sections about skills, artifacts and messaging stay.
+- **Use the agent's built-in tools** (Antigravity). Off by default: the extension runs its own Antigravity agent with an empty tool allowlist, which removes Antigravity's own file, shell and search tools so only Copilot's tools are used. On: Antigravity's own agent runs with all of its tools and its own prompt.
 - **Tool search** (Claude). Loads each Copilot tool's description only when the model needs it, instead of sending every tool's full description with every request. This shrinks the first request a lot when many tools are available, and may add a lookup step before a tool is first used. Not every model supports it. Codex and Antigravity already load tools this way.
 
 

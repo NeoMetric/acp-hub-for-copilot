@@ -274,12 +274,12 @@
 					}
 				},
 				"acpHub.agents.google.useAgentBuiltInTools": {
-					"description": "Let the Antigravity agent use its own file, shell and search tools. When off (default), the extension tells Antigravity to use only the Copilot chat tools. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.",
+					"description": "Let the Antigravity agent use its own file, shell and search tools. When off (default), the extension runs its own Antigravity agent with an empty tool allowlist, so Antigravity's built-in tools are gone and only the Copilot chat tools are available. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations. Changing it restarts the agent.",
 					"default": false,
 					"type": "boolean"
 				},
 				"acpHub.agents.google.replaceSystemPrompt": {
-					"description": "On: Antigravity's own identity is replaced by a one-line identity, which also drops its slash-command, transcript and subagent guidance; Copilot's guidance for the chat is still added after it. Antigravity's sections about its skills, artifacts and messaging stay. Off: Copilot's guidance is added to Antigravity's own prompt. Changing it restarts the agent.",
+					"description": "On: the chat's agent takes Copilot's identity instead of Antigravity's persona, and Copilot's guidance for the chat follows. Off: it keeps a short Antigravity persona, with the same guidance after it. Antigravity's own generated prompt is replaced either way; its sections about skills, artifacts and messaging stay. This needs the extension's own agent, which has no Antigravity tools of its own. Changing it restarts the agent.",
 					"default": false,
 					"type": "boolean"
 				},
