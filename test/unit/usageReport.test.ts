@@ -1,8 +1,38 @@
 import { describe, expect, it } from 'vitest';
-import { logCache, logContextCall, logTokens } from '../../src/core/provider/usageReport';
+import { logCache, logContextCall, logTokens, reportUsage } from '../../src/core/provider/usageReport';
 import type { ActiveTurn } from '../../src/core/provider/types';
 
 const usage = { inputTokens: 1000, outputTokens: 50, cachedReadTokens: 9000, cachedWriteTokens: 0, totalTokens: 10050 };
+
+/** The `usage` part Copilot is sent, which its context indicator is built on. */
+function usagePart(turn: Partial<ActiveTurn>): { prompt_tokens: number; completion_tokens: number; prompt_tokens_details: { cached_tokens: number } } {
+	const parts: Array<{ data: Uint8Array }> = [];
+	const full = { finished: false, streaming: true, characters: 0, reportedTokens: 0, ...turn, progress: { report: (part: unknown) => parts.push(part as { data: Uint8Array }) } } as unknown as ActiveTurn;
+	reportUsage(full, () => undefined);
+	return JSON.parse(Buffer.from(parts.at(-1)!.data).toString());
+}
+
+describe('reportUsage', () => {
+	it('sends the context of the last model call, not the sum of every call of the turn', () => {
+		// A turn of three calls of about 25.7k tokens each: the agent reports 76,780 for the turn.
+		const part = usagePart({ result: { stopReason: 'end_turn', usage: { inputTokens: 29850, outputTokens: 79, cachedReadTokens: 46930, cachedWriteTokens: 0, totalTokens: 76859 } }, lastCall: { promptTokens: 25749, cachedTokens: 23558 } });
+
+		expect(part.prompt_tokens).toBe(25749);
+		expect(part.prompt_tokens_details.cached_tokens).toBe(23558);
+	});
+
+	it('keeps the context the agent reported as it runs over the turn sums', () => {
+		const part = usagePart({ result: { stopReason: 'end_turn', usage: usage }, contextUsed: 26000, lastCall: { promptTokens: 25000, cachedTokens: 24000 } });
+
+		expect(part.prompt_tokens).toBe(26000 - 50);
+	});
+
+	it('falls back to the turn figure for an agent that reports nothing else', () => {
+		const part = usagePart({ result: { stopReason: 'end_turn', usage } });
+
+		expect(part.prompt_tokens).toBe(10000);
+	});
+});
 
 describe('logContextCall', () => {
 	it('numbers the calls of a turn and adds up what they sent', () => {

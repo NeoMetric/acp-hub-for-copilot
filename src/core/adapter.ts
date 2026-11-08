@@ -127,6 +127,16 @@ export interface AgentSessionInfo {
 	effortLevels: string[];
 }
 
+/**
+ * What the last model call of a turn sent. For an agent whose protocol reports only the sums of a
+ * whole turn, which add up every call and so say nothing about the context the agent holds.
+ */
+export interface LastModelCall {
+	/** The tokens the call sent: fresh plus cached. */
+	readonly promptTokens: number;
+	readonly cachedTokens: number;
+}
+
 export interface SessionParamsInput {
 	/** Text appended to the agent's own system prompt. */
 	systemPromptAppend?: string;
@@ -224,6 +234,12 @@ export interface AgentAdapter {
 	signInCompleted?(startedAt: number): boolean;
 	/** Picks the `authenticate` call to make after `initialize`, or `undefined` for none. */
 	authenticate?(methods: AcpAuthMethod[], apiKey: string | undefined, settings?: AgentSettings): AuthenticateRequest | undefined;
+	/**
+	 * The last model call of a session so far, for an agent that reports no `usage_update` and only
+	 * the sums of a turn. Read when a turn reports its usage, so the context the agent holds is
+	 * reported as it is rather than as the sum of every call of the turn.
+	 */
+	lastModelCall?(sessionId: string): Promise<LastModelCall | undefined>;
 	/**
 	 * Reads the usage of one model call from an agent-specific notification; called for every notification
 	 * the client does not know. Returns `undefined` when the notification is not the adapter's, otherwise the

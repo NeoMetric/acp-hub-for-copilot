@@ -96,6 +96,10 @@ export function reportUsage(turn: ActiveTurn, log: Log): void {
 	let promptTokens: number;
 	if (turn.contextUsed !== undefined) {
 		promptTokens = Math.max(0, turn.contextUsed - completionTokens);
+	} else if (turn.lastCall) {
+		// The agent reports only the sums of the turn, which add up every call; the last call sent
+		// what the agent holds now, and its figure already leaves out what it answered.
+		promptTokens = turn.lastCall.promptTokens;
 	} else if (usage) {
 		promptTokens = usage.inputTokens + usage.cachedReadTokens + usage.cachedWriteTokens;
 	} else {
@@ -112,7 +116,7 @@ export function reportUsage(turn: ActiveTurn, log: Log): void {
 		prompt_tokens: promptTokens,
 		completion_tokens: completionTokens,
 		total_tokens: promptTokens + completionTokens,
-		prompt_tokens_details: { cached_tokens: usage?.cachedReadTokens ?? 0 },
+		prompt_tokens_details: { cached_tokens: turn.contextUsed !== undefined ? usage?.cachedReadTokens ?? 0 : turn.lastCall?.cachedTokens ?? usage?.cachedReadTokens ?? 0 },
 		completion_tokens_details: { reasoning_tokens: usage?.reasoningOutputTokens ?? 0 },
 	};
 	turn.progress.report(vscode.LanguageModelDataPart.json(payload, 'usage'));

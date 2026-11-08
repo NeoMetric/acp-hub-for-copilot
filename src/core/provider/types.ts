@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type * as vscode from 'vscode';
-import type { AgentAdapter, LaunchContext } from '../adapter';
+import type { AgentAdapter, LastModelCall, LaunchContext } from '../adapter';
 import type { AcpTokenUsage, AgentClient, AgentClientDeps, AgentSession, PromptResult } from '../agentClient';
 import type { McpBridge, McpServerEndpoint } from '../bridge';
 import type { ChatIdentity } from '../cache';
@@ -82,6 +82,8 @@ export interface ActiveTurn {
 	/** Token counts of the last model call, as reported by the agent. */
 	contextUsed?: number;
 	contextSize?: number;
+	/** The last model call the agent made, for an agent whose protocol reports only the turn's sums. */
+	lastCall?: LastModelCall;
 	/** Token counts of the model calls this turn has made so far, added up (agents that report each call). */
 	requestUsage?: AcpTokenUsage;
 	/** Model calls seen through `usage_update` and the tokens they sent, added up (agents that report only the turn's cache split). */

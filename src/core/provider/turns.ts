@@ -97,8 +97,9 @@ export class TurnRunner {
 			onUsage: this.reportsEachModelCall ? usage => this.measureRequest(session, turn, usage) : undefined,
 			token,
 		}).then(
-			result => {
+			async result => {
 				turn.result = result;
+				await this.refreshLastCall(session, turn);
 				if (result.usage && this.host.adapter.reportsCache === false) {
 					logTokens(result.usage, this.log);
 				} else if (result.usage && !this.reportsEachModelCall) {
@@ -143,6 +144,25 @@ export class TurnRunner {
 		// that continues it, so it must not surface as an unhandled rejection.
 		void prompt.catch(() => undefined);
 		return turn;
+	}
+
+	/**
+	 * Reads the last model call of a session whose agent sends no `usage_update`, so the context
+	 * Copilot shows is the one the agent holds and not the sum of every call of the turn.
+	 */
+	private async refreshLastCall(session: ChatSession, turn: ActiveTurn): Promise<void> {
+		const lastModelCall = this.host.adapter.lastModelCall;
+		if (!lastModelCall || turn.contextUsed !== undefined) {
+			return;
+		}
+		try {
+			const call = await lastModelCall(session.acp.sessionId);
+			if (call) {
+				turn.lastCall = call;
+			}
+		} catch (error) {
+			this.log(`Could not read the last model call of ${session.acp.sessionId}: ${describe(error)}`, 'debug');
+		}
 	}
 
 	private handleUpdate(session: ChatSession, turn: ActiveTurn, update: AcpSessionUpdate): void {
@@ -195,6 +215,7 @@ export class TurnRunner {
 					// Give the agent a moment to issue parallel calls so all of them can
 					// travel in this response.
 					await delay(PARALLEL_TOOL_WINDOW_MS);
+					await this.refreshLastCall(session, turn);
 					reportUsage(turn, this.log);
 					turn.streaming = false;
 					this.watchTools(key, session, turn);
@@ -240,7 +261,7 @@ export class TurnRunner {
 		if (this.reportsEachModelCall) {
 			warnIfCallsMissing(turn.requestUsage, reported, this.log);
 		}
-		this.host.finished({ usage: reported, background: session.toolCount === 0, chat: session.chat, model: session.model, contextUsed: turn.contextUsed, contextSize: turn.contextSize });
+		this.host.finished({ usage: reported, background: session.toolCount === 0, chat: session.chat, model: session.model, contextUsed: turn.contextUsed ?? turn.lastCall?.promptTokens, contextSize: turn.contextSize });
 
 		const stopReason = turn.result?.stopReason ?? 'unknown';
 		this.log(`Turn finished in ${Date.now() - turn.startedAt}ms: ${turn.characters} character(s), ${turn.thoughtCharacters ?? 0} of thinking, ${turn.toolCalls} tool call(s), stop reason "${stopReason}".`);

@@ -11,6 +11,7 @@ import { googleForker } from './googleFork';
 import { APP_DATA_DIR } from './googleHub';
 import { googleModelPolicy } from './googleModels';
 import { mapQuotaError } from './googleQuota';
+import { lastModelCallOf, transcriptFile } from './googleTranscript';
 import { googleUsage } from './googleUsage';
 import { booleanSetting, stringListSetting, stringSetting } from './settingValues';
 
@@ -259,6 +260,12 @@ export const googleAdapter: AgentAdapter = {
 		listRequiredArguments: true,
 	},
 	rebuildExpiredSessions: true,
+	// `agy acp` sends no usage_update and reports only the sums of a turn over ACP; its own record of
+	// the conversation has the tokens of each model call.
+	lastModelCall: async sessionId => {
+		const file = transcriptFile(sessionId);
+		return file ? lastModelCallOf(file) : undefined;
+	},
 	// `agy acp` cannot fork a session; the CLI's language server copies the conversation instead.
 	forker: googleForker,
 	// The agent saves a tool result of about 4,000 characters or more to a file and hands the model only its path. With its own
