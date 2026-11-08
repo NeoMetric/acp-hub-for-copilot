@@ -1,7 +1,9 @@
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AcpAuthMethod } from '../core/agentClient';
 import type { AgentAdapter, AgentSettings, InstallContext, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
+import { HOST_IDENTITY } from '../core/hostIdentity';
 import { REGISTRY, registryAgent } from '../core/registry';
 import { vendorOf } from '../core/vendors';
 import { AGY_VERSION, AgyInstaller } from './googleCli';
@@ -27,6 +29,30 @@ const SHELL_SAFE_ARGUMENT = /^[\w@+=:,./\\-]+$/;
  * ends its worker, and resuming it reads the conversation afresh.
  */
 const ACP_ARGS = ['acp', `--app-data-dir=${APP_DATA_DIR}`, '--process-per-session'];
+
+/**
+ * The custom agent the CLI runs when the chat replaces Antigravity's prompt. Its file sits in the
+ * CLI's global agents folder, and its body replaces the section holding Antigravity's own identity;
+ * the sections about its skills, artifacts and messaging stay. A name the CLI does not find is
+ * ignored without an error, which is why the file is written before every start.
+ */
+const REPLACEMENT_AGENT = 'acp-hub-copilot';
+
+/** The `agent.md` of {@link REPLACEMENT_AGENT}: the identity the host's own prompt cannot supply. */
+const REPLACEMENT_AGENT_FILE = `---
+name: ${REPLACEMENT_AGENT}
+description: Created by the ACP Hub for Copilot extension for chats that replace Antigravity's system prompt.
+---
+
+${HOST_IDENTITY}
+`;
+
+/** Writes {@link REPLACEMENT_AGENT_FILE} into the CLI's gemini home. */
+function writeReplacementAgent(geminiHome: string): void {
+	const directory = path.join(geminiHome, 'agents', REPLACEMENT_AGENT);
+	fs.mkdirSync(directory, { recursive: true });
+	fs.writeFileSync(path.join(directory, 'agent.md'), REPLACEMENT_AGENT_FILE);
+}
 
 /**
  * `agy acp` takes no list of tools to turn off, so the model is told instead. The chat tools are
@@ -93,19 +119,25 @@ function usesSignedInAccountOnly(settings: AgentSettings): boolean {
  * by a shell; only a Windows `.cmd` or `.bat` file needs `cmd.exe`, and then
  * only plain arguments are accepted.
  */
-export function googleLaunchSpec(ctx: LaunchContext, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): LaunchSpec {
+export function googleLaunchSpec(ctx: LaunchContext, env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string = os.homedir()): LaunchSpec {
 	const launchEnv: Record<string, string> = {};
 	if (ctx.apiKey && !usesSignedInAccountOnly(ctx.settings)) {
 		launchEnv.GEMINI_API_KEY = ctx.apiKey;
 	}
 
+	const replacePrompt = booleanSetting(ctx.settings, 'replaceSystemPrompt');
+	if (replacePrompt) {
+		writeReplacementAgent(env.GEMINI_HOME || path.join(home, '.gemini'));
+	}
+	const withAgent = (args: string[]) => replacePrompt ? [...args, `--agent=${REPLACEMENT_AGENT}`] : args;
+
 	const command = stringSetting(ctx.settings, 'command').trim();
 	if (command === '') {
-		return { command: ctx.entryPath, args: ACP_ARGS, env: launchEnv };
+		return { command: ctx.entryPath, args: withAgent(ACP_ARGS), env: launchEnv };
 	}
 
 	const configuredArgs = stringListSetting(ctx.settings, 'args');
-	const args = configuredArgs.length > 0 ? configuredArgs : ACP_ARGS;
+	const args = withAgent(configuredArgs.length > 0 ? configuredArgs : ACP_ARGS);
 	const found = resolveCommand(command, env, platform);
 	if (!found) {
 		// Starting it fails with "not found", which is the message the user needs.

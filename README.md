@@ -37,7 +37,7 @@ Configure each agent from its card or search for `AgentHub` in VS Code Settings.
 
 Two options control how much each request sends to the model. Both are off by default and restart the agent when changed:
 
-- **Replace the system prompt** (Claude and Codex). Replaces the agent's own built-in prompt with Copilot's guidance for the chat plus a one-line identity, instead of adding Copilot's guidance to the end of the agent's prompt. Antigravity can only append, so it has no toggle.
+- **Replace the system prompt** (Claude, Codex and Antigravity). Replaces the agent's own built-in prompt with Copilot's guidance for the chat plus a one-line identity, instead of adding Copilot's guidance to the end of the agent's prompt. Antigravity can only replace its identity section, so its sections about skills, artifacts and messaging stay either way; the toggle still drops its slash-command, transcript and subagent guidance.
 - **Tool search** (Claude). Loads each Copilot tool's description only when the model needs it, instead of sending every tool's full description with every request. This shrinks the first request a lot when many tools are available, and may add a lookup step before a tool is first used. Not every model supports it. Codex and Antigravity already load tools this way.
 
 

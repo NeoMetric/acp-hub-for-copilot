@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { assertShellSafe, authenticateMethodFor, googleAdapter, googleLaunchSpec, resolveCommand } from '../../../src/adapters/google';
 import { QuotaLimitError } from '../../../src/adapters/googleQuota';
 import type { AgentSettings, InstallContext, LaunchContext } from '../../../src/core/adapter';
+import { HOST_IDENTITY } from '../../../src/core/hostIdentity';
 import { RpcError } from '../../../src/core/rpc';
 
 let temp: string;
@@ -44,6 +45,7 @@ describe('googleAdapter', () => {
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('useAgentBuiltInTools');
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('idleTimeoutSeconds');
 		expect(googleAdapter.settings.map(setting => setting.key)).not.toContain('agyCommand');
+		expect(googleAdapter.settings.map(setting => setting.key)).toContain('replaceSystemPrompt');
 	});
 
 	it('trusts the cache figures agy acp reports', () => {
@@ -153,6 +155,50 @@ describe('google launch', () => {
 
 		expect(googleLaunchSpec(launchContext({ command: 'agy', args: ['--acp'] }), env, 'win32')).toMatchObject({ command: shim, args: ['--acp'], shell: true });
 		expect(() => googleLaunchSpec(launchContext({ command: 'agy', args: ['& calc'] }), env, 'win32')).toThrow('cannot be passed to a .cmd launcher');
+	});
+});
+
+describe('replacing the Antigravity system prompt', () => {
+	const agentFile = (home: string) => path.join(home, '.gemini', 'agents', 'acp-hub-copilot', 'agent.md');
+
+	it('leaves the launch and the home folder alone while the setting is off', () => {
+		const home = path.join(temp, 'home');
+		const spec = googleLaunchSpec(launchContext(), {}, 'win32', home);
+
+		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot', '--process-per-session']);
+		expect(fs.existsSync(path.join(home, '.gemini'))).toBe(false);
+	});
+
+	it('runs a custom agent whose body is the host identity, so Antigravity drops its own identity prompt', () => {
+		const home = path.join(temp, 'home');
+
+		const spec = googleLaunchSpec(launchContext({ replaceSystemPrompt: true }), {}, 'win32', home);
+
+		expect(spec.args).toContain('--agent=acp-hub-copilot');
+		const file = fs.readFileSync(agentFile(home), 'utf8');
+		expect(file.startsWith('---\nname: acp-hub-copilot\n')).toBe(true);
+		expect(file).toMatch(/^description: .+$/m);
+		expect(file).toContain(HOST_IDENTITY);
+	});
+
+	it('writes the agent into the gemini home the CLI is told to use', () => {
+		const home = path.join(temp, 'home');
+		const geminiHome = path.join(temp, 'other gemini');
+
+		const spec = googleLaunchSpec(launchContext({ replaceSystemPrompt: true }), { GEMINI_HOME: geminiHome }, 'win32', home);
+
+		expect(spec.args).toContain('--agent=acp-hub-copilot');
+		expect(fs.existsSync(path.join(geminiHome, 'agents', 'acp-hub-copilot', 'agent.md'))).toBe(true);
+		expect(fs.existsSync(path.join(home, '.gemini'))).toBe(false);
+	});
+
+	it('gives the flag to a command override too, whose owner asked for the replacement', () => {
+		const file = touch('agy.exe');
+		const home = path.join(temp, 'home');
+
+		const spec = googleLaunchSpec(launchContext({ command: file, replaceSystemPrompt: true }), { PATHEXT: '.exe;.cmd' }, 'win32', home);
+
+		expect(spec.args).toContain('--agent=acp-hub-copilot');
 	});
 });
 

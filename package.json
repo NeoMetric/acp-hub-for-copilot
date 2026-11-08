@@ -278,6 +278,11 @@
 					"default": false,
 					"type": "boolean"
 				},
+				"acpHub.agents.google.replaceSystemPrompt": {
+					"description": "On: Antigravity's own identity is replaced by a one-line identity, which also drops its slash-command, transcript and subagent guidance; Copilot's guidance for the chat is still added after it. Antigravity's sections about its skills, artifacts and messaging stay. Off: Copilot's guidance is added to Antigravity's own prompt. Changing it restarts the agent.",
+					"default": false,
+					"type": "boolean"
+				},
 				"acpHub.agents.google.authPreference": {
 					"description": "Which credentials the agent uses when both a Gemini API key and a signed-in account are available. Changing it restarts the agent.",
 					"default": "auto",
