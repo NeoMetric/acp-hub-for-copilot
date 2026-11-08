@@ -229,6 +229,14 @@ export class SavedSessionStore {
 		this.write(trimCheckpoints([...others, upgraded(entry)].slice(-MAX_SAVED_SESSIONS)), all);
 	}
 
+	/** Points the entries of session `from` at `to`, a copy the extension made of it. */
+	moveSession(from: string, to: string): void {
+		const all = this.all();
+		if (all.some(entry => entry.sessionId === from)) {
+			this.write(all.map(entry => entry.sessionId === from ? { ...entry, sessionId: to, forked: true } : entry), all);
+		}
+	}
+
 	forget(key: string): void {
 		const all = this.all();
 		if (all.some(entry => entry.key === key)) {

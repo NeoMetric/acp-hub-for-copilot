@@ -30,16 +30,24 @@ export interface ConversationForkRequest {
 }
 
 /**
+ * What a fork made. `sessionId` is the session the forked chat goes on in. A forker that keeps the
+ * source's id for the fork (an agent whose prompt names the conversation, so only that id keeps its
+ * prompt cache) puts the source's whole conversation in a copy and names it in `sourceMovedTo`.
+ */
+export interface ForkResult {
+	readonly sessionId: string;
+	readonly sourceMovedTo?: string;
+}
+
+/**
  * A way to fork a stored conversation for an agent that does not answer `session/fork`: a program
  * on the machine copies it, and the agent then opens the copy with `session/resume`.
  */
 export interface ConversationForker {
-	/** Changing this setting clears a previous decision not to use the external forker. */
-	commandSetting?: string;
-	/** The program that forks, or `undefined` when this machine has none. */
-	locate(settings: AgentSettings, log: Log): Promise<string | undefined>;
-	/** Copies the conversation up to the fork point and returns the id of the copy. */
-	fork(program: string, request: ConversationForkRequest, log: Log): Promise<string>;
+	/** The program that forks, or `undefined` when this machine has none. `agentProgram` is the program the agent was launched with. */
+	locate(settings: AgentSettings, log: Log, agentProgram: string | undefined): Promise<string | undefined>;
+	/** Forks the conversation at the fork point; the provider closes every chat on the source first. */
+	fork(program: string, request: ConversationForkRequest, log: Log): Promise<ForkResult>;
 	/** What the user is told once, the first time a chat needs a fork and `locate` finds nothing. */
 	missing: { message: string; helpLabel: string; helpUrl: string; declineLabel: string };
 }

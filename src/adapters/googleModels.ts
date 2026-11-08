@@ -60,7 +60,7 @@ export const googleModelPolicy: ModelPolicy = {
 	familyOf,
 	contextWindowOf,
 	maxOutputTokens: MAX_OUTPUT_TOKENS,
-	effortConfigId: 'effort',
+	effortConfigId: 'thought_level',
 	effortLabel,
 	effortDescription,
 	defaultEffort: levels => levels.includes('default') ? 'default' : levels[0],

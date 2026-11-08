@@ -261,25 +261,20 @@
 					"type": "boolean"
 				},
 				"acpHub.agents.google.command": {
-					"description": "Program that starts the ACP server. Leave empty to use the Antigravity server (agy_acp_server) the extension downloads.",
+					"description": "Path of the Antigravity CLI (agy) to run. Leave empty to use the one the extension downloads. The same program also forks chats and reads the quota.",
 					"default": "",
 					"type": "string"
 				},
 				"acpHub.agents.google.args": {
-					"description": "Arguments for the program. Leave empty for the default (none).",
+					"description": "Arguments for the program. Leave empty for the default (acp --app-data-dir=antigravity-copilot --process-per-session).",
 					"default": [],
 					"type": "array",
 					"items": {
 						"type": "string"
 					}
 				},
-				"acpHub.agents.google.agyCommand": {
-					"description": "Path of the Antigravity CLI. When it is installed, an edit, /fork or side chat continues the stored conversation instead of sending the whole chat again. Leave empty to find agy on the PATH or in ~/.gemini/bin. Setting a path also switches this back on after \"Use transcript instead\".",
-					"default": "",
-					"type": "string"
-				},
 				"acpHub.agents.google.useAgentBuiltInTools": {
-					"description": "Let the Antigravity agent use its own file, shell and search tools. When off (default), the extension asks Antigravity not to use them so Copilot chat tools can do the work. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.",
+					"description": "Let the Antigravity agent use its own file, shell and search tools. When off (default), the extension tells Antigravity to use only the Copilot chat tools. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations.",
 					"default": false,
 					"type": "boolean"
 				},

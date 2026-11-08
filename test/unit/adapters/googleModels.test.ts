@@ -65,7 +65,7 @@ describe('google model variants', () => {
 	});
 
 	it('describes the efforts', () => {
-		expect(googleModelPolicy.effortConfigId).toBe('effort');
+		expect(googleModelPolicy.effortConfigId).toBe('thought_level');
 		expect(googleModelPolicy.effortDescription('default')).toBe('Use the effort the agent picks for this model.');
 		expect(googleModelPolicy.effortDescription('odd')).toBe('Effort level reported by the agent.');
 	});

@@ -163,10 +163,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('acpHub.refreshUsage', async () => { for (const adapter of ADAPTERS) { await refreshUsage(adapter.id); } }),
 		vscode.workspace.onDidChangeConfiguration(event => {
 			for (const adapter of ADAPTERS) {
-				const commandSetting = adapter.forker?.commandSetting;
-				if (commandSetting && event.affectsConfiguration(`acpHub.${settingKey(adapter.id, commandSetting)}`)) {
-					void context.globalState.update(`acpHub.forkNotice.${adapter.id}`, undefined);
-				}
 				if (event.affectsConfiguration(`acpHub.agents.${adapter.id}`)) { void providers.get(adapter.id)?.restart(); providers.get(adapter.id)?.refresh(); }
 			}
 		}),

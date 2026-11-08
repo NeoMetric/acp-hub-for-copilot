@@ -156,8 +156,10 @@ afterEach(() => {
 });
 
 describe('the usage of an agent that reports no cache', () => {
+	const noCacheAdapter: AgentAdapter = { ...googleAdapter, reportsCache: false };
+
 	it('reports the tokens of a turn to Copilot without a cache hit rate', async () => {
-		const { agent, send, logs } = harness(googleAdapter);
+		const { agent, send, logs } = harness(noCacheAdapter);
 		agent.usage = { inputTokens: 120, outputTokens: 30 };
 
 		const reports = await send(chat(1));
@@ -171,7 +173,7 @@ describe('the usage of an agent that reports no cache', () => {
 	});
 
 	it('still runs a turn when the agent reports no usage at all', async () => {
-		const { agent, send, logs } = harness(googleAdapter);
+		const { agent, send, logs } = harness(noCacheAdapter);
 
 		await send(chat(1));
 
@@ -179,8 +181,7 @@ describe('the usage of an agent that reports no cache', () => {
 		expect(logs.some(line => line.startsWith('Turn tokens'))).toBe(false);
 	});
 
-	it('is the Google adapter that says its cache figures mean nothing', () => {
-		expect(googleAdapter.reportsCache).toBe(false);
+	it('leaves session/fork to Claude; Google forks through its CLI instead', () => {
 		expect(claudeAdapter.reportsCache).not.toBe(false);
 		expect(googleAdapter.forkChats).not.toBe(true);
 		expect(claudeAdapter.forkChats).toBe(true);
@@ -191,7 +192,7 @@ describe('external conversation forking', () => {
 	it('forks and resumes a checkpoint even when the agent does not support session/fork', async () => {
 		const forker = {
 			locate: vi.fn(async () => 'agy'),
-			fork: vi.fn(async () => 'external-copy'),
+			fork: vi.fn(async () => ({ sessionId: 'external-copy' })),
 			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
 		};
 		const { agent, send } = harness({ ...googleAdapter, forker });
@@ -202,15 +203,48 @@ describe('external conversation forking', () => {
 
 		await send(chat(2, { 2: 'edited question' }));
 
+		// The forker is handed the program the agent was launched with ('test' in this harness).
+		expect(forker.locate).toHaveBeenCalledWith({}, expect.any(Function), 'test');
 		expect(forker.fork).toHaveBeenCalledWith('agy', expect.objectContaining({ sessionId: 's1', point: expect.objectContaining({ messageFingerprint: messageFingerprintOf('reply 1') }) }), expect.any(Function));
 		expect(agent.resumed).toContain('external-copy');
 		expect(agent.prompts.at(-1)).toEqual({ sessionId: 'external-copy', texts: ['edited question'] });
 	});
 
+	it('continues a fork in the source session when the forker keeps its id, and moves the source chat to the copy', async () => {
+		let closedBeforeFork: string[] = [];
+		const forker = {
+			locate: vi.fn(async () => 'agy'),
+			fork: vi.fn(async () => {
+				closedBeforeFork = [...h.agent.closed];
+				return { sessionId: 's1', sourceMovedTo: 'full-copy' };
+			}),
+			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
+		};
+		const h = harness({ ...googleAdapter, forker });
+		h.agent.supportsFork = false;
+		h.agent.supportsDelete = false;
+		await h.send(chat(1), 'c1');
+		await h.send(chat(2), 'c1');
+
+		await h.send(chat(3), 'c2');
+
+		// The source was let go of before its conversation was rewound, and the new chat goes on in it.
+		expect(closedBeforeFork).toContain('s1');
+		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 's1', texts: ['question 3'] });
+		const entries = h.state.values.get(h.storeKey) as SavedSession[];
+		expect(entries.find(entry => entry.key.includes('c1'))?.sessionId).toBe('full-copy');
+		expect(entries.find(entry => entry.key.includes('c2'))?.sessionId).toBe('s1');
+
+		// The source chat comes back on the whole conversation.
+		await h.send(chat(3), 'c1');
+		expect(h.agent.resumed).toContain('full-copy');
+		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 'full-copy', texts: ['question 3'] });
+	});
+
 	it('uses a transcript when the external CLI is missing or declined', async () => {
 		const forker = {
 			locate: vi.fn(async () => undefined),
-			fork: vi.fn(async () => 'unused'),
+			fork: vi.fn(async () => ({ sessionId: 'unused' })),
 			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
 		};
 		const { agent, state, send } = harness({ ...googleAdapter, forker });

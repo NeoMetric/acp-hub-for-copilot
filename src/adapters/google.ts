@@ -4,27 +4,35 @@ import type { AcpAuthMethod } from '../core/agentClient';
 import type { AgentAdapter, AgentSettings, InstallContext, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
 import { REGISTRY, registryAgent } from '../core/registry';
 import { vendorOf } from '../core/vendors';
+import { AGY_VERSION, AgyInstaller } from './googleCli';
 import { googleForker } from './googleFork';
+import { APP_DATA_DIR } from './googleHub';
 import { googleModelPolicy } from './googleModels';
 import { mapQuotaError } from './googleQuota';
 import { googleUsage } from './googleUsage';
-import { SERVER_VERSION, ServerInstaller, serverArchiveFor } from './googleServer';
 import { booleanSetting, stringListSetting, stringSetting } from './settingValues';
 
 const ID = 'google';
 
-/** Environment variables the ACP servers read an API key or Vertex AI setup from. */
+/** Environment variables the agent reads an API key or Vertex AI setup from. */
 const API_KEY_VARIABLES = ['GEMINI_API_KEY', 'GOOGLE_API_KEY'];
 
 /** Arguments that are safe to hand to `cmd.exe` unquoted. */
 const SHELL_SAFE_ARGUMENT = /^[\w@+=:,./\\-]+$/;
 
 /**
- * The built-in tools of the Antigravity server, by the exact names it reports them under. Sent as
- * `_meta.antigravity.disabledTools` so the agent can only use the tools of the chat. `finish` and
- * `ask_question` stay, as the agent needs them to end a turn and to ask the user.
+ * Runs the Antigravity CLI as an ACP server, on conversations of its own. A single process keeps every
+ * conversation it opened in memory and never reads it again, so a fork that rewinds the source on
+ * disk (to keep its prompt cache, see `googleFork`) needs a worker per session: closing the session
+ * ends its worker, and resuming it reads the conversation afresh.
  */
-const DISABLED_BUILTIN_TOOLS = ['run_command', 'view_file', 'create_file', 'edit_file', 'list_directory', 'search_directory', 'find_file', 'search_web', 'read_url_content', 'generate_image', 'start_subagent'];
+const ACP_ARGS = ['acp', `--app-data-dir=${APP_DATA_DIR}`, '--process-per-session'];
+
+/**
+ * `agy acp` takes no list of tools to turn off, so the model is told instead. The chat tools are
+ * listed to it as `mcp_vscode_<name>`.
+ */
+const BUILT_IN_TOOLS_OFF = 'Your own built-in tools are turned off for this chat: use only the `mcp_vscode_*` tools.';
 
 /** A program found on disk, and whether it needs a shell to start. */
 export interface ResolvedCommand {
@@ -80,25 +88,24 @@ function usesSignedInAccountOnly(settings: AgentSettings): boolean {
 
 /**
  * The program and arguments for the settings. Without a command override the
- * downloaded server runs. An override is looked up on PATH and started
+ * downloaded CLI runs as `agy acp`. An override is looked up on PATH and started
  * directly with its arguments as an array, so nothing in them is interpreted
  * by a shell; only a Windows `.cmd` or `.bat` file needs `cmd.exe`, and then
  * only plain arguments are accepted.
  */
 export function googleLaunchSpec(ctx: LaunchContext, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): LaunchSpec {
-	const launchEnv: Record<string, string> = {
-		GOOGLE_ACP_LOGS: path.join(ctx.storageDir, 'logs'),
-	};
+	const launchEnv: Record<string, string> = {};
 	if (ctx.apiKey && !usesSignedInAccountOnly(ctx.settings)) {
 		launchEnv.GEMINI_API_KEY = ctx.apiKey;
 	}
 
 	const command = stringSetting(ctx.settings, 'command').trim();
 	if (command === '') {
-		return { command: ctx.entryPath, args: serverArchiveFor(platform)?.args ?? [], env: launchEnv };
+		return { command: ctx.entryPath, args: ACP_ARGS, env: launchEnv };
 	}
 
-	const args = stringListSetting(ctx.settings, 'args');
+	const configuredArgs = stringListSetting(ctx.settings, 'args');
+	const args = configuredArgs.length > 0 ? configuredArgs : ACP_ARGS;
 	const found = resolveCommand(command, env, platform);
 	if (!found) {
 		// Starting it fails with "not found", which is the message the user needs.
@@ -140,38 +147,36 @@ function authenticate(methods: AcpAuthMethod[], apiKey: string | undefined, sett
 	return methodId ? { methodId } : undefined;
 }
 
+/**
+ * The session prompt goes in `_meta.antigravity.systemPrompt.append`. It depends only on the chat and
+ * the settings, never on the turn, so a resumed or forked session sends the same bytes and keeps its
+ * prompt cache.
+ */
 function sessionParams(input: SessionParamsInput): Record<string, unknown> {
-	const antigravity: Record<string, unknown> = {};
-	if (input.disableBuiltInTools) {
-		antigravity.disabledTools = DISABLED_BUILTIN_TOOLS;
-	}
-	if (input.systemPromptAppend) {
-		antigravity.systemPrompt = { append: input.systemPromptAppend };
-	}
-	if (Object.keys(antigravity).length === 0) {
+	const parts = [input.systemPromptAppend, input.disableBuiltInTools ? BUILT_IN_TOOLS_OFF : undefined].filter((part): part is string => !!part);
+	if (parts.length === 0) {
 		return {};
 	}
-	return { _meta: { antigravity } };
+	return { _meta: { antigravity: { systemPrompt: { append: parts.join('\n\n') } } } };
 }
 
-const installer = (ctx: InstallContext): ServerInstaller => new ServerInstaller(ctx.storageDir, ctx.log);
+const installer = (ctx: InstallContext): AgyInstaller => new AgyInstaller(ctx.storageDir, ctx.log);
 
-/** The current server, or an earlier one that stays usable until the update is installed. */
-async function findServer(ctx: InstallContext): Promise<string | undefined> {
+/** The pinned CLI, or an earlier one that stays usable until the update is installed. */
+async function findCli(ctx: InstallContext): Promise<string | undefined> {
 	const found = installer(ctx);
-	const server = await found.find() ?? await found.findPrevious();
-	return server?.file;
+	return await found.find() ?? await found.findPrevious();
 }
 
-/** Whether an earlier server is installed and the current version is not, so the update is worth fetching unasked. */
-async function serverNeedsUpdate(ctx: InstallContext): Promise<boolean> {
+/** Whether something older is installed and the pinned CLI is not, so the update is worth fetching unasked. */
+async function cliNeedsUpdate(ctx: InstallContext): Promise<boolean> {
 	const found = installer(ctx);
-	return await found.find() === undefined && await found.findPrevious() !== undefined;
+	return await found.find() === undefined && await found.hasOlderInstall();
 }
 
-async function installServer(ctx: InstallContext): Promise<string> {
+async function installCli(ctx: InstallContext): Promise<string> {
 	let reportedPercent = -1;
-	const server = await installer(ctx).install((received, total) => {
+	return installer(ctx).install((received, total) => {
 		if (!total) {
 			return;
 		}
@@ -180,9 +185,8 @@ async function installServer(ctx: InstallContext): Promise<string> {
 			return;
 		}
 		reportedPercent = percent;
-		ctx.progress(`Downloading the Antigravity ACP server: ${percent}%`, percent);
+		ctx.progress(`Downloading the Antigravity CLI: ${percent}%`, percent);
 	});
-	return server.file;
 }
 
 const registry = registryAgent(ID);
@@ -191,7 +195,7 @@ export const googleAdapter: AgentAdapter = {
 	id: ID,
 	displayName: registry.displayName,
 	vendor: vendorOf(ID),
-	install: { kind: 'download', version: SERVER_VERSION, find: findServer, needsUpdate: serverNeedsUpdate, install: installServer },
+	install: { kind: 'download', version: AGY_VERSION, find: findCli, needsUpdate: cliNeedsUpdate, install: installCli },
 	launch,
 	findCommandOverride: settings => stringSetting(settings, 'command').trim() || undefined,
 	auth: [
@@ -200,18 +204,14 @@ export const googleAdapter: AgentAdapter = {
 	],
 	settings: [...REGISTRY.commonSettings, ...registry.settings],
 	modelPolicy: googleModelPolicy,
-	// The agent offers its Claude and GPT-OSS models only to clients on its allowlist, of which Zed is the generic ACP one.
-	clientIdentity: { name: 'zed', title: 'Zed' },
 	usage: googleUsage,
-	// The server reports the tokens of a turn but its cache counts stay 0, which says nothing about the cache.
-	reportsCache: false,
 	systemPrompt: {
-		toolAccess: 'The tools of the MCP server named `vscode` are VS Code\'s own and act on the user\'s workspace; reach them only through `call_mcp_tool`.',
+		toolAccess: 'The tools of the MCP server named `vscode` are VS Code\'s own and act on the user\'s workspace; you see them as `mcp_vscode_<name>`.',
 		listRequiredArguments: true,
 	},
 	rebuildExpiredSessions: true,
-	// The server cannot fork a session, but the Antigravity CLI can, where it is installed.
-	forker: { ...googleForker, commandSetting: 'agyCommand' },
+	// `agy acp` cannot fork a session; the CLI's language server copies the conversation instead.
+	forker: googleForker,
 	// The agent saves a tool result of about 4,000 characters or more to a file and hands the model only its path. With its own
 	// file tools off the model then reasons for minutes about how to get at the content, so results are cut below that size.
 	maxToolResultChars: 3_500,

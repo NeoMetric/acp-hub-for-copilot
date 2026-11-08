@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { findAgy, forkConversation, forkStepIndex, type ForkEnvironment, type HubStep } from '../../../src/adapters/googleFork';
+import { forkConversation, forkStepIndex, googleForker, type ForkEnvironment, type HubStep } from '../../../src/adapters/googleFork';
+import { APP_DATA_DIR } from '../../../src/adapters/googleHub';
 import type { ConversationForkRequest } from '../../../src/core/adapter';
 import { messageFingerprintOf } from '../../../src/core/sessionStore';
 
@@ -35,43 +36,10 @@ describe('forkStepIndex', () => {
 	});
 });
 
-describe('findAgy', () => {
-	it('tries configured command, PATH and installer location in order, skipping failed candidates', async () => {
-		const home = path.join('test', 'lookup-home');
-		const installed = path.join(home, '.gemini', 'bin', 'agy.exe');
-		const answersVersion = vi.fn(async (file: string) => file === installed);
-		const findOnPath = vi.fn((command: string) => command === 'custom-agy' ? 'configured-candidate' : 'path-candidate');
-		const exists = vi.fn(() => true);
-		expect(await findAgy({ agyCommand: ' custom-agy ' }, { home, platform: 'win32', findOnPath, exists, answersVersion })).toBe(installed);
-		expect(answersVersion.mock.calls.map(([file]) => file)).toEqual(['configured-candidate', 'path-candidate', installed]);
-	});
-
-	it('returns undefined without launching missing candidates', async () => {
-		const answersVersion = vi.fn(async () => true);
-		expect(await findAgy({}, { home: 'not-a-home', findOnPath: () => undefined, exists: () => false, answersVersion })).toBeUndefined();
-		expect(answersVersion).not.toHaveBeenCalled();
-	});
-
-	it('checks a duplicated failed candidate only once', async () => {
-		const candidate = `candidate-${randomUUID()}`;
-		const answersVersion = vi.fn(async () => false);
-		expect(await findAgy({ agyCommand: candidate }, {
-			home: 'unused-home', findOnPath: () => candidate, exists: file => file === candidate, answersVersion,
-		})).toBeUndefined();
-		expect(answersVersion).toHaveBeenCalledOnce();
-	});
-
-	it('caches a successful version check', async () => {
-		const candidate = `candidate-${randomUUID()}`;
-		const answersVersion = vi.fn(async () => true);
-		const lookup = { home: 'unused-home', findOnPath: () => candidate, exists: () => true, answersVersion };
-		expect(await findAgy({ agyCommand: candidate }, lookup)).toBe(candidate);
-		expect(await findAgy({ agyCommand: candidate }, lookup)).toBe(candidate);
-		expect(answersVersion).toHaveBeenCalledOnce();
-	});
-
-	it('checks a real program with --version', async () => {
-		expect(await findAgy({ agyCommand: process.execPath }, { findOnPath: () => undefined })).toBe(process.execPath);
+describe('googleForker.locate', () => {
+	it('forks with the same agy the agent runs', async () => {
+		expect(await googleForker.locate({}, vi.fn(), 'C:\\storage\\google\\v1.5.3\\agy.exe')).toBe('C:\\storage\\google\\v1.5.3\\agy.exe');
+		expect(await googleForker.locate({}, vi.fn(), undefined)).toBeUndefined();
 	});
 });
 
@@ -80,44 +48,65 @@ afterEach(() => {
 	for (const root of roots.splice(0)) { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-function harness(steps: HubStep[] = [response('answer')]) {
+/**
+ * A language server of the CLI as far as forking uses it: it lists the steps of the source,
+ * copies the conversation (writing the copy's file) and rewinds the source, keeping steps
+ * 0..stepIndex, as the real one does.
+ */
+function harness(steps: HubStep[] = [response('answer'), response('later')]) {
 	const home = path.resolve('test', `.google-fork-${randomUUID()}`);
 	roots.push(home);
-	const conversations = path.join(home, '.gemini', 'antigravity-acp', 'conversations');
+	const conversations = path.join(home, '.gemini', APP_DATA_DIR, 'conversations');
 	fs.mkdirSync(conversations, { recursive: true });
 	const request: ConversationForkRequest = { sessionId: 'source', cwd: path.resolve('test'), point: point('answer') };
 	const stop = vi.fn(async () => undefined);
 	const hub = { port: 1234, token: 'test-token', stop };
 	const startHub = vi.fn(async () => hub);
-	const call = vi.fn(async (_hub: typeof hub, method: string, _body: object): Promise<unknown> => {
-		if (method === 'GetCascadeTrajectorySteps') { return { steps }; }
-		if (method === 'ForkConversation') { return { newCascadeId: 'copy', forkedAtStepIndex: 0 }; }
+	const server = { steps: [...steps], copyId: 'copy' as unknown, forkedAt: undefined as number | undefined, writesCopy: true, rewinds: true, fails: undefined as string | undefined };
+	const call = vi.fn(async (_hub: typeof hub, method: string, body: Record<string, unknown>): Promise<unknown> => {
+		if (method === server.fails) { throw new Error('hub failed'); }
+		if (method === 'GetCascadeTrajectorySteps') { return { steps: server.steps }; }
+		if (method === 'ForkConversation') {
+			if (server.writesCopy && typeof server.copyId === 'string' && /^[\w-]+$/.test(server.copyId)) {
+				fs.writeFileSync(path.join(conversations, `${server.copyId}.db`), 'conversation');
+			}
+			return { newCascadeId: server.copyId, forkedAtStepIndex: server.forkedAt ?? body.forkAtStepIndex };
+		}
+		if (method === 'RevertToCascadeStep') {
+			if (server.rewinds) { server.steps = server.steps.slice(0, (body.stepIndex as number) + 1); }
+			return { metadata: {} };
+		}
 		throw new Error(`Unexpected method ${method}`);
 	});
 	const environment: ForkEnvironment = { home, startHub, call };
 	const log = vi.fn();
-	return { home, conversations, request, stop, hub, startHub, call, environment, log };
+	return { home, conversations, request, stop, hub, startHub, call, server, environment, log };
 }
 
 describe('forkConversation', () => {
-	it('forks at the matching occurrence, stops the hub, and writes the ACP folder metadata', async () => {
-		const h = harness([response('answer'), response('other'), response('answer')]);
+	it('keeps the source id for the fork: the whole conversation is copied for the source chat, then the source is rewound to the fork point', async () => {
+		const h = harness([response('answer'), response('other'), response('answer'), response('later')]);
 		const request = { ...h.request, point: point('answer', 2) };
-		fs.writeFileSync(path.join(h.conversations, 'copy.db'), 'conversation');
-		h.call.mockImplementation(async (_hub, method) => method === 'GetCascadeTrajectorySteps'
-			? { steps: [response('answer'), response('other'), response('answer')] }
-			: { newCascadeId: 'copy', forkedAtStepIndex: 2 });
-		h.stop.mockImplementation(async () => {
-			expect(fs.existsSync(path.join(h.conversations, 'copy.meta'))).toBe(false);
-		});
-		expect(await forkConversation('agy', request, h.log, h.environment)).toBe('copy');
+
+		expect(await forkConversation('agy', request, h.log, h.environment)).toEqual({ sessionId: 'source', sourceMovedTo: 'copy' });
+
 		expect(h.startHub).toHaveBeenCalledWith('agy', request.cwd);
-		expect(h.call.mock.calls).toEqual([
-			[h.hub, 'GetCascadeTrajectorySteps', { cascadeId: 'source' }],
-			[h.hub, 'ForkConversation', { sourceCascadeId: 'source', forkAtStepIndex: 2 }],
+		expect(h.call.mock.calls.map(([, method, body]) => [method, body])).toEqual([
+			['GetCascadeTrajectorySteps', { cascadeId: 'source' }],
+			['ForkConversation', { sourceCascadeId: 'source', forkAtStepIndex: 3 }],
+			['RevertToCascadeStep', { cascadeId: 'source', stepIndex: 2, conversationOnly: true, suppressErrorStep: true }],
+			['GetCascadeTrajectorySteps', { cascadeId: 'source' }],
 		]);
+		expect(h.server.steps).toHaveLength(3);
 		expect(h.stop).toHaveBeenCalledOnce();
-		expect(JSON.parse(fs.readFileSync(path.join(h.conversations, 'copy.meta'), 'utf8'))).toEqual({ cwd: request.cwd });
+	});
+
+	it('fails when the rewind did not take, so the chat is not continued on the whole conversation', async () => {
+		const h = harness();
+		h.server.rewinds = false;
+
+		await expect(forkConversation('agy', h.request, h.log, h.environment)).rejects.toThrow('rewind');
+		expect(h.stop).toHaveBeenCalledOnce();
 	});
 
 	it('does not fork if the message cannot be located, and stops the hub', async () => {
@@ -128,49 +117,33 @@ describe('forkConversation', () => {
 		expect(fs.readdirSync(h.conversations)).toEqual([]);
 	});
 
-	it.each([undefined, '', 'source', 42])('rejects an invalid new conversation id %s', async id => {
+	it.each([undefined, '', 'source', 42, '../outside'])('rejects an invalid id %s for the copy, and leaves the source as it was', async id => {
 		const h = harness();
-		h.call.mockImplementation(async (_hub, method) => method === 'GetCascadeTrajectorySteps' ? { steps: [response('answer')] } : { newCascadeId: id });
+		h.server.copyId = id;
 		await expect(forkConversation('agy', h.request, h.log, h.environment)).rejects.toThrow('id of a new conversation');
+		expect(h.server.steps).toHaveLength(2);
 		expect(h.stop).toHaveBeenCalledOnce();
-		expect(fs.readdirSync(h.conversations)).toEqual([]);
 	});
 
-	it.each(['GetCascadeTrajectorySteps', 'ForkConversation'])('stops the hub when %s fails', async failedMethod => {
+	it.each(['GetCascadeTrajectorySteps', 'ForkConversation', 'RevertToCascadeStep'])('stops the hub when %s fails', async failedMethod => {
 		const h = harness();
-		h.call.mockImplementation(async (_hub, method) => {
-			if (method === failedMethod) { throw new Error('hub failed'); }
-			return { steps: [response('answer')] };
-		});
+		h.server.fails = failedMethod;
 		await expect(forkConversation('agy', h.request, h.log, h.environment)).rejects.toThrow('hub failed');
 		expect(h.stop).toHaveBeenCalledOnce();
-		expect(fs.readdirSync(h.conversations)).toEqual([]);
 	});
 
-	it('does not write metadata when the fork database is missing', async () => {
+	it('leaves the source as it was when the hub wrote no file for the copy', async () => {
 		const h = harness();
+		h.server.writesCopy = false;
 		await expect(forkConversation('agy', h.request, h.log, h.environment)).rejects.toThrow('no conversation file');
+		expect(h.server.steps).toHaveLength(2);
 		expect(h.stop).toHaveBeenCalledOnce();
-		expect(fs.readdirSync(h.conversations)).toEqual([]);
 	});
 
-	it('rejects a server-reported fork at a different step', async () => {
+	it('leaves the source as it was when the copy is not the whole conversation', async () => {
 		const h = harness();
-		fs.writeFileSync(path.join(h.conversations, 'copy.db'), 'conversation');
-		h.call.mockImplementation(async (_hub, method) => method === 'GetCascadeTrajectorySteps' ? { steps: [response('answer')] } : { newCascadeId: 'copy', forkedAtStepIndex: 9 });
-		const result = await forkConversation('agy', h.request, h.log, h.environment).then(() => 'resolved', () => 'rejected');
-		expect(h.stop).toHaveBeenCalledOnce();
-		expect.soft(fs.existsSync(path.join(h.conversations, 'copy.meta'))).toBe(false);
-		expect(result).toBe('rejected');
-	});
-
-	it('rejects a fork id that escapes the conversations directory', async () => {
-		const h = harness();
-		fs.writeFileSync(path.join(h.conversations, '..', 'outside.db'), 'outside');
-		h.call.mockImplementation(async (_hub, method) => method === 'GetCascadeTrajectorySteps' ? { steps: [response('answer')] } : { newCascadeId: '../outside' });
-		const result = await forkConversation('agy', h.request, h.log, h.environment).then(() => 'resolved', () => 'rejected');
-		expect(h.stop).toHaveBeenCalledOnce();
-		expect.soft(fs.existsSync(path.join(h.conversations, '..', 'outside.meta'))).toBe(false);
-		expect(result).toBe('rejected');
+		h.server.forkedAt = 0;
+		await expect(forkConversation('agy', h.request, h.log, h.environment)).rejects.toThrow('different step');
+		expect(h.server.steps).toHaveLength(2);
 	});
 });

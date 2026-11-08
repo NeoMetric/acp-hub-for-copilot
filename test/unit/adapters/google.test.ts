@@ -19,8 +19,8 @@ afterEach(() => {
 
 function launchContext(settings: AgentSettings = {}, apiKey?: string): LaunchContext {
 	return {
-		entryPath: path.join(temp, 'v1', 'agy_acp_server.exe'),
-		installDir: path.join(temp, 'v1'),
+		entryPath: path.join(temp, 'v1.5.3', 'agy.exe'),
+		installDir: path.join(temp, 'v1.5.3'),
 		storageDir: path.join(temp, 'storage é'),
 		settings,
 		apiKey,
@@ -35,7 +35,7 @@ function touch(name: string): string {
 }
 
 describe('googleAdapter', () => {
-	it('is described by the registry and downloads the server', () => {
+	it('is described by the registry and downloads the Antigravity CLI', () => {
 		expect(googleAdapter.id).toBe('google');
 		expect(googleAdapter.vendor).toBe('Google Agent');
 		expect(googleAdapter.displayName).toBe('Google Agent');
@@ -43,6 +43,11 @@ describe('googleAdapter', () => {
 		expect(googleAdapter.rebuildExpiredSessions).toBe(true);
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('useAgentBuiltInTools');
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('idleTimeoutSeconds');
+		expect(googleAdapter.settings.map(setting => setting.key)).not.toContain('agyCommand');
+	});
+
+	it('trusts the cache figures agy acp reports', () => {
+		expect(googleAdapter.reportsCache).not.toBe(false);
 	});
 
 	it('lists its sign-in methods', () => {
@@ -52,12 +57,13 @@ describe('googleAdapter', () => {
 		]);
 	});
 
-	it('tells the model to reach the chat tools through call_mcp_tool and to list required arguments', () => {
-		expect(googleAdapter.systemPrompt.toolAccess).toBe('The tools of the MCP server named `vscode` are VS Code\'s own and act on the user\'s workspace; reach them only through `call_mcp_tool`.');
+	it('names the chat tools as agy acp lists them, with no call_mcp_tool, and lists required arguments', () => {
+		expect(googleAdapter.systemPrompt.toolAccess).toContain('`mcp_vscode_<name>`');
+		expect(googleAdapter.systemPrompt.toolAccess).not.toContain('call_mcp_tool');
 		expect(googleAdapter.systemPrompt.listRequiredArguments).toBe(true);
 	});
 
-	it('finds nothing before the server is downloaded', async () => {
+	it('finds nothing before the CLI is downloaded', async () => {
 		if (googleAdapter.install.kind !== 'download') {
 			throw new Error('expected a download install');
 		}
@@ -65,28 +71,42 @@ describe('googleAdapter', () => {
 
 		expect(await googleAdapter.install.find(context)).toBeUndefined();
 	});
+
+	it('fetches the CLI unasked where the old ACP server was installed', async () => {
+		if (googleAdapter.install.kind !== 'download' || !googleAdapter.install.needsUpdate) {
+			throw new Error('expected a download install that updates');
+		}
+		const context: InstallContext = { storageDir: path.join(temp, 'google'), log: () => { }, progress: () => { } };
+		expect(await googleAdapter.install.needsUpdate(context)).toBe(false);
+
+		fs.mkdirSync(path.join(temp, 'google', 'v1.4.5'), { recursive: true });
+		fs.writeFileSync(path.join(temp, 'google', 'v1.4.5', 'installed-version'), '1.4.5');
+		expect(await googleAdapter.install.needsUpdate(context)).toBe(true);
+		expect(await googleAdapter.install.find(context)).toBeUndefined();
+	});
+
+	it('forks with the program the agent runs', async () => {
+		expect(await googleAdapter.forker?.locate({}, () => { }, 'agy.exe')).toBe('agy.exe');
+	});
 });
 
 describe('google launch', () => {
-	it('runs the downloaded server without a shell, in a path with spaces and é', () => {
+	it('runs the downloaded CLI as an ACP server on its own conversations, without a shell, in a path with spaces and é', () => {
 		const ctx = launchContext({}, 'AIza-key');
 		const spec = googleLaunchSpec(ctx, {}, 'win32');
 
 		expect(spec.command).toBe(ctx.entryPath);
-		expect(spec.args).toEqual([]);
+		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot', '--process-per-session']);
 		expect(spec.shell).toBeUndefined();
-		expect(spec.env).toEqual({ GEMINI_API_KEY: 'AIza-key', GOOGLE_ACP_LOGS: path.join(temp, 'storage é', 'logs') });
+		expect(spec.env).toEqual({ GEMINI_API_KEY: 'AIza-key' });
 	});
 
 	it('passes the launch of the real adapter through', () => {
 		const spec = googleAdapter.launch(launchContext());
 
 		expect(spec.command).toBe(launchContext().entryPath);
+		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot', '--process-per-session']);
 		expect(spec.env.GEMINI_API_KEY).toBeUndefined();
-	});
-
-	it('gives the Linux server its --uid= argument', () => {
-		expect(googleLaunchSpec(launchContext(), {}, 'linux').args).toEqual(['--uid=']);
 	});
 
 	it('leaves the saved key out when only the signed-in account is wanted', () => {
@@ -119,11 +139,12 @@ describe('google launch', () => {
 		expect(spec.shell).toBeUndefined();
 	});
 
-	it('looks the override up on PATH', () => {
+	it('looks the override up on PATH, and runs it as agy acp when no arguments are set', () => {
 		const file = touch('agy-acp.exe');
 		const spec = googleLaunchSpec(launchContext({ command: 'agy-acp' }), { PATH: temp, PATHEXT: '.exe;.cmd' }, 'win32');
 
 		expect(spec.command).toBe(file);
+		expect(spec.args).toEqual(['acp', '--app-data-dir=antigravity-copilot', '--process-per-session']);
 	});
 
 	it('uses a shell only for a .cmd shim, and then refuses arguments cmd.exe would interpret', () => {
@@ -185,13 +206,23 @@ describe('google hooks', () => {
 		expect(googleAdapter.disableBuiltInTools?.({ useAgentBuiltInTools: true })).toBe(false);
 	});
 
-	it('sends the disabled tools and the system prompt in _meta.antigravity', () => {
-		const base = { disableBuiltInTools: true, replaceSystemPrompt: false, reportEachModelCall: false, isNewSession: true };
-		const params = googleAdapter.sessionParams?.({ ...base, systemPromptAppend: 'hello' }) as { _meta: { antigravity: { disabledTools: string[]; systemPrompt: unknown } } };
+	it('appends the session prompt, and with the built-in tools off tells the model to use only the chat tools', () => {
+		const base = { replaceSystemPrompt: false, reportEachModelCall: false, isNewSession: true };
+		const appendOf = (params: Record<string, unknown> | undefined) => (params as { _meta: { antigravity: { systemPrompt: { append: string } } } })._meta.antigravity.systemPrompt.append;
 
-		expect(params._meta.antigravity.disabledTools).toContain('run_command');
-		expect(params._meta.antigravity.systemPrompt).toEqual({ append: 'hello' });
+		const off = appendOf(googleAdapter.sessionParams?.({ ...base, disableBuiltInTools: true, systemPromptAppend: 'hello' }));
+		expect(off.startsWith('hello\n\n')).toBe(true);
+		expect(off).toContain('use only the `mcp_vscode_*` tools');
+
+		expect(appendOf(googleAdapter.sessionParams?.({ ...base, disableBuiltInTools: false, systemPromptAppend: 'hello' }))).toBe('hello');
+		expect(appendOf(googleAdapter.sessionParams?.({ ...base, disableBuiltInTools: true }))).toContain('use only the `mcp_vscode_*` tools');
 		expect(googleAdapter.sessionParams?.({ ...base, disableBuiltInTools: false })).toEqual({});
+	});
+
+	it('gives the same session options on every call, so a resumed or forked chat keeps its prompt cache', () => {
+		const input = { replaceSystemPrompt: false, reportEachModelCall: false, disableBuiltInTools: true, systemPromptAppend: 'hello' };
+
+		expect(googleAdapter.sessionParams?.({ ...input, isNewSession: false })).toEqual(googleAdapter.sessionParams?.({ ...input, isNewSession: true }));
 	});
 
 	it('maps a quota error and keeps other errors', () => {

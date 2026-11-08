@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Run the Google agent on the Antigravity CLI's own ACP server (`agy acp`) instead of the separate Antigravity ACP server. It uses the same model backend as the official Antigravity extension, so turns are about as fast: the same eight-step test went from about 2 minutes 14 seconds to about 50 seconds (51 seconds in the official extension). The extension downloads the CLI, checks it against Google's published SHA-512, and fetches the new version unasked after an extension update; the old server's files are removed. Chats started on the old server continue from their transcript once.
+- Fix the thinking level of the model picker not controlling the Google agent: on the old server even Low thought for thousands of tokens on some steps. Low now does no extended thinking, and a reopened chat gets its level back.
+- Fix the first turn of an edited or forked Google chat missing the prompt cache. Antigravity writes the conversation id into its system prompt, so a copy under a new id could not reuse it. The fork now keeps the source's id: the whole conversation is copied for the original chat, which continues there, and the source is rewound to the fork point without touching workspace files. Each Google chat now runs in its own agent process so a rewound conversation is read again; opening or reopening a Google chat takes about 3 seconds longer.
+- Show the Google agent's cache hit rate, which the CLI reports.
+- Read the Google quota from the Antigravity CLI instead of asking the agent for `/usage`.
+- Remove the "Antigravity CLI (agy)" setting: edits, `/fork` and side chats now use the CLI the agent runs. The "Agent command" setting now points at an Antigravity CLI.
+
 ## 0.0.6
 
 - Continue edited and forked chats from a saved conversation checkpoint when the agent supports it. Antigravity requires the separately installed Antigravity CLI; otherwise the chat is rebuilt from its transcript.

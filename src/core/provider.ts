@@ -635,13 +635,23 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		if (!point || this.forkNoticeState() === 'declined') {
 			return undefined;
 		}
-		const program = await forker.locate(this.settings ?? {}, this.log);
+		const program = await forker.locate(this.settings ?? {}, this.log, this.launch?.entryPath);
 		if (!program) {
 			this.noteMissingForker(forker);
 			return undefined;
 		}
-		const copy = await forker.fork(program, { sessionId: source, point, cwd: options.cwd }, this.log);
-		return this.agent.resumeSession(copy, options);
+		// The forker may rewind the source's stored conversation, so no chat may still hold it open.
+		for (const [key, session] of [...this.sessions]) {
+			if (session.acp.sessionId === source) {
+				await this.destroySession(key);
+			}
+		}
+		const forked = await forker.fork(program, { sessionId: source, point, cwd: options.cwd }, this.log);
+		if (forked.sourceMovedTo) {
+			this.saved.moveSession(source, forked.sourceMovedTo);
+			this.log(`[reuse] The fork goes on in ${source}; the chats that had it continue in the copy ${forked.sourceMovedTo}.`, 'debug');
+		}
+		return this.agent.resumeSession(forked.sessionId, options);
 	}
 
 	private forkNoticeState(): string | undefined {

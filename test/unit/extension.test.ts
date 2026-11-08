@@ -32,7 +32,6 @@ vi.mock('../../src/core/provider', () => ({
     refresh() {}
     prepareAgent() { return Promise.resolve(true); }
     askAgent(prompt: string) {
-      if (this.adapter.id === 'google' && prompt === '/usage') {return Promise.resolve('### Quota Limits\n- **Gemini Models**\n  - **Weekly Limit Remaining:** 75% remaining');}
       if (this.adapter.id === 'codex' && prompt === '/status') {return Promise.resolve('**5h limit:** 58% left');}
       if (this.adapter.id === 'claude' && prompt === '/usage') {return Promise.resolve('**5-hour limit** — **42%**');}
       return Promise.resolve(undefined);
@@ -50,6 +49,12 @@ vi.mock('../../src/sidebar/host', () => ({
   SidebarHost: class { constructor(deps: typeof mocks.sidebarDeps[number]) { mocks.sidebarDeps.push(deps); } },
 }));
 vi.mock('../../src/core/processes', () => ({ killStrayAgents() {}, killAllChildren() {} }));
+// Google reads its quota from the Antigravity CLI's language server rather than through the chat.
+vi.mock('../../src/adapters/googleHub', () => ({
+  APP_DATA_DIR: 'antigravity-copilot',
+  startHub: async () => ({ port: 1, token: 't', stop: async () => undefined }),
+  callHub: async () => ({ response: { groups: [{ displayName: 'Gemini Models', buckets: [{ window: 'weekly', remainingFraction: 0.75 }] }] } }),
+}));
 vi.mock('../../src/core/installers', () => ({
   findInstalled: async (adapter: { id: string }) => mocks.installedIds.has(adapter.id) ? { entryPath: 'agent', installDir: 'install' } : undefined,
   getInstallState() {}, installAgent() {}, uninstallAgent() {},
@@ -83,21 +88,6 @@ it('registers a provider for every contributed vendor and the sidebar', () => {
   expect(mocks.providerDeps[0].isEnabled()).toBe(true);
   mocks.enabled = false;
   expect(mocks.providerDeps[0].isEnabled()).toBe(false);
-});
-
-it('reenables external forks when the CLI path setting changes', () => {
-  const update = vi.fn(async () => undefined);
-  activate({
-    subscriptions: [],
-    globalStorageUri: { fsPath: 'storage' },
-    extensionUri: { fsPath: 'extension' },
-    extension: { packageJSON: { version: '1' } },
-    globalState: { get: () => undefined, update },
-    secrets: {},
-  } as never);
-
-  mocks.configurationChanged?.({ affectsConfiguration: key => key === 'acpHub.agents.google.agyCommand' || key === 'acpHub.agents.google' });
-  expect(update).toHaveBeenCalledWith('acpHub.forkNotice.google', undefined);
 });
 
 it('loads the usage of installed, enabled agents into the sidebar at startup', async () => {
