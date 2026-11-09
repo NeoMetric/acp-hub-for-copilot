@@ -77,7 +77,7 @@ git commit -m "docs: design and plan for the server-only runtime"
   - `interface EffortWire { value: string; label: string; description: string }`
   - `interface ModelInfoWire { name: string; family: string; version: string; detail?: string; tooltip?: string; maxInputTokens: number; maxOutputTokens: number; toolCalling: boolean; imageInput: boolean; efforts: EffortWire[]; defaultEffort?: string; effortTitle?: string; effortDescription?: string }`
   - `interface ModelWire { id: string; object: 'model'; owned_by: string; acp?: ModelInfoWire }`
-  - `interface AcpRequestExtras { chatId?: string; label?: string; cwd?: string; workspaceFolders?: string[]; systemGuidance?: string; chatContext?: string }` (sent as the `acp` field of the chat body)
+  - `interface AcpRequestExtras { chatId?: string; label?: string; cwd?: string; workspaceFolders?: string[]; systemGuidance?: string; chatContext?: string; sessionKey?: string }` (sent as the `acp` field of the chat body)
 
 - [ ] **Step 1: Write the failing test** `health reports the server identity`: start the server over the test composition used by `server.test.ts`, `GET /health`, assert `name === 'acp-hub'`, `apiVersion === API_VERSION`, `typeof version === 'string'` and the existing `status`, `openSessions`, `agents` fields are still present.
 - [ ] **Step 2: Run** `npx vitest run test/unit/engine/wire.test.ts` — expect FAIL (`name` undefined).
