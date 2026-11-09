@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { randomBytes } from 'crypto';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import type { AgentAdapter, AgentSettings, ConversationForker, LaunchContext } from './adapter';
 import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentSession, type CreateSessionOptions, type ForkPoint } from './agentClient';
@@ -22,6 +23,7 @@ import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESS
 import { chatContextOf, chatIdOf, chatLabelOf, describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, sessionKey, toolChangeOf, toolsDiffer } from './provider/keys';
 import { ModelList } from './provider/modelList';
 import { countsOf } from './provider/checkpoints';
+import { PromptArchive } from './provider/promptArchive';
 import { findEditFork, findReusable, promptHashOf } from './provider/reuse';
 import { applyEffort, applyModel, describe, switchModelInPlace } from './provider/sessionOptions';
 import { startLaps, type Lap } from './provider/timing';
@@ -543,10 +545,22 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			// A request that offers no tools is Copilot's own, such as a chat title: the
 			// agent could not read a customization file without a tool, so the prompt
 			// would only be paid for in tokens.
-			const systemPromptAppend = tools.length === 0
+			let systemPromptAppend = tools.length === 0
 				? undefined
 				: await this.buildSessionPrompt(tools, context.folders, context.guidance);
 			lap?.(`session prompt built (${systemPromptAppend?.length ?? 0} character(s))`);
+			// The prompt leads the conversation, so a reworded one misses the cache for all of it. The
+			// saved conversation keeps the prompt it began with; what changed in the guidance is sent as a message.
+			if (this.adapter.keepsSessionPrompt && reuse && systemPromptAppend && reuse.saved.promptHash !== promptHashOf(systemPromptAppend)) {
+				const kept = await this.promptArchive().recall(reuse.saved.promptHash);
+				if (kept) {
+					this.log(`[reuse] Sending the session prompt the saved session began with (${reuse.saved.promptHash}) instead of the rebuilt one (${promptHashOf(systemPromptAppend)}), so the cache can serve the conversation.`, 'debug');
+					systemPromptAppend = kept;
+				}
+			}
+			if (this.adapter.keepsSessionPrompt) {
+				void this.promptArchive().remember(systemPromptAppend);
+			}
 			const options: CreateSessionOptions = {
 				cwd: context.cwd,
 				mcpServers: [bridgeServer(endpoint)],
@@ -692,6 +706,17 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			this.log(`[reuse] The fork goes on in ${source}; the chats that had it continue in the copy ${forked.sourceMovedTo}.`, 'debug');
 		}
 		return this.agent.resumeSession(forked.sessionId, options);
+	}
+
+	private prompts: PromptArchive | undefined;
+
+	private promptArchive(): PromptArchive {
+		if (!this.prompts) {
+			const dir = this.launch?.storageDir;
+			this.prompts = new PromptArchive(dir ? path.join(dir, 'prompts') : undefined);
+			void this.prompts.prune();
+		}
+		return this.prompts;
 	}
 
 	private forkNoticeState(): string | undefined {

@@ -270,6 +270,8 @@ export const googleAdapter: AgentAdapter = {
 	forker: googleForker,
 	// Rewinding the source needs the agent to read it afresh, which one process does only on a restart.
 	restartAfterFork: true,
+	// `agy acp` applies the prompt of the request each time it opens a session, so a rebuilt one misses the cache.
+	keepsSessionPrompt: true,
 	// The agent saves a tool result of about 4,000 characters or more to a file and hands the model only its path. With its own
 	// file tools off the model then reasons for minutes about how to get at the content, so results are cut below that size.
 	maxToolResultChars: 3_500,

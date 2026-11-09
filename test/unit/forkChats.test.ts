@@ -3,6 +3,9 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as vscode from 'vscode';
 import { claudeAdapter } from '../../src/adapters/claude';
@@ -60,20 +63,25 @@ class FakeAgent {
 		}
 	}
 
-	createSession = async (): Promise<AgentSession> => {
+	/** The session prompt each session was opened with, by session id. */
+	openedWith = new Map<string, string | undefined>();
+
+	createSession = async (options?: { systemPromptAppend?: string }): Promise<AgentSession> => {
 		const sessionId = `s${++this.sessions}`;
 		this.created.push(sessionId);
+		this.openedWith.set(sessionId, options?.systemPromptAppend);
 		return { sessionId, configOptions: [] };
 	};
 	resumeSession = async (sessionId: string): Promise<AgentSession> => {
 		this.resumed.push(sessionId);
 		return { sessionId, configOptions: [] };
 	};
-	forkSession = async (source: string, _options: unknown, point?: ForkPoint): Promise<AgentSession> => {
+	forkSession = async (source: string, options: { systemPromptAppend?: string }, point?: ForkPoint): Promise<AgentSession> => {
 		if (this.failFork) {
 			throw new Error('The agent could not find the message to fork after');
 		}
 		const id = `f${++this.sessions}`;
+		this.openedWith.set(id, options.systemPromptAppend);
 		this.forks.push({ source, id, point });
 		return { sessionId: id, configOptions: [] };
 	};
@@ -115,7 +123,7 @@ function memento() {
 
 const providers: AcpProvider[] = [];
 
-function harness(adapter: AgentAdapter = claudeAdapter) {
+function harness(adapter: AgentAdapter = claudeAdapter, storageDir = '') {
 	const agent = new FakeAgent();
 	const state = memento();
 	const logs: string[] = [];
@@ -127,7 +135,7 @@ function harness(adapter: AgentAdapter = claudeAdapter) {
 			updateTools: vi.fn(),
 		},
 		state,
-		resolveLaunch: async () => ({ entryPath: 'test', installDir: '', storageDir: '', workspaceFolder: '/work', settings: {} }),
+		resolveLaunch: async () => ({ entryPath: 'test', installDir: '', storageDir, workspaceFolder: '/work', settings: {} }),
 		client: {},
 		createClient: () => agent as unknown as AgentApi,
 		signIn: vi.fn(),
@@ -407,6 +415,42 @@ describe('forking a chat at a checkpoint', () => {
 		expect(agent.forks).toEqual([{ source: 's1', id: 'f2', point: { messageId: 's1-m1', messageFingerprint: messageFingerprintOf('reply 1'), messageOccurrence: 1 } }]);
 		expect(agent.closed).toContain('s1');
 		expect(agent.prompts.at(-1)).toEqual({ sessionId: 'f2', texts: ['question 2, reworded'] });
+	});
+
+	it('leaves the prompt of a forked Claude chat to the current host prompt', async () => {
+		const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fork-prompt-'));
+		try {
+			const { agent, send } = harness(claudeAdapter, storageDir);
+			await send(chat(1));
+			await send(chat(2));
+			await send([system('other rules'), ...chat(2, { 2: 'question 2, reworded' }).slice(1)]);
+
+			expect(agent.openedWith.get('f2')).toContain('other rules');
+			expect(fs.existsSync(path.join(storageDir, 'prompts'))).toBe(false);
+		} finally {
+			fs.rmSync(storageDir, { recursive: true, force: true });
+		}
+	});
+
+	it('opens a forked Google chat with the prompt the saved session began with, so a reworded host prompt does not miss the cache', async () => {
+		const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fork-prompt-'));
+		try {
+			const { agent, send, logs } = harness({ ...googleAdapter, forker: undefined, forkChats: true }, storageDir);
+			await send(chat(1));
+			await send(chat(2));
+			const original = agent.openedWith.get('s1');
+			expect(original).toContain('rules');
+			// The host rewords its prompt between the edit and the turns before it.
+			const reworded = (messages: vscode.LanguageModelChatRequestMessage[]) => [system('other rules'), ...messages.slice(1)];
+
+			await send(reworded(chat(2, { 2: 'question 2, reworded' })));
+
+			expect(agent.forks).toHaveLength(1);
+			expect(agent.openedWith.get('f2')).toBe(original);
+			expect(logs.some(line => line.includes('Sending the session prompt the saved session began with'))).toBe(true);
+		} finally {
+			fs.rmSync(storageDir, { recursive: true, force: true });
+		}
 	});
 
 	it('forks the deepest checkpoint when the last message is edited', async () => {

@@ -224,6 +224,11 @@ export interface AgentAdapter {
 	 * opened, for an agent that keeps every conversation it opened in memory and never reads one again.
 	 */
 	restartAfterFork?: boolean;
+	/**
+	 * Whether a resumed or forked session is sent the session prompt it was saved with instead of a rebuilt one,
+	 * for an agent that applies the prompt on every open, so a reworded prompt misses its cache.
+	 */
+	keepsSessionPrompt?: boolean;
 	/** Whether the agent fetches the tool list again on `tools/list_changed`, so a changed tool set needs no new session. */
 	refreshesTools?: boolean;
 	/** How long (ms) a tool call may wait for Copilot to pick it up before it is failed; absent waits for as long as the agent does. */
