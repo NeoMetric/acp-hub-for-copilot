@@ -12,7 +12,7 @@ import { storageRoot } from '../engine/store/paths';
 import { ownerOfToken, stderrLog } from '../hosts/http/host';
 import { createServer } from '../hosts/http/server';
 import { exitWithParent } from './parent';
-import { readToken } from './token';
+import { serverToken } from './token';
 
 /** The port the server listens on when the operator names none. */
 const DEFAULT_PORT = 8791;
@@ -81,8 +81,9 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 	const port = portOf(env.ACP_HUB_PORT);
 	// The same root the extension uses, so an agent installed in one gateway is installed in both.
 	const root = storageRoot(env);
-	// The token both the extension and any other client send: the operator's, or the stored one.
-	const token = readToken(root, env);
+	// The token both the extension and any other client send: the operator's, or the stored one,
+	// or the one this server makes now, so a hand-started server is never open to a tokenless client.
+	const token = serverToken(root, env);
 	// The client runs the tools a turn asks for, so the loopback bridge only
 	// relays the calls; a chat's session keeps the call parked for the re-post.
 	const bridge = new McpBridge(stderrLog);
@@ -98,7 +99,7 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 	server.listen(port, '127.0.0.1', () => {
 		const address = server.address();
 		const bound = typeof address === 'object' && address !== null ? address.port : port;
-		stderrLog(`ACP Hub server listening on http://127.0.0.1:${bound}${token ? ' with a bearer token' : ''}.`);
+		stderrLog(`ACP Hub server listening on http://127.0.0.1:${bound} with a bearer token.`);
 	});
 	server.on('error', error => {
 		stderrLog(`The server stopped: ${error.message}`, 'error');

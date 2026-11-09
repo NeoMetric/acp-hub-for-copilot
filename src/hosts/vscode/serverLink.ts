@@ -169,7 +169,7 @@ export class ServerLink {
 
 	private async run(): Promise<LinkState> {
 		if (this.disposed) {
-			return this.publish({ kind: 'unavailable', reason: `The link to the server on port ${this.deps.port} is closed.` });
+			return this.closed();
 		}
 		try {
 			return await this.attachOrStart();
@@ -180,11 +180,16 @@ export class ServerLink {
 
 	private async attachOrStart(): Promise<LinkState> {
 		const probe = await this.classify();
+		// dispose() may have run while the probe was out; a closed link starts nothing.
+		if (this.disposed) {
+			return this.closed();
+		}
 		if (probe.kind === 'incompatible') {
 			return this.publish({ kind: 'unavailable', reason: probe.reason });
 		}
 		if (probe.kind === 'compatible') {
-			return this.reach(false);
+			// The server may be one this window started earlier; a watch must not unown it.
+			return this.reach(this.ownsRunning());
 		}
 		if (!this.deps.autoStart) {
 			return this.publish({
@@ -198,6 +203,9 @@ export class ServerLink {
 	/** Verifies the token and reports the server as reachable, watching it from then on. */
 	private async reach(owned: boolean): Promise<LinkState> {
 		const refused = await this.verifyToken();
+		if (this.disposed) {
+			return this.closed();
+		}
 		if (refused) {
 			return this.publish({ kind: 'unavailable', reason: refused });
 		}
@@ -210,10 +218,19 @@ export class ServerLink {
 	}
 
 	private async start(): Promise<LinkState> {
+		if (this.disposed) {
+			return this.closed();
+		}
 		if (this.child && !gone(this.child)) {
 			// A server this window started is still coming up.
 			const ready = await this.waitForCompatible(Date.now() + START_TIMEOUT_MS, () => undefined);
-			return ready ? this.reach(true) : this.publish({ kind: 'unavailable', reason: this.didNotAnswer() });
+			if (this.disposed) {
+				return this.closed();
+			}
+			return ready ? this.reach(this.ownsRunning()) : this.publish({ kind: 'unavailable', reason: this.didNotAnswer() });
+		}
+		if (this.disposed) {
+			return this.closed();
 		}
 
 		ensureToken(this.deps.root);
@@ -230,6 +247,11 @@ export class ServerLink {
 				}
 			}
 		});
+		// A dispose() that slipped in before the spawn owns no child, so the link must end this one.
+		if (this.disposed) {
+			stopChild(child);
+			return this.closed();
+		}
 		let spawnError: string | undefined;
 		child.on('error', error => {
 			spawnError = error.message;
@@ -251,6 +273,9 @@ export class ServerLink {
 
 		if (await this.waitForCompatible(Date.now() + START_TIMEOUT_MS, giveUp)) {
 			return this.reach(await this.survived(child, () => stderr));
+		}
+		if (this.disposed) {
+			return this.closed();
 		}
 
 		// Another window may have won the port while this child was starting.
@@ -291,6 +316,9 @@ export class ServerLink {
 
 	private async waitForCompatible(deadline: number, giveUp: () => string | undefined): Promise<boolean> {
 		while (Date.now() < deadline) {
+			if (this.disposed) {
+				return false;
+			}
 			const probe = await this.classify();
 			if (probe.kind === 'compatible') {
 				return true;
@@ -370,6 +398,15 @@ export class ServerLink {
 		return `The ACP Hub server on port ${this.deps.port} did not answer within ${START_TIMEOUT_MS / 1000} s.`;
 	}
 
+	private closed(): LinkState {
+		return this.publish({ kind: 'unavailable', reason: `The link to the server on port ${this.deps.port} is closed.` });
+	}
+
+	/** Whether the server that answers is one this window started and that still runs. */
+	private ownsRunning(): boolean {
+		return this.child !== undefined && !gone(this.child);
+	}
+
 	private watch(): void {
 		if (this.watcher || this.disposed) {
 			return;
@@ -420,6 +457,18 @@ function messageOf(error: unknown): string {
 /** Whether the child has left, however it did. */
 function gone(child: ChildProcess): boolean {
 	return child.exitCode !== null || child.signalCode !== null;
+}
+
+/** Ends a server this window started when the window is already closing: no waiting, just the pipe and the kill. */
+function stopChild(child: ChildProcess): void {
+	try {
+		child.stdin?.end();
+	} catch {
+		// The pipe is gone already; the kill below is what leaves no process behind.
+	}
+	if (!gone(child)) {
+		child.kill();
+	}
 }
 
 function lastLine(text: string): string | undefined {

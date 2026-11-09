@@ -63,3 +63,11 @@ export function ensureToken(root: string): string {
 		return raced;
 	}
 }
+
+/**
+ * The token the server itself requires: the operator's, the stored one, or one
+ * made now — so a server started by hand never serves without a token.
+ */
+export function serverToken(root: string, env: NodeJS.ProcessEnv = process.env): string {
+	return readToken(root, env) ?? ensureToken(root);
+}

@@ -202,6 +202,36 @@ describe('the link to the server', () => {
 		expect(owners).toHaveLength(1);
 	});
 
+	it('keeps ownership when a later ensure finds the server it started', async () => {
+		const port = await freePort();
+		const link = makeLink({ root: storeRoot(), port });
+		const changes: LinkState[] = [];
+		link.onDidChange(state => changes.push(state));
+
+		expect(readyOf(await link.ensure()).owned).toBe(true);
+		const again = readyOf(await link.ensure());
+
+		expect(again.owned, 'the server it started is still its own').toBe(true);
+		expect(changes, 'an unchanged state is not reported a second time').toHaveLength(1);
+	});
+
+	it('a dispose during the first probe leaves no server behind', async () => {
+		const port = await freePort();
+		const spawned: ChildProcess[] = [];
+		const link = makeLink({ root: storeRoot(), port, spawn: capturing(spawned) });
+
+		const pending = link.ensure();
+		const stopped = link.dispose();
+		const [state] = await Promise.all([pending, stopped]);
+
+		expect(reasonOf(state)).toContain('closed');
+		await waitUntil(
+			async () => spawned.every(child => child.exitCode !== null || child.signalCode !== null),
+			'the server a racing start spawned to exit',
+		);
+		expect(await answers(port), 'nothing is left listening on the port').toBe(false);
+	});
+
 	it('a non-ACP server on the port is unavailable and never signalled', async () => {
 		const port = await freePort();
 		const server = await startAnswering(port, { status: 'ok', app: 'something else' });

@@ -7,7 +7,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ensureToken, readToken, tokenFileOf } from '../../src/main/token';
+import { ensureToken, readToken, serverToken, tokenFileOf } from '../../src/main/token';
 
 const roots: string[] = [];
 
@@ -58,6 +58,25 @@ describe('the server token', () => {
 		const root = storeRoot();
 
 		expect(readToken(root, NO_ENV)).toBeUndefined();
+	});
+
+	it('a server on a fresh root makes the token it then requires', () => {
+		const root = storeRoot();
+		expect(readToken(root, NO_ENV)).toBeUndefined();
+
+		const token = serverToken(root, NO_ENV);
+
+		expect(token).toMatch(/^[0-9a-f]{48}$/);
+		expect(fs.readFileSync(tokenFileOf(root), 'utf8').trim()).toBe(token);
+		expect(readToken(root, NO_ENV), 'a client must present the token the server made').toBe(token);
+		expect(serverToken(root, NO_ENV)).toBe(token);
+	});
+
+	it('a server uses the operator\'s token without making a file', () => {
+		const root = storeRoot();
+
+		expect(serverToken(root, { ACP_HUB_TOKEN: 'from-the-environment' })).toBe('from-the-environment');
+		expect(fs.existsSync(tokenFileOf(root))).toBe(false);
 	});
 
 	it('a blank environment variable does not hide the file', () => {
