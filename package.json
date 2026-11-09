@@ -307,6 +307,7 @@
 		"compile": "npm run typecheck && node esbuild.js",
 		"typecheck": "tsc -p . --noEmit",
 		"watch": "node esbuild.js --watch",
+		"server": "node server-dist/server.js",
 		"lint": "eslint .",
 		"test": "vitest run",
 		"test:smoke": "npm run compile && node esbuild.js --tests && vscode-test",

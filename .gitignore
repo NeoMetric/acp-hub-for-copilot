@@ -2,6 +2,7 @@ node_modules/
 .scratch/
 dist/
 out/
+server-dist/
 .vscode-test/
 *.vsix
 .DS_Store

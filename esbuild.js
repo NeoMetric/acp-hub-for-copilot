@@ -49,6 +49,14 @@ const builds = tests
 		entryPoints: ["src/sidebar/webview/main.ts"],
 		outfile: "dist/sidebar.js",
 		minify: !watch
+	}, {
+		// The headless gateway is a program of its own: it ships beside the
+		// extension, not inside it, so it is bundled outside dist/ and ignored
+		// by the VSIX.
+		...shared,
+		entryPoints: ["src/main/server.ts"],
+		outfile: "server-dist/server.js",
+		minify: !watch
 	}];
 
 async function main() {
