@@ -311,6 +311,36 @@ describe('external conversation forking', () => {
 		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 'copy-of-other', texts: ['edited question'] });
 	});
 
+	it('does not keep the source id when another chat starts a turn while the forker is being located', async () => {
+		let resolveLocate: (program: string) => void = () => { };
+		const forker = {
+			locate: vi.fn(() => new Promise<string>(resolve => { resolveLocate = resolve; })),
+			fork: vi.fn(async (_program: string, _request: { keepSourceId: boolean }) => ({ sessionId: 's1' })),
+			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
+		};
+		const h = harness({ ...googleAdapter, forker });
+		h.agent.supportsFork = false;
+		await h.send(chat(1), 'c1');
+		await h.send(chat(2), 'c1');
+
+		// The reuse request reaches the forker, which waits to say where its program is.
+		const forking = h.send(chat(2, { 2: 'edited question' }), 'c1');
+		await vi.waitFor(() => expect(forker.locate).toHaveBeenCalled());
+
+		// Another chat starts a turn while the program is still being looked for.
+		h.agent.hold = true;
+		void h.send(chat(1), 'c2');
+		await vi.waitFor(() => expect(h.agent.prompts).toHaveLength(3));
+		h.agent.hold = false;
+
+		resolveLocate('agy');
+		await forking;
+
+		// Its turn is read, so the fork takes an id of its own: the restart a kept id needs would end that turn.
+		expect(forker.fork).toHaveBeenCalledWith('agy', expect.objectContaining({ sessionId: 's1', keepSourceId: false }), expect.any(Function));
+		expect(h.agent.restart).not.toHaveBeenCalled();
+	});
+
 	it('continues an edited chat in the source session when the forker keeps its id', async () => {
 		let closedBeforeFork: string[] = [];
 		const forker = {
