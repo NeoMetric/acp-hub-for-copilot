@@ -26,6 +26,7 @@
 //   tool2        calls it twice in a row, then replies with what the second call returned
 //   forget       fails as if the session no longer existed
 // MOCK_ACP_FAIL_FILE: while that file exists the process exits at start.
+// MOCK_ACP_NEW_DELAY_MS: answers session/new only after that many milliseconds.
 
 const fs = require('node:fs');
 const readline = require('node:readline');
@@ -178,6 +179,19 @@ function handlePrompt(message) {
 	});
 }
 
+/** Answers a new session, with the model and effort options every session reports. */
+function openSession(message) {
+	newRequests++;
+	if (mode === 'auth-required' || (mode === 'key-auth' && !authenticated)) {
+		fail(message.id, -32000, 'Authentication required');
+		return;
+	}
+	const sessionId = `s${++sessions}`;
+	knownSessions.add(sessionId);
+	sessionMcpServers.set(sessionId, message.params.mcpServers || []);
+	reply(message.id, { sessionId, configOptions });
+}
+
 readline.createInterface({ input: process.stdin }).on('line', line => {
 	const message = JSON.parse(line);
 
@@ -192,15 +206,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 		if (message.params.methodId === 'mock-login' && (mode !== 'key-auth' || process.env.MOCK_API_KEY === 'fixture-key')) { authenticated = true; reply(message.id, {}); }
 		else { fail(message.id, -32602, 'Unknown authentication method'); }
 	} else if (message.method === 'session/new') {
-		newRequests++;
-		if (mode === 'auth-required' || (mode === 'key-auth' && !authenticated)) {
-			fail(message.id, -32000, 'Authentication required');
-			return;
-		}
-		const sessionId = `s${++sessions}`;
-		knownSessions.add(sessionId);
-		sessionMcpServers.set(sessionId, message.params.mcpServers || []);
-		reply(message.id, { sessionId, configOptions });
+		// A test can hold a new session open, as an agent that is slow to start does.
+		setTimeout(() => openSession(message), Number(process.env.MOCK_ACP_NEW_DELAY_MS || 0));
 	} else if (message.method === 'session/resume') {
 		knownSessions.add(message.params.sessionId);
 		reply(message.id, { configOptions });

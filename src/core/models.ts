@@ -9,7 +9,7 @@ import type { AcpConfigOption, AcpConfigOptionChoice, AcpConfigOptionGroup } fro
 
 const MODEL_CATEGORY = 'model';
 /** The model's own version is not known to the adapter; the picker only needs a stable value. */
-const MODEL_VERSION = '1';
+export const MODEL_VERSION = '1';
 
 export const EFFORT_CATEGORY = 'thought_level';
 /** The model configuration key the picker sends the chosen effort under. */

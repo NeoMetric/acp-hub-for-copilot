@@ -17,7 +17,7 @@ import type { Part } from '../../../src/engine/model/chat';
 import { createHeadlessHost, type HeadlessHost } from '../../../src/hosts/http/host';
 import { createServer } from '../../../src/hosts/http/server';
 
-export const MOCK_AGENT = path.resolve(__dirname, '..', 'fixtures', 'mock-acp-agent.cjs');
+export const MOCK_AGENT = path.resolve(__dirname, '..', '..', 'fixtures', 'mock-acp-agent.cjs');
 export const NO_LOG = (): void => undefined;
 
 /** The context window the mock agent's models advertise. */
@@ -152,6 +152,7 @@ export async function start(agents: HarnessAgent[] = [{ adapter: mockAdapter() }
 		host,
 		adapters: agents.map(agent => agent.adapter),
 		serviceOf: id => services.get(id),
+		reportedWindowsOf: agentId => windowsOf(agentId),
 		close: async () => { await Promise.all([...services.values()].map(service => service.close())); },
 	};
 	const server = createServer({ composition, token: options.token, toolCallWaitMs: options.toolCallWaitMs });

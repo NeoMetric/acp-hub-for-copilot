@@ -38,7 +38,7 @@ export default tseslint.config(
 		files: ['**/*.js', '**/*.mjs', '**/*.cjs'],
 		...tseslint.configs.disableTypeChecked,
 		languageOptions: {
-			globals: { require: 'readonly', process: 'readonly', console: 'readonly', module: 'readonly', __dirname: 'readonly' },
+			globals: { require: 'readonly', process: 'readonly', console: 'readonly', module: 'readonly', __dirname: 'readonly', setTimeout: 'readonly' },
 		},
 		rules: {
 			...tseslint.configs.disableTypeChecked.rules,

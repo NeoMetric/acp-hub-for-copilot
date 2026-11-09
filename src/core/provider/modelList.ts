@@ -4,10 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { AgentAdapter, ModelChoice, ModelPolicy } from '../adapter';
+import type { AgentAdapter, ModelPolicy } from '../adapter';
 import { AdapterNotInstalledError, type AgentSession } from '../../engine/acp/agentClient';
 import type { Log } from '../logging';
-import { acpModelValue, effortLevelsOf, findModelOption, flattenChoices, toModelVariants } from '../models';
+import { modelChoicesOf } from '../modelInfo';
+import { acpModelValue, toModelVariants } from '../models';
 import { describe, rpcDetailsOf } from '../../engine/chat/sessionOptions';
 import type { StateStore } from '../../engine/ports/state';
 import type { AgentApi } from './types';
@@ -21,23 +22,13 @@ const MODEL_RETRY_LIMIT = 6;
  * when the agent reported no model option, so nothing can be offered.
  */
 export function modelsOfSession(adapter: AgentAdapter, session: AgentSession, log: Log): vscode.LanguageModelChatInformation[] | undefined {
-	const modelOption = findModelOption(session.configOptions);
-	if (!modelOption) {
+	const offered = modelChoicesOf(adapter, session);
+	if (!offered) {
 		log('The agent did not report a model config option; no models can be offered.', 'warn');
 		return undefined;
 	}
 
-	let choices = flattenChoices(modelOption.options ?? []);
-	// A fresh session may report no effort option, only bracketed `model[effort]`
-	// ids: until a model is resolved, the catalogue is the only source.
-	const reported = effortLevelsOf(adapter.modelPolicy, session.configOptions);
-	const effortLevels = reported.length > 0 ? reported : adapter.modelPolicy.effortLevelsFromModels?.(session.models?.availableModels ?? []) ?? [];
-
-	if (adapter.listModels) {
-		const offered = choices.map((choice): ModelChoice => ({ value: choice.value, name: choice.name, description: choice.description ?? undefined }));
-		choices = adapter.listModels({ models: offered, effortLevels }).map(choice => ({ value: choice.value, name: choice.name, description: choice.description }));
-	}
-
+	const { choices, efforts: effortLevels } = offered;
 	const models = toModelVariants(adapter.modelPolicy, choices, effortLevels);
 	log(`Offering ${choices.length} ${adapter.displayName} model(s) for chat and ${choices.length} for the Copilot agent: ${choices.map(choice => choice.value).join(', ')}`);
 	log(`Thinking effort levels reported by the agent: ${effortLevels.join(', ') || 'none'}`);

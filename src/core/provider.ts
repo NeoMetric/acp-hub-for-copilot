@@ -11,6 +11,7 @@ import type { McpToolResult } from './bridge';
 import type { RequestMeasurement } from './cache';
 import { characterCountOf, readTranscriptOptions } from './convert';
 import type { Log } from './logging';
+import { modelsStateKey } from './modelInfo';
 import { effortOf } from './models';
 import { createRequestDump } from './requestDump';
 import { resolveCwd, systemGuidanceOf, workspaceFoldersOf } from './requestContext';
@@ -110,7 +111,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			isSignInRequired: error => this.service.needsSignIn(error),
 			promptSignIn: () => this.service.requestSignIn(),
 			changed: () => this.changeEmitter.fire(),
-		}, `acpHub.models.${adapter.id}`);
+		}, modelsStateKey(adapter.id));
 	}
 
 	get vendor(): string {

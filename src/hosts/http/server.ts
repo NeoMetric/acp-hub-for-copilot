@@ -8,8 +8,9 @@ import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import type { HeadlessComposition } from '../../composition/headless';
+import type { AgentAdapter } from '../../core/adapter';
+import { modelInfosOf, modelsStateKey, type ModelEntry } from '../../core/modelInfo';
 import { AdapterNotInstalledError } from '../../engine/acp/agentClient';
-import type { AcpConfigOption, AgentSession } from '../../engine/acp/protocol';
 import type { ChatService } from '../../engine/chat/ChatService';
 import { ChatError } from '../../engine/chat/ChatError';
 import type { ControlSurface } from '../../engine/control/ControlService';
@@ -20,7 +21,7 @@ import { ControlPage } from '../../ui/controlPage';
 import type { ControlAction, ControlState } from '../../ui/messages';
 import { ACTION_ROUTE, EVENTS_ROUTE, STATE_ROUTE } from '../../ui/transport';
 import { DEFAULT_TOOL_CALL_WAIT_MS, rememberHeaders, ToolCallParking } from './host';
-import { API_VERSION, SERVER_NAME, type HealthWire } from './wire';
+import { API_VERSION, SERVER_NAME, type HealthWire, type ModelWire } from './wire';
 
 /** The package version esbuild bakes into the bundle; it is undefined when the sources run unbundled. */
 declare const __ACP_HUB_VERSION__: string | undefined;
@@ -140,8 +141,9 @@ export function createServer(options: HttpServerOptions): http.Server {
 	const { composition, token } = options;
 	const parking = new ToolCallParking(options.toolCallWaitMs ?? DEFAULT_TOOL_CALL_WAIT_MS, composition.host.log);
 	const page = options.page ? openPage(options.page, composition.host.log) : undefined;
+	const catalog = new ModelCatalog(composition);
 	const server = http.createServer((request, response) => {
-		void handle(composition, token, parking, page, request, response);
+		void handle(composition, catalog, token, parking, page, request, response);
 	});
 	// A stopped server has no client left to answer a parked call, so its timers
 	// must not re-drive an agent on the way out.
@@ -149,7 +151,7 @@ export function createServer(options: HttpServerOptions): http.Server {
 	return server;
 }
 
-async function handle(composition: HeadlessComposition, token: string | undefined, parking: ToolCallParking, page: OpenPage | undefined, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+async function handle(composition: HeadlessComposition, catalog: ModelCatalog, token: string | undefined, parking: ToolCallParking, page: OpenPage | undefined, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
 	try {
 		const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
 		// The health probe is what a process manager reads, before it has any token.
@@ -195,7 +197,7 @@ async function handle(composition: HeadlessComposition, token: string | undefine
 			return;
 		}
 		if (pathname === '/v1/models' && request.method === 'GET') {
-			await sendModels(composition, response);
+			await sendModels(catalog, composition, response);
 			return;
 		}
 		if (pathname === '/v1/chat/completions' && request.method === 'POST') {
@@ -380,49 +382,108 @@ async function sendHealth(composition: HeadlessComposition, response: http.Serve
 }
 
 /** `GET /v1/models`: one entry per agent and model, so two agents' models cannot collide. */
-async function sendModels(composition: HeadlessComposition, response: http.ServerResponse): Promise<void> {
-	const data: Array<{ id: string; object: 'model'; owned_by: string }> = [];
+async function sendModels(catalog: ModelCatalog, composition: HeadlessComposition, response: http.ServerResponse): Promise<void> {
+	const data: ModelWire[] = [];
 	for (const adapter of composition.adapters) {
 		const service = composition.serviceOf(adapter.id);
 		if (!service || !await isInstalled(service, composition)) {
 			continue;
 		}
-		const modelIds = await modelIdsOf(service, composition);
-		for (const modelId of modelIds.length > 0 ? modelIds : [AGENT_DEFAULT_MODEL]) {
-			data.push({ id: `${adapter.id}/${modelId}`, object: 'model', owned_by: adapter.id });
-		}
+		const models = await catalog.modelsOf(adapter);
+		// A chat-completions client always sends a model, so an agent whose models cannot be read still has to be reachable.
+		data.push(...models.length > 0 ? models : [{ id: `${adapter.id}/${AGENT_DEFAULT_MODEL}`, object: 'model' as const, owned_by: adapter.id }]);
 	}
 	sendJson(response, 200, { object: 'list', data });
 }
 
-/** The model values the agent's own session reported, or none when it offers no model option. */
-async function modelIdsOf(service: ChatService, composition: HeadlessComposition): Promise<string[]> {
-	try {
-		const session = await service.openWarmSession();
-		const option = modelOptionOf(session);
-		return option ? valuesOf(option) : [];
-	} catch (error) {
-		composition.host.log(`Could not read the models of ${service.adapter.id}: ${messageOf(error)}`, 'warn');
-		return [];
+/**
+ * The models of every agent, saved in the shared store: a saved list answers at
+ * once, so a cold or unreachable agent cannot empty the picker, and the lookup
+ * behind that answer keeps the saved list current. One lookup per agent runs at
+ * a time, however many requests ask for it.
+ */
+class ModelCatalog {
+
+	/** The lookups in flight, by agent id, so a burst of requests asks the agent once. */
+	private readonly lookups = new Map<string, Promise<ModelEntry[]>>();
+
+	constructor(private readonly composition: HeadlessComposition) { }
+
+	/** The models of one agent as the wire publishes them: the saved copy when there is one, the agent's own otherwise. */
+	async modelsOf(adapter: AgentAdapter): Promise<ModelWire[]> {
+		const saved = this.savedOf(adapter.id);
+		if (saved.length > 0) {
+			void this.lookup(adapter).catch(() => undefined);
+			return saved.map(entry => this.wireOf(adapter.id, entry));
+		}
+		const entries = await this.lookup(adapter);
+		return entries.map(entry => this.wireOf(adapter.id, entry));
 	}
-}
 
-function modelOptionOf(session: AgentSession): AcpConfigOption | undefined {
-	const isSelect = (option: AcpConfigOption): boolean => option.type === 'select';
-	return session.configOptions.find(option => option.category === 'model' && isSelect(option))
-		?? session.configOptions.find(option => option.id === 'model' && isSelect(option));
-}
+	/** The models saved for the agent, in the shape this server publishes them in. */
+	private savedOf(agentId: string): ModelEntry[] {
+		const saved = this.composition.host.state.get<unknown>(modelsStateKey(agentId));
+		// A list saved in a shape this server does not know is ignored rather than published broken.
+		return Array.isArray(saved) ? saved.filter(isModelEntry) : [];
+	}
 
-function valuesOf(option: AcpConfigOption): string[] {
-	const values: string[] = [];
-	for (const entry of option.options ?? []) {
-		if ('group' in entry) {
-			values.push(...entry.options.map(choice => choice.value));
-		} else {
-			values.push(entry.value);
+	/** Reads the models from a warm session and saves them, joining the lookup the agent already has in flight. */
+	private lookup(adapter: AgentAdapter): Promise<ModelEntry[]> {
+		const running = this.lookups.get(adapter.id);
+		if (running) {
+			return running;
+		}
+		const lookup = this.readModels(adapter).finally(() => this.lookups.delete(adapter.id));
+		this.lookups.set(adapter.id, lookup);
+		return lookup;
+	}
+
+	private async readModels(adapter: AgentAdapter): Promise<ModelEntry[]> {
+		const { composition } = this;
+		const service = composition.serviceOf(adapter.id);
+		if (!service) {
+			return [];
+		}
+		try {
+			const session = await service.openWarmSession();
+			const entries = modelInfosOf(adapter, session, composition.reportedWindowsOf?.(adapter.id)) ?? [];
+			if (entries.length > 0) {
+				await composition.host.state.update(modelsStateKey(adapter.id), entries);
+			}
+			return entries;
+		} catch (error) {
+			if (!(error instanceof AdapterNotInstalledError)) {
+				composition.host.log(`Could not read the models of ${adapter.id}: ${messageOf(error)}`, 'warn');
+			}
+			return [];
 		}
 	}
-	return values;
+
+	/** One model as the wire carries it, with the window the agent reported for it when it has. */
+	private wireOf(agentId: string, entry: ModelEntry): ModelWire {
+		const { info } = entry;
+		const reported = this.composition.reportedWindowsOf?.(agentId)?.get(entry.value);
+		const window = reported !== undefined && reported > info.maxOutputTokens ? reported : info.maxInputTokens + info.maxOutputTokens;
+		return {
+			id: `${agentId}/${entry.value}`,
+			object: 'model',
+			owned_by: agentId,
+			acp: { ...info, efforts: Array.isArray(info.efforts) ? info.efforts : [], maxInputTokens: window - info.maxOutputTokens },
+		};
+	}
+}
+
+/** Whether a saved value is a model this server can publish. */
+function isModelEntry(value: unknown): value is ModelEntry {
+	if (typeof value !== 'object' || value === null) {
+		return false;
+	}
+	const { value: model, info } = value as { value?: unknown; info?: unknown };
+	if (typeof model !== 'string' || typeof info !== 'object' || info === null) {
+		return false;
+	}
+	const wire = info as { name?: unknown; maxInputTokens?: unknown; maxOutputTokens?: unknown };
+	return typeof wire.name === 'string' && typeof wire.maxInputTokens === 'number' && typeof wire.maxOutputTokens === 'number';
 }
 
 /** Whether the agent is on this machine; asking for its client reads no more than the install and the settings. */

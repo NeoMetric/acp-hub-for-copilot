@@ -52,6 +52,8 @@ export interface HeadlessComposition {
 	readonly adapters: readonly AgentAdapter[];
 	/** The service of one agent, by the id the registry gives it. */
 	serviceOf(agentId: string): ChatService | undefined;
+	/** The context windows an agent reported for its models, which the model list serves; a host that tracks none omits it. */
+	reportedWindowsOf?(agentId: string): ReadonlyMap<string, number>;
 	/** Stops every agent and releases the sessions of every chat. */
 	close(): Promise<void>;
 }
