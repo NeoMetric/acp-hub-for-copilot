@@ -11,7 +11,7 @@ import { isAuthRequiredError } from '../acp/rpc';
 import { policyOf, type SessionPolicy } from '../../core/sessionPolicy';
 import type { ChatRequest, ToolDef, ToolResult } from '../model/chat';
 import type { StreamEvent } from '../model/stream';
-import type { Log, HostPort } from '../ports/host';
+import { DEFAULT_CHAT_OWNER, type Log, type HostPort } from '../ports/host';
 import { buildPromptBlocks } from './assemble';
 import type { RequestMeasurement } from './cache';
 import { ChatError } from './ChatError';
@@ -335,7 +335,7 @@ export class ChatService {
 		}
 		if (!session) {
 			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, await this.canFork(client), this.log) : undefined;
-			session = await this.createChatSession(key, client, modelId, tools, context, reuse, effort, lap);
+			session = await this.createChatSession(key, client, identity.owner ?? DEFAULT_CHAT_OWNER, modelId, tools, context, reuse, effort, lap);
 			lap('chat session created');
 		} else if (tools.length > 0 && guidanceDiffers(session.context.guidance, context.guidance)) {
 			this.sendGuidanceChange(key, session, context.guidance);
@@ -362,7 +362,7 @@ export class ChatService {
 			const reuse = tools.length > 0 && await this.canFork(client) ? findEditFork(this.saved, key, fingerprints, lastUser, context, this.log) : undefined;
 			this.log(reuse ? `[reuse] Chat ${key} was edited; forking from the checkpoint after ${reuse.checkpoint?.messages} message(s).` : `[reuse] Chat ${key} was edited and has no checkpoint to fork from; starting a fresh ACP session.`, 'debug');
 			await this.destroySession(key);
-			session = await this.createChatSession(key, client, modelId, tools, context, reuse, effort);
+			session = await this.createChatSession(key, client, identity.owner ?? DEFAULT_CHAT_OWNER, modelId, tools, context, reuse, effort);
 			this.applyTools(session, tools);
 			await applyEffort(client, this.deps.adapter.modelPolicy, session, effort, this.log);
 			restoreContext = session.history.length === 0;
@@ -619,7 +619,7 @@ export class ChatService {
 		}
 	}
 
-	private async createChatSession(key: string, agent: AgentApi, modelId: string, tools: readonly ToolDef[], context: ChatContext, reuse?: Reuse, effort?: string, lap?: Lap): Promise<ChatSession> {
+	private async createChatSession(key: string, agent: AgentApi, owner: string, modelId: string, tools: readonly ToolDef[], context: ChatContext, reuse?: Reuse, effort?: string, lap?: Lap): Promise<ChatSession> {
 		const endpoint = await this.deps.bridge.registerSession(tools, (name, input, signal) => this.executeTool(key, name, input, signal), { maxResultChars: this.deps.adapter.maxToolResultChars });
 		lap?.(`tool bridge registered (${tools.length} tool(s))`);
 		try {
@@ -691,7 +691,7 @@ export class ChatService {
 			const inherited = !reused || !reuse ? [] : reuse.kind === 'resume' ? reuse.saved.checkpoints ?? [] : (reuse.saved.checkpoints ?? []).filter(checkpoint => checkpoint.messages <= (reuse.checkpoint?.messages ?? 0));
 			const toolNames = tools.map(tool => tool.name);
 			const session: ChatSession = {
-				agent, acp, endpoint, context, history,
+				agent, owner, acp, endpoint, context, history,
 				checkpoints: [...inherited],
 				messageCounts: countsOf(inherited),
 				forked: reused?.how === 'forked' && !this.deps.adapter.forker ? true : reused && reuse ? reuse.saved.forked : undefined,
@@ -897,14 +897,19 @@ export class ChatService {
 	}
 
 	private evictIdleSessions(keep: string): void {
+		// The cap is per owner, so one client's burst of chats cannot close another's.
+		const counts = new Map<string, number>();
+		for (const session of this.sessions.values()) {
+			counts.set(session.owner, (counts.get(session.owner) ?? 0) + 1);
+		}
 		for (const [key, session] of this.sessions) {
-			if (this.sessions.size <= MAX_CHAT_SESSIONS) {
-				return;
+			const count = counts.get(session.owner) ?? 0;
+			if (count <= MAX_CHAT_SESSIONS || key === keep || session.turn) {
+				continue;
 			}
-			if (key !== keep && !session.turn) {
-				this.log(`Closing the least recently used chat session ${key}.`, 'debug');
-				void this.destroySession(key);
-			}
+			counts.set(session.owner, count - 1);
+			this.log(`Closing the least recently used chat session ${key} of ${session.owner}.`, 'debug');
+			void this.destroySession(key);
 		}
 	}
 
@@ -962,7 +967,7 @@ export class ChatService {
 			return session;
 		}
 		await this.destroySession(key);
-		return this.createChatSession(key, session.agent, modelId, tools, context);
+		return this.createChatSession(key, session.agent, session.owner, modelId, tools, context);
 	}
 
 	private async destroySession(key: string): Promise<void> {

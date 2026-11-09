@@ -3,12 +3,19 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { randomUUID } from 'node:crypto';
 import * as vscode from 'vscode';
 import { stripIdentity } from '../../core/identityPatterns';
 import type { ChatRequest } from '../../engine/model/chat';
 import type { ChatIdentity, HostPort, Log } from '../../engine/ports/host';
 import type { ConfigReader, SecretStore, StateStore } from '../../engine/ports/state';
 import { chatIdOf, chatLabelOf, chatWideContextOf, stripHostSections, systemGuidanceOf, workspaceFoldersOf } from './identity';
+
+/**
+ * This window as the owner of the chats it serves. One extension host runs per
+ * window, so a value made once here names the window for the engine's quotas.
+ */
+const WINDOW_OWNER = randomUUID();
 
 /**
  * What the workbench sent with one request. The engine's {@link ChatRequest}
@@ -97,6 +104,7 @@ function identityOf(request: ChatRequest, deps: VsCodeHostDeps): ChatIdentity {
 		cwd: request.cwd || deps.windowFolder(),
 		workspaceFolders: folders ?? [],
 		label: sent ? chatLabelOf(sent.messages) : undefined,
+		owner: WINDOW_OWNER,
 	};
 }
 

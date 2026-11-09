@@ -9,9 +9,8 @@ import type { ToolBridge } from '../engine/chat/types';
 import { McpBridge, type McpToolResult } from '../engine/mcp/bridge';
 import type { Part } from '../engine/model/chat';
 import { storageRoot } from '../engine/store/paths';
-import { stderrLog } from '../hosts/http/host';
+import { ownerOfToken, stderrLog } from '../hosts/http/host';
 import { createServer } from '../hosts/http/server';
-
 /** The port the server listens on when the operator names none. */
 const DEFAULT_PORT = 8791;
 
@@ -78,7 +77,7 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 	// relays the calls; a chat's session keeps the call parked for the re-post.
 	const bridge = new McpBridge(stderrLog);
 	// The same root the extension uses, so an agent installed in one gateway is installed in both.
-	const composition = createHeadlessComposition({ root: storageRoot(env), bridge: toolBridgeOf(bridge), log: stderrLog });
+	const composition = createHeadlessComposition({ root: storageRoot(env), bridge: toolBridgeOf(bridge), log: stderrLog, owner: ownerOfToken(token) });
 	const server = createServer({ composition, token, page: { control: composition.control } });
 
 	server.listen(port, '127.0.0.1', () => {

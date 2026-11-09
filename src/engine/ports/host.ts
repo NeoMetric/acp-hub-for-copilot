@@ -18,7 +18,16 @@ export interface ChatIdentity {
 	readonly workspaceFolders: readonly string[];
 	/** The opening words of the chat, when the host can name it. */
 	readonly label?: string;
+	/**
+	 * Whose chat it is: the host's own client identity, which quotas are counted
+	 * per. The VS Code host names its window; the server names the authenticated
+	 * principal. A host that names nobody is {@link DEFAULT_CHAT_OWNER}.
+	 */
+	readonly owner?: string;
 }
+
+/** The owner of a chat whose host names no client, such as a server without a token. */
+export const DEFAULT_CHAT_OWNER = 'default';
 
 /** A tool call a host is asked to run. */
 export type ToolCall = Extract<Part, { readonly type: 'tool-call' }>;

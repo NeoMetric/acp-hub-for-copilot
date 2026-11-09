@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { textOf } from '../../engine/chat/messages';
 import type { ChatMessage, ChatRequest } from '../../engine/model/chat';
-import type { ChatIdentity, HostPort, Log } from '../../engine/ports/host';
+import { DEFAULT_CHAT_OWNER, type ChatIdentity, type HostPort, type Log } from '../../engine/ports/host';
 import type { ConfigReader } from '../../engine/ports/state';
 import { createFileStore } from '../../engine/store/fileStore';
 import { defaultWorkspaceOf, loadConfig } from './config';
@@ -55,6 +55,8 @@ export interface HeadlessHostOptions {
 	readonly root: string;
 	/** Where the host tells what it does; stderr by default. */
 	readonly log?: Log;
+	/** The client whose chats these are: the token's principal, or `default` when there is none. */
+	readonly owner?: string;
 }
 
 /** The headless host, which also writes the settings the control page changes. */
@@ -79,7 +81,7 @@ export function createHeadlessHost(options: HeadlessHostOptions): HeadlessHost {
 		settings,
 		storageRoot: root,
 		writeSetting: (key, value) => settings.set(key, value),
-		chatIdentity: request => identityOf(request, settings),
+		chatIdentity: request => identityOf(request, settings, options.owner ?? DEFAULT_CHAT_OWNER),
 		guidanceOf: request => request.systemGuidance,
 		// The host writes no sections of its own into the text the engine forwards.
 		stripHostSections: text => text,
@@ -109,7 +111,7 @@ export function createHeadlessHost(options: HeadlessHostOptions): HeadlessHost {
  * every other chat is named by the folder it works in and its opening words, so
  * a stock OpenAI client that re-posts the same conversation finds it again.
  */
-function identityOf(request: ChatRequest, settings: ConfigReader): ChatIdentity {
+function identityOf(request: ChatRequest, settings: ConfigReader, owner: string): ChatIdentity {
 	const headers = HEADERS.get(request);
 	const cwd = folderOf(request, headers, settings);
 	const opening = openingOf(request.messages);
@@ -119,7 +121,19 @@ function identityOf(request: ChatRequest, settings: ConfigReader): ChatIdentity 
 		// A request carries one folder, which the engine takes as where the agent is rooted.
 		workspaceFolders: [],
 		label: labelOf(opening),
+		owner,
 	};
+}
+
+/**
+ * The owner a bearer token names: a short, stable label that does not reveal the
+ * token, so two servers sharing one store count their quotas apart. A server
+ * without a token has one anonymous principal.
+ */
+export function ownerOfToken(token: string | undefined): string {
+	return token === undefined
+		? DEFAULT_CHAT_OWNER
+		: `bearer:${createHash('sha256').update(token).digest('hex').slice(0, 8)}`;
 }
 
 function namedChatId(request: ChatRequest, headers: RequestHeaders | undefined): string | undefined {

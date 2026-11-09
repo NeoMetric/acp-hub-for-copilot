@@ -12,8 +12,9 @@ import type { AgentAdapter } from '../../../src/core/adapter';
 import { readAgentSettings } from '../../../src/core/settings';
 import type { ToolBridge } from '../../../src/engine/chat/types';
 import type { ChatRequest } from '../../../src/engine/model/chat';
+import { DEFAULT_CHAT_OWNER } from '../../../src/engine/ports/host';
 import { configFileOf } from '../../../src/hosts/http/config';
-import { createHeadlessHost, rememberHeaders } from '../../../src/hosts/http/host';
+import { createHeadlessHost, ownerOfToken, rememberHeaders } from '../../../src/hosts/http/host';
 
 const NO_LOG = (): void => undefined;
 
@@ -159,6 +160,16 @@ describe('the headless host', () => {
 		expect(host.chatIdentity(named).cwd).toBe('/from-header');
 		expect(host.chatIdentity(chat('hello', '/request')).cwd).toBe('/request');
 		expect(host.chatIdentity(chat('hello', '')).cwd).toBe('/configured');
+	});
+
+	it('names the owner of its chats, so each principal has its own quota', () => {
+		const host = hostAt(storeRoot());
+		expect(host.chatIdentity(chat('hello')).owner).toBe(DEFAULT_CHAT_OWNER);
+
+		const tokened = createHeadlessHost({ root: storeRoot(), log: NO_LOG, owner: ownerOfToken('one-token') });
+		expect(tokened.chatIdentity(chat('hello')).owner).toMatch(/^bearer:[0-9a-f]{8}$/);
+		expect(ownerOfToken('one-token')).toBe(ownerOfToken('one-token'));
+		expect(ownerOfToken('one-token')).not.toBe(ownerOfToken('another-token'));
 	});
 
 	it('hands the request its own guidance and leaves forwarded text alone', () => {

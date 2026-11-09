@@ -30,6 +30,8 @@ export interface HeadlessCompositionOptions {
 	readonly log?: Log;
 	/** Where the adapters' npm manifests are; the working directory by default. */
 	readonly extensionDir?: string;
+	/** The client whose chats these are: the token's principal, or `default` when there is none. */
+	readonly owner?: string;
 }
 
 /** One host, the adapters it can drive, and the chat use case of each. */
@@ -52,7 +54,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 	const root = path.resolve(options.root);
 	const log = options.log ?? stderrLog;
 	const extensionDir = options.extensionDir ?? process.cwd();
-	const host = createHeadlessHost({ root, log });
+	const host = createHeadlessHost({ root, log, owner: options.owner });
 	const agentsDir = path.join(root, 'agents');
 	/** Where the agents are installed, and where an install reports what it does. */
 	const install = {
