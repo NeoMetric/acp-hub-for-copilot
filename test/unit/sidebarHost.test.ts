@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { SidebarHost, type SidebarPageDeps } from '../../src/sidebar/host';
 import type { AgentCardState, ControlAction, ControlState, ToWebview } from '../../src/ui/messages';
 import type { ControlTransport } from '../../src/ui/transport';
@@ -37,8 +37,6 @@ function setup() {
 		},
 	};
 	const deps: SidebarPageDeps = {
-		openExternal: vi.fn(async () => { }),
-		copyToClipboard: vi.fn(async () => { }),
 		assetUri: path => ({ path }) as never,
 	};
 

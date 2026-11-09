@@ -10,8 +10,6 @@ import type { ControlTransport } from '../ui/transport';
 
 /** What the sidebar needs from the VS Code window around it; everything else it asks the server. */
 export interface SidebarPageDeps {
-	openExternal(url: string): Promise<void>;
-	copyToClipboard(text: string): Promise<void>;
 	/** Uri of a file inside the extension folder, for example `dist/sidebar.js`. */
 	assetUri(relativePath: string): vscode.Uri;
 }

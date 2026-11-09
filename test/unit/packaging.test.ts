@@ -23,20 +23,25 @@ function outfileOf(entry: string): string {
 }
 
 describe('packaging', () => {
-	it('excludes the server bundle from the VSIX', () => {
-		expect(ignoredPaths()).toContain('server-dist/**');
+	it('builds the server beside the extension bundle, into dist', () => {
+		const outfile = outfileOf(entryOf(readFileSync('esbuild.js', 'utf8'), 'src/main/server.ts'));
+		expect(outfile).toBe('dist/server.js');
 	});
 
-	it('excludes the sources, so the HTTP host cannot ship', () => {
+	it('ships the server bundle, the page and the adapter manifests in the VSIX', () => {
+		const ignored = ignoredPaths();
+		// The server is no longer a program of its own that only a developer runs: every
+		// window starts it, so it travels with the extension.
+		for (const path of ['server-dist/**', 'dist/**', 'dist/server.js', 'dist/sidebar.js', 'media/**', 'media/sidebar.css', 'adapters/**', '**/*.js']) {
+			expect(ignored, `${path} must not be ignored: the VSIX has to contain it`).not.toContain(path);
+		}
+	});
+
+	it('excludes the sources, so the HTTP host ships only as a bundle', () => {
 		const ignored = ignoredPaths();
 		expect(ignored).toContain('src/**');
 		expect(ignored).toContain('**/*.ts');
-	});
-
-	it('builds the server into server-dist, away from the extension bundle', () => {
-		const outfile = outfileOf(entryOf(readFileSync('esbuild.js', 'utf8'), 'src/main/server.ts'));
-		expect(outfile.startsWith('server-dist/')).toBe(true);
-		expect(outfile.startsWith('dist/')).toBe(false);
+		expect(ignored).toContain('test/**');
 	});
 
 	it('builds the page once, into the bundle the sidebar and the server both load', () => {
@@ -48,7 +53,7 @@ describe('packaging', () => {
 		expect(packageJson.main).toBe('./dist/extension.js');
 	});
 
-	it('contributes nothing for the server', () => {
-		expect(JSON.stringify(packageJson.contributes)).not.toMatch(/server/i);
+	it('runs the server the VSIX ships with npm run server', () => {
+		expect(packageJson.scripts.server).toBe('node dist/server.js');
 	});
 });

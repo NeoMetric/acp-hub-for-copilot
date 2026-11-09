@@ -19,7 +19,7 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run package
-      - name: Prove the VSIX ships no server code
+      - name: Prove the VSIX ships the server, and no server source
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -32,9 +32,15 @@ jobs:
             $zip.Dispose()
           }
           $paths | Sort-Object | ForEach-Object { Write-Host $_ }
-          $leaked = @($paths | Where-Object { $_ -match 'server-dist' -or $_ -match 'hosts[\\/]http' })
+          # Every window of the extension starts the server, so its bundle must travel with it.
+          if (-not ($paths -contains 'extension/dist/server.js')) {
+            Write-Host "::error::$($vsix.Name) ships no dist/server.js"
+            exit 1
+          }
+          # The server ships as a bundle only; its sources, and the extension's, stay out.
+          $leaked = @($paths | Where-Object { $_ -match '^extension/src/' -or $_ -match 'hosts[\\/]http' })
           if ($leaked.Count -gt 0) {
-            $leaked | ForEach-Object { Write-Host "::error::$($vsix.Name) ships server code: $_" }
+            $leaked | ForEach-Object { Write-Host "::error::$($vsix.Name) ships server source: $_" }
             exit 1
           }
       - uses: actions/upload-artifact@v4

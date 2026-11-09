@@ -85,7 +85,7 @@ export interface ControlPageOptions {
 	readonly openExternal?: (url: string) => Promise<void>;
 	/** Copies text for the page; a server has no clipboard, so it logs it by default. */
 	readonly copyToClipboard?: (text: string) => Promise<void>;
-	/** The built page bundle; `dist/sidebar.js` beside `server-dist/` by default. */
+	/** The built page bundle; `dist/sidebar.js`, beside `dist/server.js`, by default. */
 	readonly bundle?: string;
 	/** The page's stylesheet; `media/sidebar.css` next to the bundles by default. */
 	readonly style?: string;
@@ -99,9 +99,9 @@ interface OpenPage {
 }
 
 /**
- * The page's files: the bundle `server-dist/` sits beside in `dist/`, and the
- * stylesheet in `media/`. A source checkout resolves them from the working
- * folder, which is where both builds put them too.
+ * The page's files: the bundle that sits beside the server's own bundle in
+ * `dist/`, and the stylesheet in `media/`. A source checkout resolves them from
+ * the working folder, which is where both builds put them too.
  */
 function pageBundlePath(): string {
 	return firstExisting([

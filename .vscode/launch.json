@@ -13,9 +13,9 @@
 			"name": "Run Server",
 			"type": "node",
 			"request": "launch",
-			"program": "${workspaceFolder}/server-dist/server.js",
+			"program": "${workspaceFolder}/dist/server.js",
 			"env": { "ACP_HUB_PORT": "8791" },
-			"outFiles": ["${workspaceFolder}/server-dist/**/*.js"],
+			"outFiles": ["${workspaceFolder}/dist/**/*.js"],
 			"console": "integratedTerminal",
 			"preLaunchTask": "npm: compile"
 		}

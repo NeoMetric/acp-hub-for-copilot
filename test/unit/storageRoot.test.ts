@@ -11,49 +11,57 @@ interface ServiceDeps {
 
 const mocks = vi.hoisted(() => ({
 	installed: false,
-	/** The extension's providers, with the dependencies they were built with. */
-	providers: [] as Array<{ adapter: { id: string }; deps: ServiceDeps & { client: { storageDir: string } } }>,
+	/** The store roots the extension's link to the server was built with. */
+	linkRoots: [] as string[],
+	/** The window folder each of the extension's providers fell back to. */
+	windowFolders: [] as Array<() => string>,
 	/** The headless composition's services, by the agent they drive. */
 	services: new Map<string, ServiceDeps>(),
-	killed: [] as string[],
 }));
 
 vi.mock('vscode', () => {
 	const disposable = () => ({ dispose() { } });
 	return {
-		lm: { registerLanguageModelChatProvider: disposable },
+		lm: { registerLanguageModelChatProvider: disposable, selectChatModels: async () => [] },
 		window: {
 			createOutputChannel: () => ({ info() { }, warn() { }, error() { }, debug() { }, show() { }, dispose() { } }),
 			registerWebviewViewProvider: disposable,
-			onDidChangeWindowState: disposable,
-			withProgress: async <T>(_options: unknown, task: () => Promise<T>) => task(),
+			showQuickPick: async () => undefined,
+			showWarningMessage: async () => undefined,
 		},
-		commands: { registerCommand: disposable },
+		commands: { registerCommand: disposable, executeCommand: async () => undefined },
 		workspace: {
 			workspaceFolders: undefined,
-			getConfiguration: () => ({ get: <T>(_key: string, fallback?: T) => fallback, update: async () => undefined }),
-			onDidChangeConfiguration: disposable,
+			getConfiguration: () => ({ get: <T>(_key: string, fallback?: T) => fallback }),
 		},
-		Uri: { joinPath: (...parts: unknown[]) => parts[0] },
+		env: { openExternal: async () => true, clipboard: { writeText: async () => undefined } },
+		Uri: { joinPath: (...parts: unknown[]) => parts[0], parse: (value: string) => ({ path: value }) },
 	};
 });
-vi.mock('../../src/core/provider', () => ({
-	AcpProvider: class {
-		constructor(readonly adapter: { id: string }, readonly deps: ServiceDeps & { client: { storageDir: string } }) { mocks.providers.push(this); }
-		onDidRequireSignIn() { return { dispose() { } }; }
-		onDidMeasureRequest() { return { dispose() { } }; }
-		onDidFinishTurn() { return { dispose() { } }; }
+vi.mock('../../src/hosts/vscode/serverLink', () => ({
+	ServerLink: class {
+		constructor(deps: { root: string }) { mocks.linkRoots.push(deps.root); }
+		ensure() { return Promise.resolve({ kind: 'unavailable', reason: 'the test starts no server' }); }
+		onDidChange() { return () => undefined; }
+		dispose() { return Promise.resolve(); }
+	},
+}));
+vi.mock('../../src/hosts/vscode/serverProvider', () => ({
+	ServerProvider: class {
+		constructor(deps: { windowFolder(): string }) { mocks.windowFolders.push(deps.windowFolder); }
 		publishModels() { return Promise.resolve(); }
-		restart() { return Promise.resolve(); }
-		invalidateLaunch() { }
-		refresh() { }
-		closeAllSessions() { return Promise.resolve(); }
-		prepareAgent() { return Promise.resolve(true); }
-		askAgent() { return Promise.resolve(undefined); }
-		startForSignIn() { return Promise.resolve(false); }
-		wakeAfterIdle() { }
 		dispose() { }
 	},
+}));
+vi.mock('../../src/sidebar/relay', () => ({
+	SidebarRelay: class {
+		send() { }
+		onState() { return () => undefined; }
+		dispose() { }
+	},
+}));
+vi.mock('../../src/sidebar/host', () => ({
+	SidebarHost: class { constructor(..._args: unknown[]) { } },
 }));
 vi.mock('../../src/engine/chat/ChatService', () => ({
 	ChatService: class {
@@ -76,18 +84,17 @@ vi.mock('../../src/engine/chat/usage', () => ({
 		onDidChange() { return { dispose() { } }; }
 	},
 }));
+vi.mock('../../src/engine/mcp/bridge', () => ({
+	McpBridge: class { dispose() { } },
+}));
 vi.mock('../../src/core/bridge', () => ({
 	McpBridge: class { dispose() { } },
 }));
-vi.mock('../../src/core/secrets', () => ({
-	AgentSecretStore: class { get() { return Promise.resolve(undefined); } onDidChange() { return { dispose() { } }; } dispose() { } },
-}));
-vi.mock('../../src/sidebar/host', () => ({
-	SidebarHost: class { refresh() { } showSignInUrl() { } },
-}));
-vi.mock('../../src/core/processes', () => ({
-	killAllChildren: () => undefined,
-	killStrayAgents: (dir: string) => { mocks.killed.push(dir); return []; },
+// The Google adapter reads its CLI's data folder when the registry is loaded.
+vi.mock('../../src/adapters/googleHub', () => ({
+	APP_DATA_DIR: 'antigravity-copilot',
+	startHub: async () => ({ port: 1, token: 't', stop: async () => undefined }),
+	callHub: async () => ({ response: {} }),
 }));
 vi.mock('../../src/core/installers', () => ({
 	findInstalled: async () => mocks.installed ? { entryPath: 'agent', installDir: 'install' } : undefined,
@@ -95,12 +102,6 @@ vi.mock('../../src/core/installers', () => ({
 	installAgent: async () => undefined,
 	uninstallAgent: async () => undefined,
 	needsUpdate: async () => false,
-}));
-// The Google adapter reads its CLI's data folder when the registry is loaded.
-vi.mock('../../src/adapters/googleHub', () => ({
-	APP_DATA_DIR: 'antigravity-copilot',
-	startHub: async () => ({ port: 1, token: 't', stop: async () => undefined }),
-	callHub: async () => ({ response: {} }),
 }));
 
 import { createHeadlessComposition } from '../../src/composition/headless';
@@ -126,9 +127,9 @@ beforeEach(() => {
 	extensionDir = path.join(root, 'extension');
 	fs.mkdirSync(extensionDir);
 	mocks.installed = false;
-	mocks.providers.length = 0;
+	mocks.linkRoots.length = 0;
+	mocks.windowFolders.length = 0;
 	mocks.services.clear();
-	mocks.killed.length = 0;
 });
 
 afterEach(async () => {
@@ -148,20 +149,17 @@ describe('the agent storage root', () => {
 			extensionUri: { fsPath: extensionDir },
 			extension: { packageJSON: { version: '1' } },
 			globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
-			secrets: {},
 		} as never);
 
-		mocks.installed = true;
 		const expected = (id: string): string => path.join(root, 'agents', id);
-		expect(mocks.providers.length).toBeGreaterThan(0);
-		for (const provider of mocks.providers) {
-			const id = provider.adapter.id;
-			expect(provider.deps.client.storageDir, id).toBe(expected(id));
-			expect((await provider.deps.resolveLaunch())?.storageDir, id).toBe(expected(id));
-			// The pid registry of the agent sits in the same folder both gateways read.
-			expect(mocks.killed, id).toContain(path.join(expected(id), 'agents'));
+		// The window shares one store with the server, and roots a chat in the agents folder when it has no folder of its own.
+		expect(mocks.linkRoots).toEqual([root]);
+		expect(mocks.windowFolders.length).toBeGreaterThan(0);
+		for (const windowFolder of mocks.windowFolders) {
+			expect(windowFolder()).toBe(path.join(root, 'agents'));
 		}
 
+		mocks.installed = true;
 		const composition = createHeadlessComposition({ root, bridge: noTools, log: NO_LOG, extensionDir });
 		for (const adapter of composition.adapters) {
 			const service = mocks.services.get(adapter.id);

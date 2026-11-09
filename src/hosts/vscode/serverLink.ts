@@ -26,7 +26,7 @@ export interface ServerLinkDeps {
 	readonly port: number;
 	/** Whether a window that finds no server may start one. */
 	readonly autoStart: boolean;
-	/** The built server bundle, `server-dist/server.js`. */
+	/** The built server bundle, `dist/server.js`. */
 	readonly serverScript: string;
 	/** The folder the server runs in, so the store resolves as it does for the extension. */
 	readonly extensionDir: string;

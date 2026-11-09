@@ -5,7 +5,6 @@
 src/**
 test/**
 out/**
-server-dist/**
 node_modules/**
 **/*.map
 **/*.ts

@@ -89,8 +89,8 @@ agent id, so a provider filters on `owned_by`.
 
 ### 1. The server's lifecycle, owned by the extension
 
-- **Where it lives:** the server bundle (`server-dist/server.js`) ships inside
-  the VSIX (check `.vscodeignore`; it is excluded or missing today if so).
+- **Where it lives:** the server bundle (`dist/server.js`) ships inside the
+  VSIX, beside the extension bundle (check `.vscodeignore`; both are kept).
 - **Address:** a fixed port (default 8791, overridable by a setting) and a
   bearer token persisted in the shared store, so every window and any external
   client agree. The token is generated once if absent.

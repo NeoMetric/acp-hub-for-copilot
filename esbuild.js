@@ -54,12 +54,11 @@ const builds = tests
 		outfile: "dist/sidebar.js",
 		minify: !watch
 	}, {
-		// The headless gateway is a program of its own: it ships beside the
-		// extension, not inside it, so it is bundled outside dist/ and ignored
-		// by the VSIX.
+		// The server every window starts or attaches to; it ships beside the
+		// extension bundle, not inside it, and dies with the window that started it.
 		...shared,
 		entryPoints: ["src/main/server.ts"],
-		outfile: "server-dist/server.js",
+		outfile: "dist/server.js",
 		minify: !watch
 	}];
 
