@@ -20,9 +20,9 @@ export interface ModelChoices {
 /** One model as the server publishes it: the value the agent knows it by, and the picker's metadata. */
 export type ModelEntry = { readonly value: string; readonly info: ModelInfoWire };
 
-/** The state key the models of an agent are saved under, which the extension reads and writes too. */
+/** The state key this server saves an agent's models under, apart from the extension's own list. */
 export function modelsStateKey(agentId: string): string {
-	return `acpHub.models.${agentId}`;
+	return `server.models.${agentId}`;
 }
 
 /**

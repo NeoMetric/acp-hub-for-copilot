@@ -115,7 +115,7 @@ The extension passes `ChatService` options that `createHeadlessComposition` does
 
 **Files:**
 - Create: `src/core/modelInfo.ts` — `modelInfosOf(adapter: AgentAdapter, session: AgentSession, reportedWindows: ReadonlyMap<string, number>): Array<{ value: string; info: ModelInfoWire }> | undefined`
-- Modify: `src/hosts/http/server.ts` (`sendModels`, `modelIdsOf`/`modelOptionOf`/`valuesOf` are replaced by it), `src/composition/headless.ts` (reported windows map from Task 2's `refineWindow`; model cache in `host.state` under `acpHub.models.<agentId>`), `src/core/models.ts` (reuse `findModelOption`, `flattenChoices`, `effortLevelsOf`)
+- Modify: `src/hosts/http/server.ts` (`sendModels`, `modelIdsOf`/`modelOptionOf`/`valuesOf` are replaced by it), `src/composition/headless.ts` (reported windows map from Task 2's `refineWindow`; model cache in `host.state` under `server.models.<agentId>`, apart from the extension's own `acpHub.models.<agentId>`), `src/core/models.ts` (reuse `findModelOption`, `flattenChoices`, `effortLevelsOf`)
 - Test: `test/unit/engine/modelsWire.test.ts` (new)
 
 **Interfaces:**
@@ -124,7 +124,7 @@ The extension passes `ChatService` options that `createHeadlessComposition` does
 
 - [ ] **Step 1: Write failing tests** in `modelsWire.test.ts` over the mock agent:
   - `models carry the picker metadata`: entry for `<agent>/<model>` has `acp.name`, `acp.maxInputTokens + acp.maxOutputTokens === policy window`, `acp.efforts` equals the effort levels the fixture reports with `label`/`description` from the policy.
-  - `a cold model list answers from the saved copy`: pre-seed `state['acpHub.models.<agent>']`, make the warm session hang; assert the response returns the seeded models within 1 s and that the agent's real list replaces the seed afterwards.
+  - `a cold model list answers from the saved copy`: pre-seed `state['server.models.<agent>']`, make the warm session hang; assert the response returns the seeded models within 1 s and that the agent's real list replaces the seed afterwards.
   - `an agent that is not installed lists no models` (existing behaviour kept).
   - `a reported context window narrows maxInputTokens` after `refineWindow(model, size)` was called.
 - [ ] **Step 2: Run** `npx vitest run test/unit/engine/modelsWire.test.ts` — expect FAIL.

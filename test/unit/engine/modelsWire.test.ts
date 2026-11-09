@@ -119,6 +119,31 @@ describe('the model list', () => {
 		expect(running.host.state.get<ModelEntry[]>(modelsStateKey(adapter.id))?.map(entry => entry.value)).toEqual(['mock-1', 'mock-2']);
 	});
 
+	it('keeps its cache apart from the extension\'s model list', async () => {
+		// The extension saves LanguageModelChatInformation[] under its own key: the server must
+		// neither publish that list nor overwrite it with the cache it keeps.
+		const adapter = mockAdapter();
+		const running = await start([{ adapter }]);
+		const extensionKey = `acpHub.models.${adapter.id}`;
+		const extensionList = [{
+			id: 'plugin-model',
+			name: 'Plugin Model',
+			family: 'plugin',
+			version: '1',
+			maxInputTokens: 1000,
+			maxOutputTokens: 100,
+			toolCalling: true,
+			imageInput: true,
+		}];
+		await running.host.state.update(extensionKey, extensionList);
+
+		const models = await modelsOf(running.url);
+
+		expect(models.map(model => model.id)).toEqual([`${adapter.id}/mock-1`, `${adapter.id}/mock-2`]);
+		expect(running.host.state.get(extensionKey)).toEqual(extensionList);
+		expect(running.host.state.get<ModelEntry[]>(modelsStateKey(adapter.id))?.map(entry => entry.value)).toEqual(['mock-1', 'mock-2']);
+	});
+
 	it('an agent that is not installed lists no models', async () => {
 		const adapter = mockAdapter();
 		const missing = mockAdapter({ id: 'missing' });
