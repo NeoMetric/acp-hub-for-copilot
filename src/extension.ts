@@ -10,7 +10,7 @@ import { scopedLog } from './core/logging';
 import { killAllChildren, killStrayAgents } from './core/processes';
 import { AcpProvider } from './core/provider';
 import { AgentSecretStore } from './core/secrets';
-import { migrateState, openSharedStore } from './core/sharedStore';
+import { migrateInstallsOnce, migrateState, openSharedStore } from './core/sharedStore';
 import { stateStoreOf } from './core/stateStore';
 import { readAgentSettings } from './core/settings';
 import { recordStoragePath } from './core/storageCleanup';
@@ -32,6 +32,14 @@ export function activate(context: vscode.ExtensionContext): void {
 	log(`The shared store is in ${shared.root}.`, 'debug');
 	// The install root of both gateways: an agent installed here is installed for the server, with its logs and pid registry.
 	const storageDir = agentsRoot(shared.root);
+	// An agent the previous version installed under the extension's own folder moves into the shared root once, so an upgrade does not make it look missing.
+	void migrateInstallsOnce({
+		sourceRoot: extensionStorageDir,
+		agentsRoot: storageDir,
+		agentIds: ADAPTERS.map(adapter => adapter.id),
+		state,
+		log,
+	}).catch(error => log(`Could not move the agent installs into ${storageDir}: ${error instanceof Error ? error.message : String(error)}`, 'warn'));
 	const legacyState = stateStoreOf(context.globalState);
 	if (legacyState) {
 		void migrateState(legacyState, state).catch(error => log(`Could not copy the extension's saved state into the shared store: ${error instanceof Error ? error.message : String(error)}`, 'warn'));

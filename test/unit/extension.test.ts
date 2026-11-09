@@ -71,13 +71,21 @@ vi.mock('../../src/core/installers', () => ({
 }));
 
 import { activate } from '../../src/extension';
+import { INSTALLS_MIGRATION_MARKER } from '../../src/core/sharedStore';
+import { createFileStore } from '../../src/engine/store/fileStore';
 
 /** A shared store of its own for one test, so nothing touches the user's home folder. */
 const storeRoots: string[] = [];
+/** The extension's own folder for one test: activation moves any install left there into the shared one. */
+let globalStorage = '';
+/** The store root activation settles on, for the same test. */
+let sharedRoot = '';
 
 beforeEach(() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-extension-'));
   storeRoots.push(root);
+  sharedRoot = root;
+  globalStorage = path.join(root, 'global-storage');
   process.env.ACP_HUB_HOME = root;
   mocks.enabled = true;
   mocks.disabledIds.clear();
@@ -100,10 +108,31 @@ afterEach(async () => {
   }
 });
 
+it('moves an agent the previous version installed in global storage into the shared root, once', async () => {
+  const legacy = path.join(globalStorage, 'claude');
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, 'entry.js'), 'claude');
+
+  activate({
+    subscriptions: [],
+    globalStorageUri: { fsPath: globalStorage },
+    extensionUri: { fsPath: 'extension' },
+    extension: { packageJSON: { version: '1' } },
+    globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
+    secrets: {},
+  } as never);
+
+  // The move runs before activation returns, so the sidebar's first install check already finds the agent.
+  expect(fs.readFileSync(path.join(sharedRoot, 'agents', 'claude', 'entry.js'), 'utf8')).toBe('claude');
+  expect(fs.existsSync(legacy)).toBe(false);
+  // The marker lands with the store's next write; until then the next activation would only skip folders already moved.
+  await vi.waitFor(() => expect(createFileStore(sharedRoot).state.get<boolean>(INSTALLS_MIGRATION_MARKER)).toBe(true));
+});
+
 it('wakes the agents when the user is back in the window, not when it loses focus or goes idle', () => {
   activate({
     subscriptions: [],
-    globalStorageUri: { fsPath: 'storage' },
+    globalStorageUri: { fsPath: globalStorage },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
     globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
@@ -121,7 +150,7 @@ it('wakes the agents when the user is back in the window, not when it loses focu
 it('registers a provider for every contributed vendor and the sidebar', () => {
   const context = {
     subscriptions: [],
-    globalStorageUri: { fsPath: 'storage' },
+    globalStorageUri: { fsPath: globalStorage },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
     globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
@@ -140,7 +169,7 @@ it('loads the usage of installed, enabled agents into the sidebar at startup', a
   for (const id of ['claude', 'codex', 'google']) {mocks.installedIds.add(id);}
   activate({
     subscriptions: [],
-    globalStorageUri: { fsPath: 'storage' },
+    globalStorageUri: { fsPath: globalStorage },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
     globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
@@ -168,7 +197,7 @@ it('does not start a usage read for disabled or uninstalled agents', async () =>
   mocks.disabledIds.add('codex');
   activate({
     subscriptions: [],
-    globalStorageUri: { fsPath: 'storage' },
+    globalStorageUri: { fsPath: globalStorage },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
     globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
