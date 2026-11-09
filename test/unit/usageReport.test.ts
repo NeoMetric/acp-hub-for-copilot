@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { logCache, logContextCall, logTokens, reportUsage } from '../../src/core/provider/usageReport';
-import type { ActiveTurn } from '../../src/core/provider/types';
+import { logCache, logContextCall, logTokens, reportUsage } from '../../src/engine/chat/usageReport';
+import type { ActiveTurn } from '../../src/engine/chat/types';
+import type { StreamEvent } from '../../src/engine/model/stream';
 
 const usage = { inputTokens: 1000, outputTokens: 50, cachedReadTokens: 9000, cachedWriteTokens: 0, totalTokens: 10050 };
 
-/** The `usage` part Copilot is sent, which its context indicator is built on. */
+/** The `usage` figures Copilot is sent, which its context indicator is built on. */
 function usagePart(turn: Partial<ActiveTurn>): { prompt_tokens: number; completion_tokens: number; prompt_tokens_details: { cached_tokens: number } } {
-	const parts: Array<{ data: Uint8Array }> = [];
-	const full = { finished: false, streaming: true, characters: 0, reportedTokens: 0, ...turn, progress: { report: (part: unknown) => parts.push(part as { data: Uint8Array }) } } as unknown as ActiveTurn;
+	const events: StreamEvent[] = [];
+	const full = { finished: false, streaming: true, characters: 0, reportedTokens: 0, ...turn, sink: (event: StreamEvent) => events.push(event) } as unknown as ActiveTurn;
 	reportUsage(full, () => undefined);
-	return JSON.parse(Buffer.from(parts.at(-1)!.data).toString());
+	const last = events.at(-1)!;
+	if (last.type !== 'usage') {
+		throw new Error(`Expected a usage event, got ${last.type}`);
+	}
+	return { prompt_tokens: last.promptTokens, completion_tokens: last.outputTokens, prompt_tokens_details: { cached_tokens: last.cachedTokens } };
 }
 
 describe('reportUsage', () => {
@@ -38,8 +43,8 @@ describe('logContextCall', () => {
 	it('numbers the calls of a turn and adds up what they sent', () => {
 		const turn = { contextCalls: 0, contextSent: 0 } as ActiveTurn;
 		const lines: string[] = [];
-		logContextCall(turn, 46000, 475000, line => lines.push(line));
-		logContextCall(turn, 47500, undefined, line => lines.push(line));
+		logContextCall(turn, 46000, 475000, (line: string) => lines.push(line));
+		logContextCall(turn, 47500, undefined, (line: string) => lines.push(line));
 		expect(lines).toEqual([
 			'Model call #1: 46000 token(s) in context of 475000; 46000 token(s) sent so far this turn.',
 			'Model call #2: 47500 token(s) in context; 93500 token(s) sent so far this turn.',
@@ -50,9 +55,9 @@ describe('logContextCall', () => {
 describe('logCache', () => {
 	it('says how many model calls a turn figure adds up', () => {
 		const lines: string[] = [];
-		logCache('Turn cache', usage, line => lines.push(line), 55);
-		logCache('Turn cache', usage, line => lines.push(line));
-		logCache('Model call', usage, line => lines.push(line), 3);
+		logCache('Turn cache', usage, (line: string) => lines.push(line), 55);
+		logCache('Turn cache', usage, (line: string) => lines.push(line));
+		logCache('Model call', usage, (line: string) => lines.push(line), 3);
 		expect(lines).toEqual([
 			'Turn cache: 90.0% hit (9000 cached, 1000 fresh, 0 written, summed over 55 model call(s)).',
 			'Turn cache: 90.0% hit (9000 cached, 1000 fresh, 0 written).',
@@ -64,8 +69,8 @@ describe('logCache', () => {
 describe('logTokens', () => {
 	it('lists the tokens without a cache hit rate', () => {
 		const lines: string[] = [];
-		logTokens({ inputTokens: 120, outputTokens: 30, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195, reasoningOutputTokens: 45 }, line => lines.push(line));
-		logTokens({ inputTokens: 5, outputTokens: 2, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 7 }, line => lines.push(line));
+		logTokens({ inputTokens: 120, outputTokens: 30, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195, reasoningOutputTokens: 45 }, (line: string) => lines.push(line));
+		logTokens({ inputTokens: 5, outputTokens: 2, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 7 }, (line: string) => lines.push(line));
 		expect(lines).toEqual(['Turn tokens: 120 in, 30 out, 45 of thinking.', 'Turn tokens: 5 in, 2 out.']);
 	});
 });

@@ -3,13 +3,12 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AgentAdapter } from '../adapter';
-import type { AgentSession } from '../../engine/acp/protocol';
-import type { McpBridge, McpServerEndpoint } from '../bridge';
-import type { AgentApi } from './types';
+import type { AgentAdapter } from '../../core/adapter';
+import type { AcpMcpHttpServer, AgentSession } from '../acp/protocol';
+import type { AgentApi, BridgeEndpoint, ToolBridge } from './types';
 
-/** The ACP server entry that points a session at this extension's tool bridge. */
-export function bridgeServer(endpoint: McpServerEndpoint) {
+/** The ACP server entry that points a session at the host's tool bridge. */
+export function bridgeServer(endpoint: BridgeEndpoint): AcpMcpHttpServer {
 	return {
 		type: 'http' as const,
 		name: 'vscode',
@@ -20,7 +19,7 @@ export function bridgeServer(endpoint: McpServerEndpoint) {
 
 export interface WarmSessionHost {
 	adapter: AgentAdapter;
-	bridge: McpBridge;
+	bridge: ToolBridge;
 	agentClient(): Promise<AgentApi>;
 	/** Where the warm session is rooted. */
 	cwd(): string;
@@ -39,7 +38,7 @@ export class WarmSession {
 	private creation: Promise<AgentSession> | undefined;
 	private usedAtMs = 0;
 	/** The bridge registration behind the session, released with it. */
-	private endpoint: McpServerEndpoint | undefined;
+	private endpoint: BridgeEndpoint | undefined;
 
 	constructor(private readonly host: WarmSessionHost) { }
 

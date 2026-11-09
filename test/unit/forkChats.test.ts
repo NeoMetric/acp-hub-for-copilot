@@ -30,6 +30,8 @@ class FakeAgent {
 	/** What the agent reports for a turn; absent when it reports none. */
 	usage: Record<string, number> | undefined;
 	created: string[] = [];
+	/** The folder each session was opened in, as the provider resolved it. */
+	createdIn: string[] = [];
 	resumed: string[] = [];
 	forks: Array<{ source: string; id: string; point: ForkPoint | undefined }> = [];
 	closed: string[] = [];
@@ -68,9 +70,10 @@ class FakeAgent {
 	/** The session prompt each session was opened with, by session id. */
 	openedWith = new Map<string, string | undefined>();
 
-	createSession = async (options?: { systemPromptAppend?: string }): Promise<AgentSession> => {
+	createSession = async (options?: { cwd?: string; systemPromptAppend?: string }): Promise<AgentSession> => {
 		const sessionId = `s${++this.sessions}`;
 		this.created.push(sessionId);
+		this.createdIn.push(options?.cwd ?? '');
 		this.openedWith.set(sessionId, options?.systemPromptAppend);
 		return { sessionId, configOptions: [] };
 	};
@@ -211,6 +214,32 @@ describe('the usage of an agent that reports no cache', () => {
 		expect(claudeAdapter.reportsCache).not.toBe(false);
 		expect(policyOf(claudeAdapter).planContinuation({ ...input, externalForker: undefined })).toEqual({ how: 'fork-native' });
 		expect(policyOf(googleAdapter).planContinuation(input)).toMatchObject({ how: 'fork-external' });
+	});
+});
+
+describe('the folder a chat session is opened in', () => {
+	const lowerDrive = (folder: string) => folder.replace(/^[A-Z]:/, drive => drive.toLowerCase());
+
+	it('is the window folder the agent was launched in when the request names none', async () => {
+		const { agent, send } = harness();
+
+		await send(chat(1));
+
+		// `/work` is the launch folder of the harness, and never a `file://` URI.
+		expect(agent.createdIn).toEqual(['/work']);
+	});
+
+	it('is the folder the request names when this machine has it', async () => {
+		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-cwd-'));
+		try {
+			const { agent, send } = harness();
+
+			await send([system(`<environment_context>\n* Current working directory: ${folder}\n</environment_context>`), user('question 1')]);
+
+			expect(agent.createdIn).toEqual([lowerDrive(folder)]);
+		} finally {
+			fs.rmSync(folder, { recursive: true, force: true });
+		}
 	});
 });
 

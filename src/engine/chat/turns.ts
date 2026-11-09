@@ -3,49 +3,51 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as vscode from 'vscode';
-import type { AgentAdapter, AgentSettings } from '../adapter';
-import type { AcpSessionUpdate } from '../../engine/acp/agentClient';
-import type { AcpTokenUsage } from '../../engine/acp/protocol';
-import type { RequestMeasurement } from '../cache';
-import type { AcpContentBlock } from '../convert';
-import type { Log } from '../logging';
-import { RpcConnectionClosedError } from '../../engine/acp/rpc';
-import { effectiveToolWaitMs, type SessionPolicy } from '../sessionPolicy';
-import type { SavedSessionStore } from '../sessionStore';
+import type { AcpSessionUpdate } from '../acp/agentClient';
+import type { StreamEvent } from '../model/stream';
+import type { AcpContentBlock, AcpTokenUsage } from '../acp/protocol';
+import { RpcConnectionClosedError } from '../acp/rpc';
+import type { AgentAdapter, AgentSettings } from '../../core/adapter';
+import { effectiveToolWaitMs, type SessionPolicy } from '../../core/sessionPolicy';
+import type { RequestMeasurement } from './cache';
 import { checkpointOf, noteAgentUpdate } from './checkpoints';
 import { CANCELLED_TOOL_CALL, clearToolDeadline, disposeCancellations, failPendingToolCalls, releaseHeldToolCalls, sleepUntilActivity, trackCancellation, wakeTurn, watchToolCalls } from './heldCalls';
 import { keepsSessionAfterFailure } from './keys';
-import type { ModelList } from './modelList';
+import type { Log } from '../ports/host';
 import { rememberSession } from './reuse';
+import type { SavedSessionStore } from './sessionStore';
 import { describe } from './sessionOptions';
 import type { ActiveTurn, AgentApi, ChatSession, FinishedTurn } from './types';
 import { addModelCall, logCache, logContextCall, logReuseVerdict, logTokens, reportUsage, warnIfCallsMissing } from './usageReport';
+import { ChatError } from './ChatError';
 
 /**
- * How long to collect tool calls before handing a turn back to Copilot, so
+ * How long to collect tool calls before handing a turn back to the host, so
  * calls the agent issued in parallel travel in the same response.
  */
 const PARALLEL_TOOL_WINDOW_MS = 250;
 /** How long to wait for an abandoned turn to end before moving on. */
 const ABANDONED_TURN_WAIT_MS = 5_000;
 
-/** What the turns need from the provider that owns them. */
+/** What the turns need from the service that owns them. */
 export interface TurnHost {
 	adapter: AgentAdapter;
 	log: Log;
-	models: ModelList;
 	saved: SavedSessionStore;
 	/** The session policy to ask, and the settings it reads: a tool call's wait comes from them. */
 	policy(): SessionPolicy;
 	settings(): AgentSettings | undefined;
 	agent(): AgentApi;
+	/** Shares a context window the agent reported with whoever lists the models. */
+	refineWindow?(model: string, size: number): void;
 	finished(turn: FinishedTurn): void;
 	measured(measurement: RequestMeasurement): void;
 	destroySession(key: string): Promise<void>;
 	isSignInRequired(error: unknown): boolean;
 	promptSignIn(): void;
 	needsCredentials(): string;
+	/** Whether the service stopped the agent itself, so a turn it was serving ends with it. */
+	stopping?(): boolean;
 }
 
 export class TurnRunner {
@@ -65,7 +67,7 @@ export class TurnRunner {
 		return this.host.adapter.modelCallUsage !== undefined;
 	}
 
-	start(session: ChatSession, progress: vscode.Progress<vscode.LanguageModelResponsePart>, token: vscode.CancellationToken, blocks: readonly AcpContentBlock[]): ActiveTurn {
+	start(session: ChatSession, sink: (event: StreamEvent) => void, signal: AbortSignal, blocks: readonly AcpContentBlock[]): ActiveTurn {
 		// The prompt's callbacks need the turn, and the turn needs the prompt: it is
 		// assigned right below, before any callback can run.
 		// eslint-disable-next-line prefer-const
@@ -83,14 +85,14 @@ export class TurnRunner {
 				firstOutput('text');
 				turn.characters += text.length;
 				if (turn.streaming) {
-					turn.progress.report(new vscode.LanguageModelTextPart(text));
+					turn.sink({ type: 'text', text });
 				}
 			},
 			onThought: text => {
 				firstOutput('thinking');
 				turn.thoughtCharacters = (turn.thoughtCharacters ?? 0) + text.length;
 				if (turn.streaming) {
-					reportThinking(turn.progress, text);
+					turn.sink({ type: 'thought', text });
 				}
 			},
 			onUpdate: (update: AcpSessionUpdate) => {
@@ -100,7 +102,6 @@ export class TurnRunner {
 				this.handleUpdate(session, turn, update);
 			},
 			onUsage: this.reportsEachModelCall ? usage => this.measureRequest(session, turn, usage) : undefined,
-			token,
 		}).then(
 			async result => {
 				turn.result = result;
@@ -115,7 +116,7 @@ export class TurnRunner {
 			},
 			error => {
 				turn.error = error;
-				if (!turn.streaming && !token.isCancellationRequested) {
+				if (!turn.streaming && !signal.aborted) {
 					this.log(`Agent turn failed while waiting for a tool result: ${describe(error)}`, 'error');
 				}
 				throw error;
@@ -126,7 +127,7 @@ export class TurnRunner {
 		});
 
 		turn = {
-			progress,
+			sink,
 			prompt,
 			sessionId: session.acp.sessionId,
 			finished: false,
@@ -153,7 +154,7 @@ export class TurnRunner {
 
 	/**
 	 * Reads the last model call of a session whose agent sends no `usage_update`, so the context
-	 * Copilot shows is the one the agent holds and not the sum of every call of the turn.
+	 * the host shows is the one the agent holds and not the sum of every call of the turn.
 	 */
 	private async refreshLastCall(session: ChatSession, turn: ActiveTurn): Promise<void> {
 		const lastModelCall = this.host.adapter.lastModelCall;
@@ -189,7 +190,7 @@ export class TurnRunner {
 		if (typeof update.size === 'number' && update.size !== turn.contextSize) {
 			turn.contextSize = update.size;
 			if (this.host.adapter.modelPolicy.refineWindowFromUsage) {
-				this.host.models.refineWindow(session.model, update.size);
+				this.host.refineWindow?.(session.model, update.size);
 			}
 		}
 	}
@@ -203,16 +204,16 @@ export class TurnRunner {
 	}
 
 	/** Streams a turn into the current response until it finishes or needs a tool. */
-	async drive(key: string, session: ChatSession, progress: vscode.Progress<vscode.LanguageModelResponsePart>, token: vscode.CancellationToken, fingerprints: readonly string[], lastUser: number): Promise<void> {
+	async drive(key: string, session: ChatSession, sink: (event: StreamEvent) => void, signal: AbortSignal, fingerprints: readonly string[], lastUser: number): Promise<void> {
 		const turn = session.turn;
 		if (!turn) {
 			return;
 		}
-		turn.progress = progress;
+		turn.sink = sink;
 		turn.streaming = true;
 		clearToolDeadline(turn);
 		releaseHeldToolCalls(turn, this.log);
-		trackCancellation(turn, token, () => this.agent.cancel(session.acp.sessionId), this.log);
+		trackCancellation(turn, signal, () => this.agent.cancel(session.acp.sessionId), this.log);
 
 		try {
 			while (!turn.finished) {
@@ -224,7 +225,7 @@ export class TurnRunner {
 					reportUsage(turn, this.log);
 					turn.streaming = false;
 					this.watchTools(key, session, turn);
-					this.log(`Turn for ${key} asked for ${turn.pending.size} tool call(s); returning them to Copilot.`, 'debug');
+					this.log(`Turn for ${key} asked for ${turn.pending.size} tool call(s); returning them to the host.`, 'debug');
 					return;
 				}
 				await Promise.race([sleepUntilActivity(turn), turn.prompt.then(() => undefined, () => undefined)]);
@@ -244,7 +245,7 @@ export class TurnRunner {
 		failPendingToolCalls(turn, new Error("The turn ended before the tool result arrived."));
 
 		if (turn.error) {
-			await this.failTurn(key, session, turn, token, fingerprints, lastUser);
+			await this.failTurn(key, session, turn, signal, fingerprints, lastUser);
 			return;
 		}
 
@@ -270,15 +271,22 @@ export class TurnRunner {
 
 		const stopReason = turn.result?.stopReason ?? 'unknown';
 		this.log(`Turn finished in ${Date.now() - turn.startedAt}ms: ${turn.characters} character(s), ${turn.thoughtCharacters ?? 0} of thinking, ${turn.toolCalls} tool call(s), stop reason "${stopReason}".`);
-		if (stopReason === 'cancelled' && !token.isCancellationRequested) {
+		if (stopReason === 'cancelled' && !signal.aborted) {
 			this.log('The agent cancelled the turn on its own.', 'warn');
 		}
+		turn.sink({ type: 'done', stopReason });
 	}
 
 	/** Settles a failed turn: keeps or replaces the session, then fails the request with a readable message. */
-	private async failTurn(key: string, session: ChatSession, turn: ActiveTurn, token: vscode.CancellationToken, fingerprints: readonly string[], lastUser: number): Promise<void> {
+	private async failTurn(key: string, session: ChatSession, turn: ActiveTurn, signal: AbortSignal, fingerprints: readonly string[], lastUser: number): Promise<void> {
 		const name = this.host.adapter.displayName;
 		this.log(`Turn failed after ${Date.now() - turn.startedAt}ms: ${describe(turn.error)}`, 'error');
+
+		// The service stopped the agent itself. The turn died with it, and there is no
+		// session left to keep or to replace, so the request ends quietly.
+		if (this.host.stopping?.() === true) {
+			return;
+		}
 
 		// A failed turn is no reason to drop the session: the agent still holds the
 		// conversation, and the next request reads it from the prompt cache instead
@@ -297,25 +305,25 @@ export class TurnRunner {
 
 		if (this.host.isSignInRequired(turn.error)) {
 			this.host.promptSignIn();
-			throw new vscode.LanguageModelError(this.host.needsCredentials());
+			throw new ChatError(this.host.needsCredentials());
 		}
 		if (turn.error instanceof RpcConnectionClosedError) {
-			throw new vscode.LanguageModelError(`The ${name} agent stopped. Send your message again to start a new session; if it keeps happening, restart the agent from the ACP Hub sidebar.`);
+			throw new ChatError(`The ${name} agent stopped. Send your message again to start a new session; if it keeps happening, restart the agent from the ACP Hub sidebar.`);
 		}
-		if (token.isCancellationRequested) {
+		if (signal.aborted) {
 			return;
 		}
-		throw new vscode.LanguageModelError(`${name} failed: ${describe(turn.error)}`);
+		throw new ChatError(`${name} failed: ${describe(turn.error)}`);
 	}
 
-	/** After the response handed tools over, fails them if Copilot never comes back before the policy's wait. */
+	/** After the response handed tools over, fails them if the host never comes back before the policy's wait. */
 	private watchTools(key: string, session: ChatSession, turn: ActiveTurn): void {
 		const timeoutMs = effectiveToolWaitMs(this.host.policy(), this.host.settings() ?? {});
 		if (!Number.isFinite(timeoutMs)) {
 			return;
 		}
 		watchToolCalls(turn, timeoutMs, () => {
-			this.log(`Copilot did not pick up the tool call(s) of ${key} within ${Math.round(timeoutMs / 1000)}s; ending the turn.`, 'warn');
+			this.log(`The host did not pick up the tool call(s) of ${key} within ${Math.round(timeoutMs / 1000)}s; ending the turn.`, 'warn');
 			failPendingToolCalls(turn, new Error("The chat stopped waiting for this tool call."));
 			this.agent.cancel(session.acp.sessionId);
 			if (session.turn === turn) {
@@ -337,14 +345,6 @@ export class TurnRunner {
 		failPendingToolCalls(turn, new Error(CANCELLED_TOOL_CALL));
 		this.agent.cancel(session.acp.sessionId);
 		await Promise.race([turn.prompt.then(() => undefined, () => undefined), delay(ABANDONED_TURN_WAIT_MS)]);
-	}
-}
-
-/** Reports a thinking chunk when the running VS Code exposes thinking parts. */
-function reportThinking(progress: vscode.Progress<vscode.LanguageModelResponsePart>, text: string): void {
-	const ThinkingPart = (vscode as unknown as { LanguageModelThinkingPart?: new (value: string) => unknown }).LanguageModelThinkingPart;
-	if (ThinkingPart) {
-		progress.report(new ThinkingPart(text) as vscode.LanguageModelResponsePart);
 	}
 }
 

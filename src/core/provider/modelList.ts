@@ -8,7 +8,7 @@ import type { AgentAdapter, ModelChoice, ModelPolicy } from '../adapter';
 import { AdapterNotInstalledError, type AgentSession } from '../../engine/acp/agentClient';
 import type { Log } from '../logging';
 import { acpModelValue, effortLevelsOf, findModelOption, flattenChoices, toModelVariants } from '../models';
-import { describe, rpcDetailsOf } from './sessionOptions';
+import { describe, rpcDetailsOf } from '../../engine/chat/sessionOptions';
 import type { AgentApi } from './types';
 
 const MODEL_RETRY_BASE_MS = 5_000;
@@ -242,3 +242,4 @@ export class ModelList {
 		this.retryTimer.unref();
 	}
 }
+

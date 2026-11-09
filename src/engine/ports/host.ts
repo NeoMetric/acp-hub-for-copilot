@@ -16,6 +16,8 @@ export interface ChatIdentity {
 	readonly id: string;
 	readonly cwd: string;
 	readonly workspaceFolders: readonly string[];
+	/** The opening words of the chat, when the host can name it. */
+	readonly label?: string;
 }
 
 /** A tool call a host is asked to run. */

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AgentSettings } from '../adapter';
+import type { AgentSettings } from '../../core/adapter';
 
 /** Chat sessions kept alive at once; the least recently used idle one is closed beyond this. */
 export const MAX_CHAT_SESSIONS = 8;

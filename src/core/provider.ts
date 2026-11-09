@@ -3,48 +3,38 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { randomBytes } from 'crypto';
-import * as path from 'path';
 import * as vscode from 'vscode';
-import type { AgentAdapter, AgentSettings, ConversationForker, LaunchContext } from './adapter';
-import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentSession, type CreateSessionOptions, type ForkPoint } from '../engine/acp/agentClient';
+import type { AgentAdapter, AgentSettings } from './adapter';
+import { AdapterNotInstalledError } from '../engine/acp/agentClient';
 import type { McpToolResult } from './bridge';
 import type { RequestMeasurement } from './cache';
-import { carriesToolResults, characterCountOf, diverged, lastUserMessageIndex, persistentFingerprints, skillContextAfterReply, userWordsAfterReply } from './convert';
+import { characterCountOf, readTranscriptOptions } from './convert';
 import type { Log } from './logging';
-import { acpModelValue, effortOf } from './models';
-import { createRequestDump, summarizeRequest } from './requestDump';
-import { isAuthRequiredError } from '../engine/acp/rpc';
-import { policyOf, type SessionPolicy } from './sessionPolicy';
-import { SavedSessionStore, toolsHashOf } from './sessionStore';
-import { stateStoreOf } from './stateStore';
+import { effortOf } from './models';
+import { createRequestDump } from './requestDump';
+import { resolveCwd, systemGuidanceOf, workspaceFoldersOf } from './requestContext';
 import { createSessionPrompt } from './systemPrompt';
-import { buildPromptBlocks } from './provider/assemble';
-import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './provider/heldCalls';
-import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESSION_IDLE_MS } from './provider/idle';
-import { chatContextOf, chatIdOf, chatLabelOf, describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, sessionKey, toolChangeOf, toolsDiffer } from './provider/keys';
+import { ChatError } from '../engine/chat/ChatError';
+import { ChatService } from '../engine/chat/ChatService';
+import type { FinishedTurn, ToolBridge } from '../engine/chat/types';
+import type { ChatMessage, ChatRequest, Part, ToolDef, ToolResult } from '../engine/model/chat';
+import type { StreamEvent } from '../engine/model/stream';
+import type { HostPort } from '../engine/ports/host';
+import type { ProviderDeps } from './provider/types';
 import { ModelList } from './provider/modelList';
-import { countsOf } from './provider/checkpoints';
-import { PromptArchive } from './provider/promptArchive';
-import { findEditFork, findReusable, promptHashOf } from './provider/reuse';
-import { applyEffort, applyModel, describe, switchModelInPlace } from './provider/sessionOptions';
-import { startLaps, type Lap } from './provider/timing';
-import { TurnRunner } from './provider/turns';
-import type { AgentApi, ChatContext, ChatSession, FinishedTurn, ProviderDeps, Reuse } from './provider/types';
-import { CHARS_PER_TOKEN } from './provider/usageReport';
-import { bridgeServer, WarmSession } from './provider/warmSession';
+import { chatIdOf, chatLabelOf, sessionKey } from './provider/keys';
+import { stateStoreOf } from './stateStore';
+import { CHARS_PER_TOKEN } from '../engine/chat/usageReport';
 
 export { chatIdOf, chatLabelOf, guidanceChangeOf, guidanceDiffers, guidanceLineHashes, keepsSessionAfterFailure, sessionKey, toolsDiffer } from './provider/keys';
 export type { AgentApi, FinishedTurn, ProviderDeps } from './provider/types';
 
-/** Per-process nonce, so call ids from an earlier run in a chat's history never match a new call. */
-const TOOL_CALL_ID_PREFIX = `acp-hub-${randomBytes(4).toString('hex')}-`;
-
 /**
- * Publishes the models of one ACP agent to Copilot Chat and drives one ACP
- * session per chat. There is one provider per agent adapter; it owns the
- * agent's process (through an {@link AgentClient}) and shares nothing with the
- * providers of other agents.
+ * Publishes the models of one ACP agent to Copilot Chat and translates a
+ * workbench request into the engine's own {@link ChatRequest}. There is one
+ * provider per agent adapter; everything it does with a chat — sessions, reuse,
+ * forks, tool continuation, idle release — belongs to the {@link ChatService}
+ * it drives.
  */
 export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.LanguageModelChatInformation>, vscode.Disposable {
 
@@ -63,27 +53,13 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	/** Fires after each model call of a running turn, for agents that report each call. */
 	readonly onDidMeasureRequest = this.requestEmitter.event;
 
-	private readonly sessions = new Map<string, ChatSession>();
-	private readonly saved: SavedSessionStore;
+	private readonly service: ChatService;
 	private readonly log: Log;
-	private client: AgentApi | undefined;
-	private clientListener: vscode.Disposable | undefined;
-	/** What the agent was last launched with; the settings are read from it. */
-	private launch: LaunchContext | undefined;
-	private dumpRequest: ReturnType<typeof createRequestDump> | undefined;
-	private sessionPrompt: ReturnType<typeof createSessionPrompt> | undefined;
 	private readonly models: ModelList;
-	private readonly warm: WarmSession;
-	private readonly turns: TurnRunner;
-	private toolCallSeq = 0;
-	/** When the agent was last asked for anything or let go of a session; the idle shutdown counts from here. */
-	private lastAgentUse = Date.now();
-	/** Sessions being closed, so a request for the same chat waits until the agent has let go of the session. */
-	private readonly closing = new Map<string, Promise<void>>();
-	private sweepTimer: NodeJS.Timeout | undefined;
+	private dumpRequest: ReturnType<typeof createRequestDump> | undefined;
+	/** What the workbench sent with each request, for the parts of it only it can read. */
+	private readonly sent = new WeakMap<ChatRequest, { messages: readonly vscode.LanguageModelChatRequestMessage[]; options: vscode.ProvideLanguageModelChatResponseOptions }>();
 	private signInWarningShown = false;
-	/** Set when the idle shutdown stopped the agent, so the user's return starts it again; see {@link wakeAfterIdle}. */
-	private stoppedForIdle = false;
 	private disposed = false;
 
 	constructor(
@@ -91,92 +67,50 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		private readonly deps: ProviderDeps,
 	) {
 		this.log = deps.log;
-		this.saved = new SavedSessionStore(stateStoreOf(deps.state), `acpHub.savedSessions.${adapter.id}`);
-		this.warm = new WarmSession({
+		this.service = new ChatService({
 			adapter,
-			bridge: deps.bridge,
-			agentClient: () => this.agentClient(),
-			cwd: () => this.launch?.workspaceFolder ?? '',
-			opened: () => this.scheduleIdleSweep(),
+			host: this.host(),
+			bridge: this.bridge(),
+			resolveLaunch: () => deps.resolveLaunch(),
+			createClient: deps.createClient && ((adapter, ctx, clientDeps) => deps.createClient!(adapter, ctx, clientDeps)),
+			client: deps.client,
+			buildSessionPrompt: (tools, folders, guidance) => this.buildSessionPrompt(tools, folders, guidance),
+			transcriptOptions: () => readTranscriptOptions(),
+			dumpRequest: (request, settings) => this.recordRequest(request, settings),
+			refineWindow: (model, size) => this.models?.refineWindow(model, size),
+			finished: turn => this.turnEmitter.fire(turn),
+			measured: measurement => this.requestEmitter.fire(measurement),
+			signInRequired: () => this.promptSignIn(),
+			agentChanged: change => {
+				if (change === 'restarted') {
+					// The account may have changed, and with it the models on offer and their windows.
+					this.models.reset();
+					this.signInWarningShown = false;
+					this.changeEmitter.fire();
+				}
+			},
+			isEnabled: () => this.deps.isEnabled?.() !== false,
 		});
 		this.models = new ModelList({
 			adapter,
 			state: deps.state,
 			log: deps.log,
-			agentClient: () => this.agentClient(),
-			warmSession: () => this.ensureWarmSession(),
-			agentUsed: () => {
-				this.lastAgentUse = Date.now();
-				this.scheduleIdleSweep();
-			},
-			isSignInRequired: error => this.isSignInRequired(error),
-			promptSignIn: () => this.promptSignIn(),
+			agentClient: () => this.service.client(),
+			warmSession: () => this.service.openWarmSession(),
+			agentUsed: () => this.service.touch(),
+			isSignInRequired: error => this.service.needsSignIn(error),
+			promptSignIn: () => this.service.requestSignIn(),
 			changed: () => this.changeEmitter.fire(),
 		}, `acpHub.models.${adapter.id}`);
-		this.turns = new TurnRunner({
-			adapter,
-			log: deps.log,
-			models: this.models,
-			saved: this.saved,
-			policy: () => this.policy,
-			settings: () => this.settings,
-			agent: () => this.agent,
-			finished: turn => this.turnEmitter.fire(turn),
-			measured: measurement => this.requestEmitter.fire(measurement),
-			destroySession: key => this.destroySession(key),
-			isSignInRequired: error => this.isSignInRequired(error),
-			promptSignIn: () => this.promptSignIn(),
-			needsCredentials: () => this.needsCredentials(),
-		});
 	}
 
 	get vendor(): string {
 		return this.adapter.vendor;
 	}
 
-	private get settings(): AgentSettings | undefined {
-		return this.launch?.settings;
-	}
-
-	/** The session policy the provider asks: the adapter's own, or the native default it inherits. */
-	private get policy(): SessionPolicy {
-		return policyOf(this.adapter);
-	}
-
-	/** Whether the agent reports the usage of each model call, not only of the turn. */
-	private get reportsEachModelCall(): boolean {
-		return this.adapter.modelCallUsage !== undefined;
-	}
-
-	/**
-	 * The agent client, created on first use from the launch context. An agent
-	 * that is not installed has no launch context, which says so right away
-	 * instead of waiting for a process that will never come.
-	 */
-	private async agentClient(): Promise<AgentApi> {
-		const ctx = await this.deps.resolveLaunch();
-		if (!ctx) {
-			throw new AdapterNotInstalledError(this.adapter.displayName);
-		}
-		this.launch = ctx;
-		if (this.client) {
-			await this.client.updateContext(ctx);
-			return this.client;
-		}
-		const client = this.deps.createClient
-			? this.deps.createClient(this.adapter, ctx, this.deps.client)
-			: new AgentClient(this.adapter, ctx, this.deps.client);
-		this.client = client;
-		this.clientListener = client.onDidChange(change => this.handleAgentChange(change));
-		return client;
-	}
-
-	/** The client of a session that exists; only called once {@link agentClient} has run. */
-	private get agent(): AgentApi {
-		if (!this.client) {
-			throw new AdapterNotInstalledError(this.adapter.displayName);
-		}
-		return this.client;
+	/** The engine use case this provider drives. */
+	get chat(): ChatService {
+		return this.service;
 	}
 
 	provideLanguageModelChatInformation(options: vscode.PrepareLanguageModelChatModelOptions, token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
@@ -197,172 +131,24 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			return;
 		}
 		try {
-			await this.respond(model, messages, options, progress, token);
+			const request = this.toRequest(model, messages, options);
+			const controller = new AbortController();
+			const subscription = token.onCancellationRequested(() => controller.abort());
+			try {
+				await this.service.respond(request, event => this.report(event, progress), controller.signal);
+			} finally {
+				subscription.dispose();
+			}
 		} catch (error) {
 			this.log(`Language model request failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
 			if (error instanceof AdapterNotInstalledError) {
 				throw new vscode.LanguageModelError(error.message);
 			}
+			if (error instanceof ChatError) {
+				throw new vscode.LanguageModelError(error.message);
+			}
 			throw error;
 		}
-	}
-
-	private async respond(
-		model: vscode.LanguageModelChatInformation,
-		messages: readonly vscode.LanguageModelChatRequestMessage[],
-		options: vscode.ProvideLanguageModelChatResponseOptions,
-		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
-		token: vscode.CancellationToken,
-	): Promise<void> {
-		const key = sessionKey(messages, options);
-		const lap = startLaps(this.log, key);
-		await this.agentClient();
-		lap('agent client ready');
-
-		this.lastAgentUse = Date.now();
-		const tools = options.tools ?? [];
-		const context = chatContextOf(messages, this.launch?.workspaceFolder ?? '');
-		this.recordRequest(key, messages, options);
-		const effort = effortOf(options);
-		const toolNames = tools.map(tool => tool.name);
-		this.log(`Request shape: ${summarizeRequest(messages, options)}`, 'debug');
-		this.log(`Request from Copilot: model ${model.id}, ${messages.length} message(s), ${tools.length} tool(s): ${toolNames.join(', ') || 'none'}`, 'debug');
-		// A session released a moment ago must be gone from the agent before it is resumed.
-		await this.closing.get(key);
-		lap(`previous session settled, ${this.sessions.has(key) ? 'chat has a live session' : 'new chat'}`);
-		let session = this.sessions.get(key);
-		if (session) {
-			// Re-insert so the map stays ordered by recency of use.
-			this.sessions.delete(key);
-			this.sessions.set(key, session);
-			session.lastActive = Date.now();
-		}
-
-		if (session && session.model !== model.id) {
-			await this.turns.abort(session);
-			session = await this.switchModel(key, session, model, tools, context);
-		}
-		const fingerprints = persistentFingerprints(messages);
-		const lastUser = lastUserMessageIndex(messages);
-
-		// Copilot ran the tools of the pending turn: hand the results back to the
-		// agent and keep streaming the same turn into this response. The tools of the
-		// session stay as they are until the turn ends, so a result is never dropped.
-		// A message the user typed while the turn ran comes next to those results. As
-		// natively, it ends the turn and starts a new one, so it falls through below.
-		const userWords = session?.turn ? userWordsAfterReply(messages) : [];
-		const skillContext = session?.turn ? skillContextAfterReply(messages) : undefined;
-		if (skillContext && session?.turn && !session.turn.pending.has(skillContext.callId)) {
-			this.log(`Skill context could not be matched to a pending tool call for ${key}.`, 'error');
-			await this.turns.abort(session);
-			throw new vscode.LanguageModelError('Skill context could not be matched to its tool call. Please retry your request.');
-		}
-		const resolved = session?.turn ? resolveToolResults(session.turn, messages, this.log) : false;
-		if (session && session.turn && userWords.length === 0 && resolved) {
-			this.markSeen(session, fingerprints);
-			this.applyTools(session, tools);
-			await applyEffort(this.agent, this.adapter.modelPolicy, session, effort, this.log);
-			await this.turns.drive(key, session, progress, token, fingerprints, lastUser);
-			return;
-		}
-		// The result of a call that already ended, such as one that timed out: the agent
-		// went on without it, so the running turn is still the one to answer this request.
-		if (session && session.turn && !session.turn.finished && userWords.length === 0 && carriesToolResults(messages)) {
-			if (session.turn.pending.size > 0 && session.turn.held.length === 0) {
-				await this.turns.abort(session);
-				throw new vscode.LanguageModelError("A tool result could not be matched to the pending call. Please retry your request.");
-			}
-			this.log(`Late tool results for ${key}; the turn is still running, so this response continues it.`);
-			this.markSeen(session, fingerprints);
-			this.applyTools(session, tools);
-			await applyEffort(this.agent, this.adapter.modelPolicy, session, effort, this.log);
-			await this.turns.drive(key, session, progress, token, fingerprints, lastUser);
-			return;
-		}
-		if (session?.turn) {
-			this.log(`The pending turn for ${key} was abandoned; cancelling it.`, 'warn');
-			await this.turns.abort(session);
-		}
-
-		// An agent that takes a changed tool set in place gets it from `applyTools` below; any other reads
-		// its tools only when its session opens.
-		const toolsChanged = this.policy.toolsChangedAction() === 'reopen' && session !== undefined && toolsDiffer(session.openedTools, tools);
-		if (session && tools.length > 0 && (!session.hasPrompt || toolsChanged)) {
-			// The chat was opened by a request that offered no tools, such as a title,
-			// and so got no workspace prompt; or Copilot now offers other tools than the
-			// session has. The agent takes its prompt and its tools when it opens a session,
-			// so the chat gets a new one that continues the stored conversation when it can,
-			// and otherwise has its messages restored.
-			const change = session.hasPrompt ? ` (${describeToolChange(toolChangeOf(session.openedTools, tools.map(tool => tool.name)))})` : '';
-			this.log(`Chat ${key} ${session.hasPrompt ? `changed its tools${change}` : 'now offers tools'}; reopening it with the current ones.`);
-			await this.destroySession(key);
-			session = undefined;
-		}
-		if (!session) {
-			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, await this.canFork(), this.log) : undefined;
-			session = await this.createChatSession(key, model, tools, context, reuse, effort, lap);
-			lap('chat session created');
-		} else if (tools.length > 0 && guidanceDiffers(session.context.guidance, context.guidance)) {
-			this.sendGuidanceChange(key, session, context.guidance);
-		}
-		this.applyTools(session, tools);
-		await applyEffort(this.agent, this.adapter.modelPolicy, session, effort, this.log);
-		lap('effort applied');
-
-		// A session that has seen nothing yet only gets the current turn, plus a
-		// transcript of what came before: the chat may predate this session (window
-		// reload, agent restart), and the agent has no other memory of it.
-		let startIndex = session.history.length === 0 ? lastUser : session.history.length;
-		let restoreContext = session.history.length === 0;
-
-		if (session.history.length > fingerprints.length || diverged(session.history, fingerprints)) {
-			const at = session.history.findIndex((fingerprint, index) => fingerprint !== fingerprints[index]);
-			this.log(`Chat history changed for ${key}. The session had seen ${session.history.length} message(s), the request has ${fingerprints.length}; ${at < 0 ? 'the request is shorter and otherwise the same' : `the first difference is message #${at + 1}, shown in full next`}.`, 'warn');
-			if (at >= 0) {
-				this.log(`[reuse] Message #${at + 1} was: ${session.history[at] ?? ''}`, 'warn');
-				this.log(`[reuse] Message #${at + 1} is now: ${fingerprints[at] ?? ''}`, 'warn');
-			}
-			// The session is left for a fork of the turn the edit still agrees with; with none, or
-			// when the fork fails, the chat gets a new session and is restored as a transcript.
-			const reuse = tools.length > 0 && await this.canFork() ? findEditFork(this.saved, key, fingerprints, lastUser, context, this.log) : undefined;
-			this.log(reuse ? `[reuse] Chat ${key} was edited; forking from the checkpoint after ${reuse.checkpoint?.messages} message(s).` : `[reuse] Chat ${key} was edited and has no checkpoint to fork from; starting a fresh ACP session.`, 'debug');
-			await this.destroySession(key);
-			session = await this.createChatSession(key, model, tools, context, reuse, effort);
-			this.applyTools(session, tools);
-			await applyEffort(this.agent, this.adapter.modelPolicy, session, effort, this.log);
-			restoreContext = session.history.length === 0;
-			startIndex = restoreContext ? lastUser : session.history.length;
-		}
-
-		const blocks = buildPromptBlocks(messages, startIndex, lastUser, restoreContext, session, this.log);
-		if (blocks.length === 0) {
-			this.log(`The request contained no user text to forward to ${this.adapter.displayName}.`, 'warn');
-			throw new vscode.LanguageModelError(`There is no user message to send to ${this.adapter.displayName}.`);
-		}
-
-		// The agent has been given everything up to here. A turn that never finishes, because
-		// the chat was abandoned, is cancelled by the next request, which then looks
-		// like the start of the chat and sends the first message again.
-		this.markSeen(session, fingerprints);
-		session.chat ??= { id: chatIdOf(messages, options), label: chatLabelOf(messages), workspace: session.context.cwd };
-		session.turn = this.turns.start(session, progress, token, blocks);
-		lap('prompt sent to the agent');
-		await this.turns.drive(key, session, progress, token, fingerprints, lastUser);
-	}
-
-	/** Records the request for inspection when the user turned that on for this agent. */
-	private recordRequest(key: string, messages: readonly vscode.LanguageModelChatRequestMessage[], options: vscode.ProvideLanguageModelChatResponseOptions): void {
-		if (this.settings?.dumpRequests !== true || !this.deps.requestDumpDir) {
-			return;
-		}
-		this.dumpRequest ??= createRequestDump(this.deps.requestDumpDir, this.log);
-		this.dumpRequest(key, messages, options);
-	}
-
-	/** Records that the agent has been given every message of this request. */
-	private markSeen(session: ChatSession, fingerprints: readonly string[]): void {
-		session.history.length = 0;
-		session.history.push(...fingerprints);
 	}
 
 	async provideTokenCount(_model: vscode.LanguageModelChatInformation, value: string | vscode.LanguageModelChatRequestMessage, _token: vscode.CancellationToken): Promise<number> {
@@ -371,20 +157,13 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	}
 
 	/** Starts the agent to let its own browser sign-in flow run. */
-	async startForSignIn(methodId?: string): Promise<boolean> {
-		const agent = await this.agentClient();
-		await agent.restart();
-		if (methodId) {
-			await agent.signInWithMethod(methodId);
-		} else {
-			await agent.ensureStarted();
-		}
-		return !agent.requiresSignIn;
+	startForSignIn(methodId?: string): Promise<boolean> {
+		return this.service.startForSignIn(methodId);
 	}
 
 	/** Restarts the agent process; the provider's caches are reset with it. */
 	async restart(): Promise<void> {
-		await this.client?.restart();
+		await this.service.restart();
 	}
 
 	/** Forgets the models and asks the workbench to list them again, for example after the agent was installed or signed in. */
@@ -404,64 +183,36 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			await vscode.lm.selectChatModels({ vendor: this.adapter.vendor });
 			this.log('Published models to the workbench.', 'debug');
 		} catch (error) {
-			this.log(`Could not publish models: ${describe(error)}`, 'error');
+			this.log(`Could not publish models: ${this.describe(error)}`, 'error');
 		}
 	}
 
 	/** Starts the agent and opens the warm session; `false` when the agent is not installed. */
 	async prepareAgent(): Promise<boolean> {
 		try {
-			await this.agentClient();
+			await this.service.warm();
 		} catch (error) {
 			if (error instanceof AdapterNotInstalledError) {
 				return false;
 			}
 			throw error;
 		}
-		await this.ensureWarmSession();
 		return true;
 	}
 
-	/**
-	 * Starts the agent again, with its warm session, when the idle shutdown stopped it and the user is
-	 * back in the window. Starting takes seconds (Codex reaches its servers before it opens a session,
-	 * and longer on a slow connection), which the next chat would otherwise wait for. Once per stop.
-	 */
+	/** Starts the agent again, with its warm session, when the idle shutdown stopped it and the user is back in the window. */
 	wakeAfterIdle(): void {
-		if (!this.stoppedForIdle || this.disposed) {
-			return;
-		}
-		this.stoppedForIdle = false;
-		if (this.client?.isRunning || this.deps.isEnabled?.() === false) {
-			return;
-		}
-		this.log(`The window is in use again; starting the ${this.adapter.displayName} agent it stopped for being idle.`);
-		void this.prepareAgent().catch(error => this.log(`Could not start the ${this.adapter.displayName} agent again: ${describe(error)}`, 'debug'));
+		this.service.wakeAfterIdle();
 	}
 
-	/**
-	 * Sends one prompt to the warm session and returns the reply text, or
-	 * `undefined` when the agent is not installed. Usage sources use it for
-	 * commands the agent answers itself, which cost no model call.
-	 */
-	async askAgent(prompt: string): Promise<string | undefined> {
-		if (!await this.prepareAgent()) {
-			return undefined;
-		}
-		const warm = await this.ensureWarmSession();
-		let reply = '';
-		await this.agent.prompt(warm.sessionId, [{ type: 'text', text: prompt }], {
-			onText: text => {
-				reply += text;
-			},
-		});
-		this.warm.touch();
-		return reply;
+	/** Sends one prompt to the warm session and returns the reply text, or `undefined` when the agent is not installed. */
+	askAgent(prompt: string): Promise<string | undefined> {
+		return this.service.askAgent(prompt);
 	}
 
-	/** Cancels every running turn and closes every chat session. */
-	async closeAllSessions(): Promise<void> {
-		await Promise.all([...this.sessions.keys()].map(key => this.destroySession(key)));
+	/** Cancels every running turn and closes every chat session; the agent process stays for the chats that follow. */
+	closeAllSessions(): Promise<void> {
+		return this.service.closeAllSessions();
 	}
 
 	dispose(): void {
@@ -469,483 +220,139 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			return;
 		}
 		this.disposed = true;
-		clearTimeout(this.sweepTimer);
 		this.models.dispose();
-		this.clientListener?.dispose();
+		this.service.dispose();
 		this.changeEmitter.dispose();
 		this.turnEmitter.dispose();
 		this.signInEmitter.dispose();
 		this.requestEmitter.dispose();
-		void this.closeAllSessions();
-		this.warm.release();
-		this.client?.dispose();
 	}
 
-	private ensureWarmSession(): Promise<AgentSession> {
-		this.lastAgentUse = Date.now();
-		return this.warm.ensure();
+	/** Builds the engine's request from what the workbench sent. */
+	private toRequest(
+		model: vscode.LanguageModelChatInformation,
+		messages: readonly vscode.LanguageModelChatRequestMessage[],
+		options: vscode.ProvideLanguageModelChatResponseOptions,
+	): ChatRequest {
+		const folders = workspaceFoldersOf(messages);
+		const request: ChatRequest = {
+			chatId: sessionKey(messages, options),
+			// The folder the request names, when this machine has it. The window's folder is
+			// added when the engine asks for the chat, by which time the agent's launch is read.
+			cwd: resolveCwd(folders, ''),
+			messages: messages.map(toChatMessage),
+			tools: (options.tools ?? []).map(toToolDef),
+			model: model.id,
+			effort: effortOf(options),
+			systemGuidance: systemGuidanceOf(messages),
+		};
+		this.sent.set(request, { messages, options });
+		return request;
 	}
 
-	/** Arms the sweep for idle sessions; it re-arms itself for as long as a session is left to watch. */
-	private scheduleIdleSweep(): void {
-		if (this.disposed || this.sweepTimer) {
+	/** Reports one engine event to the workbench as the part it renders. */
+	private report(event: StreamEvent, progress: vscode.Progress<vscode.LanguageModelResponsePart>): void {
+		switch (event.type) {
+			case 'text':
+				progress.report(new vscode.LanguageModelTextPart(event.text));
+				return;
+			case 'thought':
+				reportThinking(progress, event.text);
+				return;
+			case 'tool-call':
+				progress.report(new vscode.LanguageModelToolCallPart(event.callId, event.name, (event.input ?? {}) as object));
+				return;
+			case 'usage':
+				progress.report(vscode.LanguageModelDataPart.json({
+					prompt_tokens: event.promptTokens,
+					completion_tokens: event.outputTokens,
+					total_tokens: event.promptTokens + event.outputTokens,
+					prompt_tokens_details: { cached_tokens: event.cachedTokens },
+					completion_tokens_details: { reasoning_tokens: event.reasoningTokens ?? 0 },
+				}, 'usage'));
+				return;
+			default:
+				return;
+		}
+	}
+
+	/** Records the request for inspection when the user turned that on for this agent. */
+	private recordRequest(request: ChatRequest, settings: AgentSettings | undefined): void {
+		if (settings?.dumpRequests !== true || !this.deps.requestDumpDir) {
 			return;
 		}
-		this.sweepTimer = setTimeout(() => {
-			this.sweepTimer = undefined;
-			this.releaseIdleSessions();
-			this.stopIdleAgent();
-			if (this.sessions.size > 0 || this.warm.current || (this.client?.isRunning && agentIdleMs(this.settings) > 0)) {
-				this.scheduleIdleSweep();
-			}
-		}, IDLE_SWEEP_MS);
-		this.sweepTimer.unref();
-	}
-
-	/**
-	 * Gives back the sessions nobody is using. A session with a turn is never
-	 * released, including one waiting for Copilot to run a tool. A released chat
-	 * is picked up again from its stored conversation on its next request.
-	 */
-	private releaseIdleSessions(): void {
-		const now = Date.now();
-		const idleMs = idleTimeoutMs(this.settings);
-		if (idleMs > 0) {
-			for (const [key, session] of [...this.sessions]) {
-				if (!session.turn && this.client?.hasBackgroundTasks(session.acp.sessionId)) {
-					session.lastActive = now;
-					continue;
-				}
-				if (!session.turn && now - session.lastActive >= idleMs) {
-					this.log(`Releasing the idle chat session ${key} (${session.acp.sessionId}); its next message resumes it.`, 'debug');
-					void this.destroySession(key);
-				}
-			}
-		}
-		const warm = this.warm.current;
-		if (warm && now - this.warm.usedAt >= WARM_SESSION_IDLE_MS) {
-			this.log(`Releasing the session that reads the models (${warm.sessionId}).`, 'debug');
-			this.warm.release();
-			this.lastAgentUse = now;
-			void this.client?.closeSession(warm.sessionId);
-		}
-	}
-
-	/** Stops the agent process when no chat, release or lookup has needed it for the configured time. */
-	private stopIdleAgent(): void {
-		const idleMs = agentIdleMs(this.settings);
-		if (idleMs <= 0 || !this.client?.isRunning) {
+		const sent = this.sent.get(request);
+		if (!sent) {
 			return;
 		}
-		if (this.sessions.size > 0 || this.closing.size > 0 || this.warm.current || this.warm.isOpening) {
-			return;
-		}
-		if (Date.now() - this.lastAgentUse < idleMs) {
-			return;
-		}
-		void this.client.stopWhenIdle();
-	}
-
-	private async createChatSession(key: string, model: vscode.LanguageModelChatInformation, tools: readonly vscode.LanguageModelChatTool[], context: ChatContext, reuse?: Reuse, effort?: string, lap?: Lap): Promise<ChatSession> {
-		const agent = this.agent;
-		const endpoint = await this.deps.bridge.registerSession(tools, (name, input, toolToken) => this.executeTool(key, name, input, toolToken), { maxResultChars: this.adapter.maxToolResultChars });
-		lap?.(`tool bridge registered (${tools.length} tool(s))`);
-		try {
-			// A request that offers no tools is Copilot's own, such as a chat title: the
-			// agent could not read a customization file without a tool, so the prompt
-			// would only be paid for in tokens.
-			let systemPromptAppend = tools.length === 0
-				? undefined
-				: await this.buildSessionPrompt(tools, context.folders, context.guidance);
-			lap?.(`session prompt built (${systemPromptAppend?.length ?? 0} character(s))`);
-			// The prompt leads the conversation, so a reworded one misses the cache for all of it. A policy
-			// that opens a stored conversation with the prompt it began with is sent that one; what changed
-			// in the guidance is sent as a message.
-			const policy = this.policy;
-			if (policy.keepsSavedPrompt) {
-				const savedHash = reuse?.saved.promptHash;
-				const savedPrompt = savedHash && systemPromptAppend && savedHash !== promptHashOf(systemPromptAppend)
-					? await this.promptArchive().recall(savedHash)
-					: undefined;
-				const chosen = policy.promptForOpen({ savedPrompt, rebuilt: systemPromptAppend });
-				if (savedPrompt !== undefined && chosen === savedPrompt) {
-					this.log(`[reuse] Sending the session prompt the saved session began with (${savedHash}) instead of the rebuilt one (${promptHashOf(systemPromptAppend)}), so the cache can serve the conversation.`, 'debug');
-				}
-				systemPromptAppend = chosen;
-				void this.promptArchive().remember(systemPromptAppend);
-			}
-			const options: CreateSessionOptions = {
-				cwd: context.cwd,
-				mcpServers: [bridgeServer(endpoint)],
-				model: acpModelValue(model.id),
-				systemPromptAppend,
-				reportEachModelCall: this.reportsEachModelCall,
-			};
-			const promptHash = promptHashOf(systemPromptAppend);
-
-			let acp: AgentSession | undefined;
-			let reused: ChatSession['reused'];
-			if (reuse) {
-				if (reuse.saved.promptHash !== promptHash) {
-					this.log(`[reuse] The session prompt differs from the saved one (${reuse.saved.promptHash} -> ${promptHash}); the first model call will show whether the cache still served it.`);
-				}
-				try {
-					const point = reuse.checkpoint && { messageId: reuse.checkpoint.messageId, messageFingerprint: reuse.checkpoint.fingerprint, messageOccurrence: reuse.checkpoint.occurrence };
-					// A fork that cannot be made (the source is mid-turn, or the tool that forks is missing) leaves `opened` empty: the chat gets a new session.
-					const opened = reuse.kind === 'resume'
-						? await agent.resumeSession(reuse.saved.sessionId, options)
-						: await this.fork(reuse, options, point, reuse.saved.key === key);
-					if (opened) {
-						acp = opened;
-						reused = { how: reuse.kind === 'resume' ? 'resumed' : 'forked', from: reuse.saved.sessionId, logged: false };
-						this.log(`[reuse] ${reuse.kind === 'resume' ? 'Resumed' : `Forked ${reuse.saved.sessionId}${point ? ` after ${reuse.checkpoint?.messages} message(s)` : ''} into`} ACP session ${acp.sessionId}; the first model call will show whether the cache served it.`);
-					} else {
-						this.log(`[reuse] No fork of saved session ${reuse.saved.sessionId} was made; starting a new session and restoring the chat as a transcript.`, 'debug');
-					}
-				} catch (error) {
-					// The agent no longer has the stored conversation (it expired, or the agent was
-					// reinstalled): the chat is rebuilt from Copilot's messages in a new session.
-					this.log(`[reuse] Could not ${reuse.kind} saved session ${reuse.saved.sessionId} (${describe(error)}); starting a new session instead.`, 'warn');
-					if (reuse.kind === 'resume') {
-						this.saved.forget(key);
-					}
-				}
-			}
-			acp ??= await agent.createSession(options);
-			lap?.('agent session opened');
-
-			const history = reused && reuse ? [...reuse.history] : [];
-			// A fork holds the turns up to its fork point only, so it keeps the checkpoints of those.
-			const inherited = !reused || !reuse ? [] : reuse.kind === 'resume' ? reuse.saved.checkpoints ?? [] : (reuse.saved.checkpoints ?? []).filter(checkpoint => checkpoint.messages <= (reuse.checkpoint?.messages ?? 0));
-			const toolNames = tools.map(tool => tool.name);
-			const session: ChatSession = {
-				acp, endpoint, context, history,
-				checkpoints: [...inherited],
-				messageCounts: countsOf(inherited),
-				forked: reused?.how === 'forked' && !this.adapter.forker ? true : reused && reuse ? reuse.saved.forked : undefined,
-				model: model.id,
-				toolCount: tools.length,
-				openedTools: new Set(toolNames),
-				hasPrompt: tools.length > 0,
-				failures: 0,
-				lastActive: Date.now(),
-				toolsHash: toolsHashOf(toolNames),
-				guidanceHash: guidanceHashOf(context.guidance),
-				promptHash,
-				reused,
-				guidanceChange: reused ? reuse?.guidanceChange : undefined,
-			};
-			this.sessions.set(key, session);
-			// The agent ignores the model it was asked for when it opens or reopens a
-			// session, so the picker's choice is applied here, together with the effort:
-			// the effort option only exists once a model has been resolved.
-			await applyModel(agent, this.adapter.modelPolicy, session, effort, this.log, reused ? '[reuse] ' : '');
-			lap?.('model applied');
-			this.log(`Created chat session for ${key} using ${model.id}`);
-			this.log(`Created chat session for ${key} in ${context.cwd}${context.folders ? '' : ' (the window\'s folder; the request named none)'}`, 'debug');
-			this.evictIdleSessions(key);
-			this.scheduleIdleSweep();
-			void this.deleteOrphanedForks().catch(error => this.log(`Could not delete expired forked sessions: ${describe(error)}`, 'debug'));
-			return session;
-		} catch (error) {
-			this.deps.bridge.unregisterSession(endpoint.token);
-			// An expired login surfaces here on the first request of a chat, exactly as
-			// it does on a turn: the user gets the same offer instead of a raw refusal.
-			if (this.isSignInRequired(error)) {
-				this.promptSignIn();
-				throw new vscode.LanguageModelError(this.needsCredentials());
-			}
-			throw error;
-		}
-	}
-
-	/**
-	 * Continues the stored conversation as the policy says: by resuming it, by copying it with the agent's own
-	 * fork or the adapter's forker, or not at all. Returns `undefined` when it cannot be continued now: the
-	 * policy says to start over, or the program that forks for this agent is missing.
-	 * Whatever fails throws, and the caller falls back to a new session.
-	 */
-	private async fork(reuse: Reuse, options: CreateSessionOptions, point: ForkPoint | undefined, editedOwnChat: boolean): Promise<AgentSession | undefined> {
-		const source = reuse.saved.sessionId;
-		const running = [...this.sessions.values()].find(session => session.acp.sessionId === source && session.turn);
-		if (running) {
-			// A chat the user stopped, or left, to branch off may still be winding down. The fork point is a
-			// finished turn, so what the turn in flight said is no part of the copy; it is cancelled and settled first.
-			this.log(`[reuse] Saved session ${source} is in the middle of a turn; cancelling it before the fork.`, 'warn');
-			await this.turns.abort(running);
-		}
-		const forker = this.adapter.forker;
-		// Without a fork point there is no step to cut at, and a declined notice is not asked again.
-		if (forker && (!point || this.forkNoticeState() === 'declined')) {
-			return undefined;
-		}
-		// The program is found before the policy is asked, so the chats it weighs are read afterwards, as the
-		// pre-policy code read them: a chat that starts a turn meanwhile must be counted, or a restart for the
-		// fork would end its turn.
-		const program = forker ? await forker.locate(this.settings ?? {}, this.log, this.launch?.entryPath) : undefined;
-		if (forker && !program) {
-			this.noteMissingForker(forker);
-			return undefined;
-		}
-		const live = [...this.sessions].map(([chatKey, session]) => ({ chatKey, sessionId: session.acp.sessionId, hasTurn: session.turn !== undefined }));
-		const plan = this.policy.planContinuation({ saved: reuse.saved, live, editedOwnChat, agentSupportsFork: this.agent.supportsFork, externalForker: forker });
-		if (plan.how === 'rebuild') {
-			return undefined;
-		}
-		if (plan.how === 'resume') {
-			return this.agent.resumeSession(source, options);
-		}
-		if (plan.how === 'fork-native') {
-			return this.agent.forkSession(source, options, point);
-		}
-		if (!forker || !program || !point) {
-			return undefined;
-		}
-		if (editedOwnChat && !plan.keepSourceId) {
-			const busy = live.filter(session => session.hasTurn && session.sessionId !== source).map(session => session.chatKey);
-			if (busy.length > 0) {
-				this.log(`[reuse] The fork takes a new session id, which misses the cache once, because ${busy.length} other chat(s) are in the middle of a turn: ${busy.join(', ')}.`, 'warn');
-			}
-		}
-		// An edited chat leaves its old session, and a rewind needs it let go of. A copy leaves the source open, so its
-		// chat goes on in the live session: closing and resuming a conversation makes the agent send all of it uncached.
-		if (editedOwnChat) {
-			for (const [key, session] of [...this.sessions]) {
-				if (session.acp.sessionId === source) {
-					await this.destroySession(key);
-				}
-			}
-		}
-		// The restart runs beside the fork, which uses a language server of its own, and is waited on
-		// before the copy is opened. Should it fail, the rewound conversation is not read again, so the
-		// chat is rebuilt from its transcript rather than continued on the wrong one.
-		const restarting = plan.restartFirst
-			? this.client?.restart().then(() => {
-				// Starting it again takes a few seconds; do that while the fork runs, and let the resume
-				// report a start that fails.
-				void this.agent.ensureStarted().catch(() => undefined);
-				return true;
-			}, error => {
-				this.log(`[reuse] Could not restart the agent for the fork (${describe(error)}); the chat is rebuilt from its transcript.`, 'warn');
-				return false;
-			})
-			: undefined;
-		const forked = await forker.fork(program, { sessionId: source, point, cwd: options.cwd, keepSourceId: plan.keepSourceId }, this.log);
-		if (forked.sourceMovedTo) {
-			if (restarting && !await restarting) {
-				return undefined;
-			}
-			this.saved.moveSession(source, forked.sourceMovedTo);
-			this.log(`[reuse] The fork goes on in ${source}; the chats that had it continue in the copy ${forked.sourceMovedTo}.`, 'debug');
-		}
-		return this.agent.resumeSession(forked.sessionId, options);
-	}
-
-	private prompts: PromptArchive | undefined;
-
-	private promptArchive(): PromptArchive {
-		if (!this.prompts) {
-			const dir = this.launch?.storageDir;
-			this.prompts = new PromptArchive(dir ? path.join(dir, 'prompts') : undefined);
-			void this.prompts.prune();
-		}
-		return this.prompts;
-	}
-
-	private forkNoticeState(): string | undefined {
-		return this.deps.state?.get<string>(`acpHub.forkNotice.${this.adapter.id}`);
-	}
-
-	/**
-	 * Tells the user once that forking needs a program that is not installed, with a way to get it.
-	 * A user who declines is not asked again, and the chat falls back to a transcript either way.
-	 */
-	private noteMissingForker(forker: ConversationForker): void {
-		if (this.forkNoticeState() !== undefined) {
-			return;
-		}
-		void this.deps.state?.update(`acpHub.forkNotice.${this.adapter.id}`, 'shown');
-		const { message, helpLabel, helpUrl, declineLabel } = forker.missing;
-		void vscode.window.showInformationMessage(message, helpLabel, declineLabel).then(choice => {
-			if (choice === helpLabel) {
-				void vscode.env.openExternal(vscode.Uri.parse(helpUrl));
-			} else if (choice === declineLabel) {
-				void this.deps.state?.update(`acpHub.forkNotice.${this.adapter.id}`, 'declined');
-			}
-		});
-	}
-
-	/** Deletes the sessions the extension forked whose saved entry expired, for an agent that can; each is tried once. */
-	private async deleteOrphanedForks(): Promise<void> {
-		const pending = this.saved.pendingDeletions();
-		if (pending.length === 0 || !this.agent.supportsDelete) {
-			return;
-		}
-		const inUse = new Set([...this.sessions.values()].map(session => session.acp.sessionId));
-		const saved = new Set(this.saved.all().map(entry => entry.sessionId));
-		const attempted = pending.filter(id => !inUse.has(id));
-		for (const id of attempted.filter(id => !saved.has(id))) {
-			if (await this.agent.deleteSession(id)) {
-				this.log(`Deleted the expired forked session ${id}.`, 'debug');
-			}
-		}
-		this.saved.settleDeletions(attempted);
-	}
-
-	/**
-	 * Whether a chat may continue from a stored conversation by forking: the adapter's policy says so,
-	 * which may turn on what the running agent said in `initialize`. Starts the agent to find out.
-	 */
-	private async canFork(): Promise<boolean> {
-		if (this.adapter.forker) {
-			return true;
-		}
-		try {
-			await this.agent.ensureStarted();
-		} catch {
-			// Opening the session starts the agent again and reports why it cannot.
-			return false;
-		}
-		if (!this.policy.canFork({ agentSupportsFork: this.agent.supportsFork })) {
-			this.log(`[reuse] ${this.adapter.displayName} did not advertise session forking; chats are not forked.`, 'debug');
-			return false;
-		}
-		return true;
+		this.dumpRequest ??= createRequestDump(this.deps.requestDumpDir, this.log);
+		this.dumpRequest(request.chatId, sent.messages, sent.options);
 	}
 
 	/** A chat still starts when the customization files cannot be read; it just has no extras. */
-	private async buildSessionPrompt(tools: readonly vscode.LanguageModelChatTool[], chatFolders: readonly string[] | undefined, guidance: string | undefined): Promise<string | undefined> {
-		try {
-			this.sessionPrompt ??= createSessionPrompt(this.log, this.adapter.systemPrompt, this.deps.profilePromptsDir);
-			return await this.sessionPrompt(tools, chatFolders, guidance);
-		} catch (error) {
-			this.log(`Could not build the session prompt: ${describe(error)}`, 'warn');
-			return undefined;
-		}
+	private async buildSessionPrompt(tools: readonly ToolDef[], chatFolders: readonly string[] | undefined, guidance: string | undefined): Promise<string | undefined> {
+		this.sessionPrompt ??= createSessionPrompt(this.log, this.adapter.systemPrompt, this.deps.profilePromptsDir);
+		return this.sessionPrompt(tools as unknown as readonly vscode.LanguageModelChatTool[], chatFolders, guidance);
 	}
 
-	private evictIdleSessions(keep: string): void {
-		for (const [key, session] of this.sessions) {
-			if (this.sessions.size <= MAX_CHAT_SESSIONS) {
-				return;
-			}
-			if (key !== keep && !session.turn) {
-				this.log(`Closing the least recently used chat session ${key}.`, 'debug');
-				void this.destroySession(key);
-			}
-		}
+	private sessionPrompt: ReturnType<typeof createSessionPrompt> | undefined;
+
+	private windowFolder(): string {
+		return this.service.workspaceFolder;
 	}
 
-	/**
-	 * Copilot describes the chat afresh with every request, and the agent keeps the
-	 * guidance it was opened with. As natively, a live session is not reopened for that:
-	 * the lines that changed go with the next prompt, and the session counts from then on
-	 * as having been told the new guidance.
-	 */
-	private sendGuidanceChange(key: string, session: ChatSession, guidance: string | undefined): void {
-		const change = guidanceChangeOf(guidanceLineHashes(session.context.guidance), guidance, session.context.guidance ?? '');
-		const pending = session.guidanceChange;
-		if (change.added.length > 0 || change.removed > 0) {
-			session.guidanceChange = pending ? mergeGuidanceChange(pending, change) : change;
-		}
-		const hash = guidanceHashOf(guidance);
-		this.log(`The guidance of chat ${key} changed (${session.guidanceHash} -> ${hash}): ${change.added.length} line(s) new, ${change.removed} gone; sending the change with the next prompt.`, 'debug');
-		session.context = { ...session.context, guidance };
-		session.guidanceHash = hash;
+	/** Everything the engine may ask of this host. */
+	private host(): HostPort {
+		return {
+			log: this.deps.log,
+			state: stateStoreOf(this.deps.state) ?? emptyState,
+			secrets: emptySecrets,
+			settings: { get: <T>(section: string) => vscode.workspace.getConfiguration('acpHub').get<T>(section) },
+			storageRoot: '',
+			chatIdentity: request => {
+				const sent = this.sent.get(request);
+				const folders = sent ? workspaceFoldersOf(sent.messages) : undefined;
+				return {
+					id: sent ? chatIdOf(sent.messages, sent.options) : request.chatId,
+					// A chat that names no folder this machine has is rooted in the window's
+					// folder, the one the agent was launched in.
+					cwd: request.cwd || this.windowFolder(),
+					workspaceFolders: folders ?? [],
+					label: sent ? chatLabelOf(sent.messages) : undefined,
+				};
+			},
+			guidanceOf: request => request.systemGuidance,
+			executeTool: async () => {
+				throw new Error('This host runs tool calls through the workbench, not the engine.');
+			},
+			ui: {
+				requestSignIn: agentId => this.deps.signIn(agentId),
+				notify: async (message, actions) => {
+					const choice = await vscode.window.showInformationMessage(message, ...(actions ?? []));
+					return choice;
+				},
+				openExternal: async url => {
+					await vscode.env.openExternal(vscode.Uri.parse(url));
+				},
+			},
+		};
 	}
 
-	/** Applies the tool set of a request to the session, which tells the agent when it changed. */
-	private applyTools(session: ChatSession, tools: readonly vscode.LanguageModelChatTool[]): void {
-		// A request that offers no tools is Copilot's own, such as a chat title: it says
-		// nothing about what this chat may use, and emptying the list would only make the
-		// agent drop tools it still has.
-		if (tools.length === 0) {
-			return;
-		}
-		this.deps.bridge.updateTools(session.endpoint.token, tools);
-		session.toolCount = tools.length;
-		// Only an agent that takes the list again has the new tools now; any other keeps
-		// what it opened with, so the next request still sees the difference.
-		if (this.policy.toolsChangedAction() === 'list-changed' && toolsDiffer(session.openedTools, tools)) {
-			const names = tools.map(tool => tool.name);
-			this.log(`Tools of the chat session changed: ${describeToolChange(toolChangeOf(session.openedTools, names))}.`, 'debug');
-			session.openedTools = new Set(names);
-			session.toolsHash = toolsHashOf(names);
-		}
-	}
-
-
-	/**
-	 * Hands a tool call the agent made to the caller of the current request.
-	 * Resolves with `undefined` when no response is open that could carry the
-	 * call, so the bridge runs the tool itself.
-	 */
-	private executeTool(key: string, name: string, input: unknown, token: vscode.CancellationToken): Promise<McpToolResult | undefined> {
-		const turn = this.sessions.get(key)?.turn;
-		const callId = `${TOOL_CALL_ID_PREFIX}${this.adapter.id}-${++this.toolCallSeq}`;
-		return handOverToolCall(turn, callId, name, input, token, this.log);
-	}
-
-
-	private async switchModel(key: string, session: ChatSession, model: vscode.LanguageModelChatInformation, tools: readonly vscode.LanguageModelChatTool[], context: ChatContext): Promise<ChatSession> {
-		if (await switchModelInPlace(this.agent, session, model.id, key, this.log)) {
-			return session;
-		}
-		await this.destroySession(key);
-		return this.createChatSession(key, model, tools, context);
-	}
-
-	private async destroySession(key: string): Promise<void> {
-		const session = this.sessions.get(key);
-		if (!session) {
-			return;
-		}
-		this.sessions.delete(key);
-		if (session.turn) {
-			clearToolDeadline(session.turn);
-			disposeCancellations(session.turn);
-			failPendingToolCalls(session.turn, new Error("The chat session was closed."));
-			this.client?.cancel(session.acp.sessionId);
-			session.turn = undefined;
-		}
-		this.deps.bridge.unregisterSession(session.endpoint.token);
-		const closing = this.client?.closeSession(session.acp.sessionId) ?? Promise.resolve();
-		this.closing.set(key, closing);
-		await closing;
-		if (this.closing.get(key) === closing) {
-			this.closing.delete(key);
-		}
-		this.lastAgentUse = Date.now();
-		this.log(`Closed the chat session for ${key} (${session.acp.sessionId}).`);
-	}
-
-	private handleAgentChange(change: AgentChange): void {
-		// The sessions lived in the old process in every case. The next request opens
-		// new ones (resuming the stored conversation when it can) and restores the
-		// conversation from Copilot's history otherwise.
-		const what = change === 'restarted' ? 'was restarted' : change === 'idle' ? 'was stopped for being idle' : 'exited';
-		this.log(`The agent ${what}; dropping its sessions.`);
-		this.stoppedForIdle = change === 'idle';
-		for (const key of [...this.sessions.keys()]) {
-			void this.destroySession(key);
-		}
-		this.warm.release();
-
-		if (change === 'restarted') {
-			// The account may have changed, and with it the models on offer and their windows.
-			this.models.reset();
-			this.signInWarningShown = false;
-			this.changeEmitter.fire();
-		}
-	}
-
-	private isSignInRequired(error: unknown): boolean {
-		return isAuthRequiredError(error) || (this.client?.requiresSignIn ?? false);
-	}
-
-	/** What a chat is told when the agent needs credentials, both on a turn and when a session cannot open. */
-	private needsCredentials(): string {
-		return `${this.adapter.displayName} needs credentials. Open the ACP Hub sidebar to sign in or to use an API key, then try again.`;
+	/** The tool bridge as the engine sees it: neutral tools in, neutral results out. */
+	private bridge(): ToolBridge {
+		const bridge = this.deps.bridge;
+		return {
+			registerSession: (tools, execute, options) => bridge.registerSession(
+				tools as unknown as readonly vscode.LanguageModelChatTool[],
+				async (name, input, token): Promise<McpToolResult | undefined> => {
+					const result = await execute(name, input, toAbortSignal(token));
+					return result && { content: result.content.map(toWorkbenchPart), isError: result.isError };
+				},
+				options,
+			),
+			updateTools: (token, tools) => bridge.updateTools(token, tools as unknown as readonly vscode.LanguageModelChatTool[]),
+			unregisterSession: token => bridge.unregisterSession(token),
+		};
 	}
 
 	private promptSignIn(): void {
@@ -967,4 +374,90 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			}
 		});
 	}
+
+	private describe(error: unknown): string {
+		return error instanceof Error ? error.message : String(error);
+	}
 }
+
+/** An empty store for a provider started without extension state. */
+const emptyState = {
+	get: <T>(_key: string): T | undefined => undefined,
+	update: (_key: string, _value: unknown): Promise<void> => Promise.resolve(),
+	keys: (): readonly string[] => [],
+};
+
+/** The engine never reads a secret, so this host has nothing to hand it. */
+const emptySecrets = {
+	get: (_id: string): Promise<string | undefined> => Promise.resolve(undefined),
+	set: (_id: string, _value: string): Promise<void> => Promise.resolve(),
+	delete: (_id: string): Promise<void> => Promise.resolve(),
+};
+
+/** Reports a thinking chunk when the running VS Code exposes thinking parts. */
+function reportThinking(progress: vscode.Progress<vscode.LanguageModelResponsePart>, text: string): void {
+	const ThinkingPart = (vscode as unknown as { LanguageModelThinkingPart?: new (value: string) => unknown }).LanguageModelThinkingPart;
+	if (ThinkingPart) {
+		progress.report(new ThinkingPart(text) as vscode.LanguageModelResponsePart);
+	}
+}
+
+/** One workbench message as the engine's own. */
+function toChatMessage(message: vscode.LanguageModelChatRequestMessage): ChatMessage {
+	return {
+		role: message.role === vscode.LanguageModelChatMessageRole.User ? 'user' : message.role === vscode.LanguageModelChatMessageRole.Assistant ? 'assistant' : 'system',
+		name: message.name,
+		parts: message.content.flatMap(toParts),
+	};
+}
+
+function toParts(part: unknown): Part[] {
+	if (typeof part === 'string') {
+		return [{ type: 'text', text: part }];
+	}
+	if (part instanceof vscode.LanguageModelTextPart) {
+		return [{ type: 'text', text: part.value }];
+	}
+	if (part instanceof vscode.LanguageModelDataPart) {
+		return part.mimeType.startsWith('image/') ? [{ type: 'image', data: part.data, mimeType: part.mimeType }] : [];
+	}
+	if (part instanceof vscode.LanguageModelToolCallPart) {
+		return [{ type: 'tool-call', callId: part.callId, name: part.name, input: part.input }];
+	}
+	if (part instanceof vscode.LanguageModelToolResultPart) {
+		return [{ type: 'tool-result', callId: part.callId, content: (part.content as readonly unknown[]).flatMap(toParts), isError: (part as unknown as { isError?: boolean }).isError === true }];
+	}
+	return [];
+}
+
+/** One tool of the request as the engine's own. */
+function toToolDef(tool: vscode.LanguageModelChatTool): ToolDef {
+	return { name: tool.name, description: tool.description, inputSchema: tool.inputSchema };
+}
+
+/** One part of a tool result as the workbench takes it back. */
+function toWorkbenchPart(part: Part): unknown {
+	switch (part.type) {
+		case 'text':
+			return new vscode.LanguageModelTextPart(part.text);
+		case 'image':
+			return new vscode.LanguageModelDataPart(part.data, part.mimeType);
+		case 'tool-result':
+			return new vscode.LanguageModelTextPart(part.content.map(item => item.type === 'text' ? item.text : '').join('\n'));
+		default:
+			return new vscode.LanguageModelTextPart(JSON.stringify(part.input ?? {}));
+	}
+}
+
+/** A workbench cancellation as the plain signal the engine watches. */
+function toAbortSignal(token: vscode.CancellationToken): AbortSignal {
+	const controller = new AbortController();
+	if (token.isCancellationRequested) {
+		controller.abort();
+	} else {
+		token.onCancellationRequested(() => controller.abort());
+	}
+	return controller.signal;
+}
+
+export type { ToolResult };

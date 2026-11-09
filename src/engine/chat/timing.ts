@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Log } from '../logging';
+import type { Log } from '../ports/host';
 
 /** Logs one step of a request together with the time it took. */
 export type Lap = (step: string) => void;

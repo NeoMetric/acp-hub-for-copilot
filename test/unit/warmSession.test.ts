@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../../src/core/adapter';
-import type { McpBridge } from '../../src/core/bridge';
-import { WarmSession } from '../../src/core/provider/warmSession';
+import { WarmSession } from '../../src/engine/chat/warmSession';
+import type { ToolBridge } from '../../src/engine/chat/types';
 
 function warmSession(declaresBridgeOnModelLookup: boolean) {
 	const createSession = vi.fn(async () => ({ sessionId: 'warm', configOptions: [] }));
@@ -11,7 +11,7 @@ function warmSession(declaresBridgeOnModelLookup: boolean) {
 	};
 	const session = new WarmSession({
 		adapter: { declaresBridgeOnModelLookup } as AgentAdapter,
-		bridge: bridge as unknown as McpBridge,
+		bridge: bridge as unknown as ToolBridge,
 		agentClient: async () => ({ createSession }) as never,
 		cwd: () => '/work',
 		opened: () => undefined,

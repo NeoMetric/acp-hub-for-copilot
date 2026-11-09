@@ -3,10 +3,10 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ModelPolicy } from '../adapter';
-import type { Log } from '../logging';
-import { acpModelValue, findEffortOption, findModelOption } from '../models';
-import { RpcError } from '../../engine/acp/rpc';
+import type { ModelPolicy } from '../../core/adapter';
+import { RpcError } from '../acp/rpc';
+import type { Log } from '../ports/host';
+import { acpModelValue, findEffortOption, findModelOption } from './modelOptions';
 import type { AgentApi, ChatSession } from './types';
 
 export function describe(error: unknown): string {

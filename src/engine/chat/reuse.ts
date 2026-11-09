@@ -3,9 +3,9 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type * as vscode from 'vscode';
-import type { Log } from '../logging';
-import { findCheckpoint, findForkSource, hashAll, isPrefixOf, mismatchOf, SAVED_SESSION_VERSION, shortHash, toolsHashOf, type ReuseCheck, type SavedSession, type SavedSessionStore } from '../sessionStore';
+import type { Log } from '../ports/host';
+import type { ToolDef } from '../model/chat';
+import { findCheckpoint, findForkSource, hashAll, isPrefixOf, mismatchOf, SAVED_SESSION_VERSION, shortHash, toolsHashOf, type ReuseCheck, type SavedSession, type SavedSessionStore } from './sessionStore';
 import { describeToolChange, guidanceChangeOf, guidanceHashOf, guidanceLineHashes, toolChangeOf } from './keys';
 import type { ChatContext, ChatSession, Reuse } from './types';
 
@@ -15,7 +15,7 @@ import type { ChatContext, ChatSession, Reuse } from './types';
  * was copied from. Every step is logged under "[reuse]" so a reload or a fork
  * can be checked in the output.
  */
-export function findReusable(saved: SavedSessionStore, key: string, fingerprints: readonly string[], lastUser: number, tools: readonly vscode.LanguageModelChatTool[], context: ChatContext, canFork: boolean, log: Log): Reuse | undefined {
+export function findReusable(saved: SavedSessionStore, key: string, fingerprints: readonly string[], lastUser: number, tools: readonly ToolDef[], context: ChatContext, canFork: boolean, log: Log): Reuse | undefined {
 	const check: ReuseCheck = { cwd: context.cwd, toolsHash: toolsHashOf(tools.map(tool => tool.name)), guidanceHash: guidanceHashOf(context.guidance) };
 	const incoming = hashAll(fingerprints);
 	const all = saved.all();

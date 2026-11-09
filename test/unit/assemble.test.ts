@@ -4,16 +4,25 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { lastUserMessageIndex } from '../../src/core/convert';
-import { buildPromptBlocks } from '../../src/core/provider/assemble';
-import type { ChatSession } from '../../src/core/provider/types';
-import { assistant, toolCall, toolResult, user } from './messages';
+import { buildPromptBlocks } from '../../src/engine/chat/assemble';
+import { lastUserMessageIndex } from '../../src/engine/chat/messages';
+import type { ChatSession } from '../../src/engine/chat/types';
+import type { ChatMessage, Part } from '../../src/engine/model/chat';
 
 const session = {} as ChatSession;
 const log = () => undefined;
 
+const message = (role: ChatMessage['role'], ...parts: Array<string | Part>): ChatMessage => ({
+	role,
+	parts: parts.map(part => typeof part === 'string' ? { type: 'text', text: part } : part),
+});
+const user = (...parts: Array<string | Part>) => message('user', ...parts);
+const assistant = (...parts: Array<string | Part>) => message('assistant', ...parts);
+const toolCall = (callId: string, name: string): Part => ({ type: 'tool-call', callId, name, input: {} });
+const toolResult = (callId: string): Part => ({ type: 'tool-result', callId, content: [{ type: 'text', text: 'output' }] });
+
 /** The prompt for a session whose cursor stands after `seen` messages. */
-function promptAfter(seen: number, messages: ReturnType<typeof user>[]) {
+function promptAfter(seen: number, messages: ChatMessage[]) {
 	return buildPromptBlocks(messages, seen, lastUserMessageIndex(messages), false, session, log);
 }
 

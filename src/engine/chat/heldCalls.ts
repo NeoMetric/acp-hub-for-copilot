@@ -3,13 +3,13 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as vscode from 'vscode';
-import type { McpToolResult } from '../bridge';
-import { skillContextAfterReply } from '../convert';
-import type { Log } from '../logging';
+import type { ToolResult } from '../model/chat';
+import type { Log } from '../ports/host';
+import { skillContextAfterReply } from './messages';
 import type { ActiveTurn } from './types';
+import type { ChatMessage } from '../model/chat';
 
-/** What Copilot itself tells the model when a tool call did not run. */
+/** What the host itself tells the model when a tool call did not run. */
 export const CANCELLED_TOOL_CALL = "The user cancelled the tool call.";
 
 export function wakeTurn(turn: ActiveTurn): void {
@@ -38,41 +38,46 @@ export function failPendingToolCalls(turn: ActiveTurn, error: Error): void {
  * Resolves with `undefined` when no response is open that could carry the
  * call, so the bridge runs the tool itself.
  */
-export function handOverToolCall(turn: ActiveTurn | undefined, callId: string, name: string, input: unknown, token: vscode.CancellationToken, log: Log): Promise<McpToolResult | undefined> {
+export function handOverToolCall(turn: ActiveTurn | undefined, callId: string, name: string, input: unknown, signal: AbortSignal, log: Log): Promise<ToolResult | undefined> {
 	if (!turn || turn.finished) {
 		log(`Tool ${name} was requested without a turn (${turn ? 'finished' : 'none'}); refusing it.`, 'warn');
 		return Promise.resolve(undefined);
 	}
 
 	const toolInput = (input ?? {}) as object;
-	return new Promise<McpToolResult>((resolve, reject) => {
-		const settle = {
-			resolve: (content: ReadonlyArray<unknown>, isError: boolean) => {
-				cancellation.dispose();
-				resolve({ content, isError });
-			},
-			reject: (error: Error) => {
-				cancellation.dispose();
-				reject(error);
-			},
-		};
-		const cancellation = token.onCancellationRequested(() => {
+	return new Promise<ToolResult>((resolve, reject) => {
+		const onAbort = (): void => {
 			turn.pending.delete(callId);
 			const index = turn.held.findIndex(call => call.callId === callId);
 			if (index >= 0) {
 				turn.held.splice(index, 1);
 			}
 			reject(new Error(CANCELLED_TOOL_CALL));
-		});
+		};
+		const settle = {
+			resolve: (content: readonly ToolResult['content'][number][], isError: boolean) => {
+				signal.removeEventListener('abort', onAbort);
+				resolve({ content, isError });
+			},
+			reject: (error: Error) => {
+				signal.removeEventListener('abort', onAbort);
+				reject(error);
+			},
+		};
+		if (signal.aborted) {
+			reject(new Error(CANCELLED_TOOL_CALL));
+			return;
+		}
+		signal.addEventListener('abort', onAbort, { once: true });
 		if (!turn.streaming) {
-			// Copilot is still running an earlier call, so no response is open. The
+			// The host is still running an earlier call, so no response is open. The
 			// next response, which carries that call's result, carries this one too.
-			log(`Tool ${name} was requested while Copilot runs an earlier call (${turn.pending.size} pending, ${turn.held.length} held); holding it for the next response.`);
+			log(`Tool ${name} was requested while the host runs an earlier call (${turn.pending.size} pending, ${turn.held.length} held); holding it for the next response.`);
 			turn.held.push({ ...settle, callId, name, input: toolInput });
 			return;
 		}
 		turn.pending.set(callId, settle);
-		turn.progress.report(new vscode.LanguageModelToolCallPart(callId, name, toolInput));
+		turn.sink({ type: 'tool-call', callId, name, input: toolInput });
 		wakeTurn(turn);
 	});
 }
@@ -82,26 +87,26 @@ export function releaseHeldToolCalls(turn: ActiveTurn, log: Log): void {
 	const held = turn.held.splice(0);
 	for (const call of held) {
 		turn.pending.set(call.callId, { resolve: call.resolve, reject: call.reject });
-		turn.progress.report(new vscode.LanguageModelToolCallPart(call.callId, call.name, call.input));
+		turn.sink({ type: 'tool-call', callId: call.callId, name: call.name, input: call.input });
 	}
 	if (held.length > 0) {
-		log(`Returned ${held.length} held tool call(s) to Copilot.`);
+		log(`Returned ${held.length} held tool call(s) to the host.`);
 	}
 }
 
-/** Settles pending tool calls with the results Copilot just returned. */
-export function resolveToolResults(turn: ActiveTurn, messages: readonly vscode.LanguageModelChatRequestMessage[], log: Log): boolean {
+/** Settles pending tool calls with the results the host just returned. */
+export function resolveToolResults(turn: ActiveTurn, messages: readonly ChatMessage[], log: Log): boolean {
 	let resolved = 0;
 	const skillContext = skillContextAfterReply(messages);
 
 	// A background-command notification can add an assistant message after a
 	// pending result. Only matching call IDs can settle the current calls.
 	for (const message of messages) {
-		if (message.role !== vscode.LanguageModelChatMessageRole.User) {
+		if (message.role !== 'user') {
 			continue;
 		}
-		for (const part of message.content) {
-			if (!(part instanceof vscode.LanguageModelToolResultPart)) {
+		for (const part of message.parts) {
+			if (part.type !== 'tool-result') {
 				continue;
 			}
 			const pending = turn.pending.get(part.callId);
@@ -109,15 +114,15 @@ export function resolveToolResults(turn: ActiveTurn, messages: readonly vscode.L
 				continue;
 			}
 			turn.pending.delete(part.callId);
-			let content: ReadonlyArray<unknown> = part.content;
+			let content: readonly ToolResult['content'][number][] = part.content;
 			if (skillContext?.callId === part.callId) {
-				const included = content.some(item => item instanceof vscode.LanguageModelTextPart && item.value.includes(skillContext.text));
+				const included = content.some(item => item.type === 'text' && item.text.includes(skillContext.text));
 				if (!included) {
-					content = [...content, new vscode.LanguageModelTextPart(skillContext.text)];
+					content = [...content, { type: 'text', text: skillContext.text }];
 				}
 				log(`Skill context (${skillContext.text.length} characters) ${included ? 'already present in' : 'appended to'} tool result.`, 'debug');
 			}
-			pending.resolve(content, (part as unknown as { isError?: boolean }).isError === true);
+			pending.resolve(content, part.isError === true);
 			resolved++;
 		}
 	}
@@ -129,27 +134,33 @@ export function resolveToolResults(turn: ActiveTurn, messages: readonly vscode.L
 	return resolved > 0;
 }
 
-/** Keeps a turn stoppable after its response returned to have Copilot run its tools. */
-export function trackCancellation(turn: ActiveTurn, token: vscode.CancellationToken, cancelAgent: () => void, log: Log): void {
+/** Keeps a turn stoppable after its response returned to have the host run its tools. */
+export function trackCancellation(turn: ActiveTurn, signal: AbortSignal, cancelAgent: () => void, log: Log): void {
 	if (turn.finished) {
 		return;
 	}
-	turn.cancellations.push(token.onCancellationRequested(() => {
+	const onAbort = (): void => {
 		log(`Cancelling the turn of ACP session ${turn.sessionId}`);
 		failPendingToolCalls(turn, new Error("The request was cancelled."));
 		cancelAgent();
-	}));
+	};
+	if (signal.aborted) {
+		onAbort();
+		return;
+	}
+	signal.addEventListener('abort', onAbort, { once: true });
+	turn.cancellations.push(() => signal.removeEventListener('abort', onAbort));
 }
 
 export function disposeCancellations(turn: ActiveTurn): void {
-	for (const cancellation of turn.cancellations) {
-		cancellation.dispose();
+	for (const dispose of turn.cancellations) {
+		dispose();
 	}
 	turn.cancellations.length = 0;
 }
 
 /**
- * Copilot can stop waiting for a tool call it was handed, for example when its
+ * The host can stop waiting for a tool call it was handed, for example when its
  * chat is closed, and nothing else would ever settle the call. Failing it here
  * beats the agent's own timeout, which costs it a whole step.
  */

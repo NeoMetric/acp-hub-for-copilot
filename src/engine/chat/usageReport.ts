@@ -3,10 +3,9 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as vscode from 'vscode';
-import type { AcpTokenUsage } from '../../engine/acp/protocol';
-import { hitRateOf, sameInput } from '../cache';
-import type { Log } from '../logging';
+import type { AcpTokenUsage } from '../acp/protocol';
+import { hitRateOf, sameInput } from './cache';
+import type { Log } from '../ports/host';
 import type { ActiveTurn, ChatSession } from './types';
 
 export const CHARS_PER_TOKEN = 4;
@@ -112,13 +111,12 @@ export function reportUsage(turn: ActiveTurn, log: Log): void {
 
 	turn.reportedTokens += completionTokens;
 
-	const payload = {
-		prompt_tokens: promptTokens,
-		completion_tokens: completionTokens,
-		total_tokens: promptTokens + completionTokens,
-		prompt_tokens_details: { cached_tokens: turn.contextUsed !== undefined ? usage?.cachedReadTokens ?? 0 : turn.lastCall?.cachedTokens ?? usage?.cachedReadTokens ?? 0 },
-		completion_tokens_details: { reasoning_tokens: usage?.reasoningOutputTokens ?? 0 },
-	};
-	turn.progress.report(vscode.LanguageModelDataPart.json(payload, 'usage'));
+	turn.sink({
+		type: 'usage',
+		promptTokens,
+		cachedTokens: turn.contextUsed !== undefined ? usage?.cachedReadTokens ?? 0 : turn.lastCall?.cachedTokens ?? usage?.cachedReadTokens ?? 0,
+		outputTokens: completionTokens,
+		reasoningTokens: usage?.reasoningOutputTokens ?? 0,
+	});
 	log(`Reported usage: ${promptTokens} prompt token(s), ${completionTokens} completion token(s)`, 'debug');
 }
