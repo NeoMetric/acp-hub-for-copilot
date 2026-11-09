@@ -31,9 +31,25 @@ You'll need **VS Code 1.105 or later**, **GitHub Copilot Chat**, and access to a
 
 Available models, usage limits, and authentication options depend on your provider and plan. Removing an agent from the sidebar does not uninstall it. Saved API keys can be removed from the sidebar; browser account sign-out is managed by the agent's own account tools.
 
+## The server
+
+The extension is a thin client: the agents, their sessions and their settings run in a small local server, not in the extension host.
+
+- **Attach or start.** On activation the window asks `127.0.0.1` (the port from `acpHub.server.port`, default 8791) for a health answer. A server that answers as ACP Hub is attached to and never stopped. When nothing answers, the bundled server (`dist/server.js`, shipped in the VSIX) is started as a child of that window and the window waits for it to answer.
+- **One server per machine.** Every window of the machine uses the same port, so they share one server. A server a window started exits when that window closes (or its extension host dies); the next window starts its own, and a turn that was running in the old one is lost.
+- **A server of another kind.** A program that answers on the port but is not ACP Hub, or is of a version this extension does not speak, is left untouched: the providers say the server is not compatible, and changing the port setting fixes it. A rejected token names the token file.
+- **The token.** Both sides read `<root>/server.token` in the shared store (`~/.acp-hub`, or `ACP_HUB_HOME`); it is made once, with a fresh random value.
+
+Two settings belong to the extension itself. Both are also in the settings UI, and both take effect after a window reload:
+
+- `acpHub.server.port` — the port the server answers on, on `127.0.0.1` (default `8791`).
+- `acpHub.server.autoStart` — start the bundled server when nothing answers on the port (default on). Turn it off to run the server yourself.
+
+To run the server by hand, from a checkout, build first (`npm run compile`) and then run `npm run server`. It reads `ACP_HUB_PORT` (default 8791), `ACP_HUB_TOKEN` (otherwise the stored token is used, or made), `ACP_HUB_PROMPTS_DIR` (where it reads the prompt files) and `ACP_HUB_HOME` (the shared store). A server started by hand runs until you stop it; windows attach to it and leave it running.
+
 ## Settings and usage
 
-Configure each agent from its card or search for `AgentHub` in VS Code Settings. The sidebar displays available plan limits and both last-turn and cumulative cache hit rates. Usage reporting varies by agent.
+Configure each agent from its card in the sidebar, or by editing `<root>/config.json` in the shared store. Those are the only homes of agent settings: the extension contributes only the two server settings above, and an `acpHub.agents.*` value left in `settings.json` from an older version is ignored. The sidebar displays available plan limits and both last-turn and cumulative cache hit rates. Usage reporting varies by agent.
 
 Two options control how much each request sends to the model. Both are off by default and restart the agent when changed:
 
@@ -46,7 +62,7 @@ Two options control how much each request sends to the model. Both are off by de
 
 Agent Hub passes your chat requests to the selected local agent. Requests can include conversation history, workspace instructions, file contents, tool definitions and tool results supplied by Copilot Chat. The agent can send this information and credentials to its provider; the provider's terms and privacy policy apply ([Anthropic](https://www.anthropic.com/legal/privacy), [OpenAI](https://openai.com/policies/privacy-policy/), [Google](https://policies.google.com/privacy)). Review those policies and avoid sharing information you cannot send to the selected provider. Agent Hub also contacts services to install agents and retrieve available models or usage information. Third-party agents and adapters may make their own network requests or collect telemetry under their own policies.
 
-API keys entered in Agent Hub are stored using VS Code's secret storage and passed to the selected agent when needed. Agent account credentials and their retention are managed by the agents. If request dumping is enabled for debugging, full prompts may be written as JSON files in the extension's local storage; keep this disabled unless needed and handle those files as sensitive. Logs can also contain diagnostic details.
+API keys entered in Agent Hub are stored by the server in `<root>/secrets.json` in the shared store, readable by your account only (`0600`), and passed to the selected agent when needed; a key saved by an older version is copied there once, and the copy in VS Code's secret storage is left as it was. Agent account credentials and their retention are managed by the agents. The old "Dump requests" setting no longer has any effect: requests do not pass through the extension host, so no request files are written. Logs can still contain diagnostic details.
 
 **Permission requests raised by an ACP adapter agent itself are automatically approved by Agent Hub** when an allow option is offered. This applies only to the agent's own built-in tools, for example when you enable Antigravity's built-in file, shell and search tools; those run without a confirmation prompt. Tools provided by Copilot Chat are not affected: they always go through Copilot's normal confirmation flow. Review the agent's own configuration and use only agents and workspaces you trust.
 

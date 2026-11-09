@@ -1,6 +1,6 @@
 # Using the extension's models from Copilot CLI (LLM gateway)
 
-Status: **parked**. Evaluated on 2026-10-30; nothing here is built. This records the options, findings and open questions so the work can be picked up later.
+Status: **superseded**. Evaluated on 2026-10-30 and parked; the server-only runtime ([design](superpowers/specs/2026-11-09-server-only-runtime-design.md)) built what is described here as options B and C — a headless ACP Hub server that the extension is now a thin client of, and that any OpenAI-compatible client, Copilot CLI included, can point at. Nothing further is to be picked up from this document; it is kept for its findings on how Copilot CLI accepts outside models. The extension paths and source-count audit below describe the code as it was in October 2026: `src/core/provider.ts` and `src/core/convert.ts` no longer exist.
 
 ## Goal
 
