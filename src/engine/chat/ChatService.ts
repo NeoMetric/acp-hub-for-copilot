@@ -142,6 +142,11 @@ export class ChatService {
 		return this.deps.adapter;
 	}
 
+	/** How many chat sessions the service holds open, for the host that reports its health. */
+	get openSessions(): number {
+		return this.sessions.size;
+	}
+
 	/** The folder the agent was launched in, `''` until it is launched; a chat that names no folder this machine has is rooted there. */
 	get workspaceFolder(): string {
 		return this.launch?.workspaceFolder ?? '';
