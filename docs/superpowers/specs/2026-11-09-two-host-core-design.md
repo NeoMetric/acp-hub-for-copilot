@@ -353,6 +353,17 @@ transport becomes a host concern:
 The sidebar keeps working throughout: it becomes a transport implementation of
 `ControlService`, not a second implementation of its logic.
 
+## Packaging isolation
+
+The extension and the server share code but never ship each other's.
+
+- **Bundles are per entry.** esbuild emits `dist/extension.js` from `src/main/extension.ts` and a separate server bundle from `src/main/server.ts`. A module appears in a bundle only if that entry can reach it, so the HTTP host can never be inside `dist/extension.js` — and the boundary rules forbid the extension entry from importing it.
+- **Sources never ship.** `.vscodeignore` already excludes `src/**`, `**/*.ts`, `test/**`, `docs/**`, `scripts/**` and `.github/**`, so `src/hosts/http/**` cannot reach a VSIX even by accident.
+- **The server bundle must be excluded explicitly.** `.vscodeignore` does not exclude `dist/**`. Emit the server to `server-dist/` (outside `dist/`) and add `server-dist/**` to `.vscodeignore`, or exclude `dist/server.js` by name.
+- **CI proves it.** After `npm run package`, the pipeline lists the VSIX contents and fails if it contains any server file (`server-dist/**`, `dist/server.js`, or a `hosts/http` path). A packaging test is the only thing that keeps this true after someone edits `.vscodeignore` for an unrelated reason.
+- **No manifest entanglement.** `main` stays `./dist/extension.js`, the server adds no `contributes` entry and no `activationEvents` entry, and `contributes.languageModelChatProviders` remains generated from the agent registry only.
+- **Shared code is compiled, not linked.** `src/engine` is bundled into both artefacts. That duplicates bytes across two artefacts, never coupling between them — and it is the intended cost of one store, two gateways.
+
 ## The HTTP host
 
 `src/main/server.ts` — same build, second entry point:
