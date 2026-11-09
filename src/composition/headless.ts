@@ -115,7 +115,13 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 		settings: host.settings,
 		usage,
 		install,
-		writeConfig: (key, value) => host.writeSetting(key, value),
+		writeConfig: async (key, value) => {
+			await host.writeSetting(key, value);
+			// A setting decides how the agents launch, so the launch read is forgotten.
+			for (const service of services.values()) {
+				service.invalidateLaunch();
+			}
+		},
 		host: {
 			// A headless host has no window to sign in through: the page shows the
 			// URL the agent asked for, and the agent's own flow finishes there.
@@ -124,6 +130,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 			confirmUninstall: async () => true,
 			closeSessions: async agentId => { await services.get(agentId)?.closeAllSessions(); },
 			restartAgent: async agentId => { await services.get(agentId)?.restart(); },
+			refreshAgent: agentId => { services.get(agentId)?.invalidateLaunch(); },
 			prepareAgent: async agentId => {
 				const service = services.get(agentId);
 				if (!service) {

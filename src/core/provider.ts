@@ -175,6 +175,11 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		await this.service.restart();
 	}
 
+	/** Forgets how the agent was launched, so the next request reads its settings and key again. */
+	invalidateLaunch(): void {
+		this.service.invalidateLaunch();
+	}
+
 	/** Forgets the models and asks the workbench to list them again, for example after the agent was installed or signed in. */
 	refresh(): void {
 		this.models.forget();

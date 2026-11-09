@@ -86,7 +86,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			store: secrets, ctx: launch, runTerminal: options => runInVsCodeTerminal(options, storageDir),
 			startAgent: methodId => providers.get(id)?.startForSignIn(methodId) ?? Promise.resolve(false),
 		});
-		if (result.ok) { await state.update(`signedIn.${id}`, true); await providers.get(id)?.restart(); providers.get(id)?.refresh(); void control.refreshUsage(id); }
+		if (result.ok) { await state.update(`signedIn.${id}`, true); providers.get(id)?.invalidateLaunch(); await providers.get(id)?.restart(); providers.get(id)?.refresh(); void control.refreshUsage(id); }
 		return result;
 	}
 	// Everything the page does, with the window's own parts — its prompts, its modal, its
@@ -113,7 +113,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			},
 			closeSessions: async id => { await providers.get(id)?.closeAllSessions(); },
 			restartAgent: async id => { await providers.get(id)?.restart(); },
-			refreshAgent: id => { providers.get(id)?.refresh(); },
+			refreshAgent: id => { providers.get(id)?.invalidateLaunch(); providers.get(id)?.refresh(); },
 			publishModels: async id => { await providers.get(id)?.publishModels(); },
 			prepareAgent: id => providers.get(id)?.prepareAgent() ?? Promise.resolve(false),
 			askAgent: (id, prompt) => providers.get(id)?.askAgent(prompt) ?? Promise.resolve(undefined),
@@ -177,10 +177,18 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('acpHub.refreshUsage', async () => { for (const adapter of ADAPTERS) { await control.refreshUsage(adapter.id); } }),
 		vscode.workspace.onDidChangeConfiguration(event => {
 			for (const adapter of ADAPTERS) {
-				if (event.affectsConfiguration(`acpHub.agents.${adapter.id}`)) { void providers.get(adapter.id)?.restart(); providers.get(adapter.id)?.refresh(); }
+				if (event.affectsConfiguration(`acpHub.agents.${adapter.id}`)) {
+					providers.get(adapter.id)?.invalidateLaunch();
+					void providers.get(adapter.id)?.restart();
+					providers.get(adapter.id)?.refresh();
+				}
 			}
 		}),
-		secrets.onDidChange(id => { void providers.get(id)?.restart(); providers.get(id)?.refresh(); }),
+		secrets.onDidChange(id => {
+			providers.get(id)?.invalidateLaunch();
+			void providers.get(id)?.restart();
+			providers.get(id)?.refresh();
+		}),
 		// The user is back: an agent the idle shutdown stopped starts while they type, not after they send.
 		vscode.window.onDidChangeWindowState(state => {
 			if (state.focused && state.active) { for (const provider of providers.values()) { provider.wakeAfterIdle(); } }
@@ -200,6 +208,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				shown = Math.max(shown, fraction);
 			});
 		});
+		providers.get(adapter.id)?.invalidateLaunch();
 		providers.get(adapter.id)?.refresh();
 	}
 	for (const adapter of ADAPTERS) {

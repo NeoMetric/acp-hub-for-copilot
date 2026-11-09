@@ -34,6 +34,13 @@ import { normalizeRoot, WorkspaceProcesses, workspaceRootOf, type WorkspaceProce
 /** Per-process nonce, so call ids from an earlier run in a chat's history never match a new call. */
 const TOOL_CALL_ID_PREFIX = `acp-hub-${randomBytes(4).toString('hex')}-`;
 
+/**
+ * How long an agent that is not installed is remembered. The probe looks for the
+ * program on disk, so a burst of model-list refreshes must not repeat it, while
+ * an agent installed a moment later is found soon after.
+ */
+const NOT_INSTALLED_TTL_MS = 5_000;
+
 /** Everything the chat use case needs from whoever hosts it. */
 export interface ChatServiceDeps {
 	/** The agent's own descriptions of what it does. */
@@ -88,6 +95,10 @@ export class ChatService {
 	private readonly warmSession: WarmSession;
 	private readonly turns: TurnRunner;
 	private toolCallSeq = 0;
+	/** The launch last read, and when it was read; an absent context is kept for {@link NOT_INSTALLED_TTL_MS}. */
+	private launchCache: { readonly value: LaunchContext | undefined; readonly at: number } | undefined;
+	/** The probe in flight, so a burst of calls shares it. */
+	private launchProbe: Promise<LaunchContext | undefined> | undefined;
 
 	/** Sessions being closed, so a request for the same chat waits until the agent has let go of the session. */
 	private readonly closing = new Map<string, Promise<void>>();
@@ -193,12 +204,41 @@ export class ChatService {
 
 	/** The launch context of the installed agent, or the error that says it is not installed. */
 	private async resolveLaunch(): Promise<LaunchContext> {
-		const ctx = await this.deps.resolveLaunch();
+		const ctx = await this.cachedLaunch();
 		if (!ctx) {
 			throw new AdapterNotInstalledError(this.deps.adapter.displayName);
 		}
 		this.launch = ctx;
 		return ctx;
+	}
+
+	/**
+	 * The launch context the host last reported: an installation probe plus the
+	 * stored key, so it is read once and not on every model-list refresh. The host
+	 * calls {@link invalidateLaunch} when a setting or a secret changes, which is
+	 * the only way the launch can change under a running service.
+	 */
+	private cachedLaunch(): Promise<LaunchContext | undefined> {
+		const cached = this.launchCache;
+		if (cached && (cached.value !== undefined || Date.now() - cached.at < NOT_INSTALLED_TTL_MS)) {
+			return Promise.resolve(cached.value);
+		}
+		if (!this.launchProbe) {
+			this.launchProbe = this.deps.resolveLaunch()
+				.then(value => {
+					this.launchCache = { value, at: Date.now() };
+					return value;
+				})
+				.finally(() => {
+					this.launchProbe = undefined;
+				});
+		}
+		return this.launchProbe;
+	}
+
+	/** Forgets the launch the agent was resolved with, so the next ask reads the install and the key again. */
+	invalidateLaunch(): void {
+		this.launchCache = undefined;
 	}
 
 	/** The process the host's own requests run in: the window's first folder. */
