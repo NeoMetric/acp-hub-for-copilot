@@ -90,7 +90,7 @@ export class LanguageModelToolCallPart {
 }
 
 export class LanguageModelToolResultPart {
-	constructor(readonly callId: string, readonly content: unknown[]) { }
+	constructor(readonly callId: string, readonly content: unknown[], readonly isError = false) { }
 }
 
 export class LanguageModelError extends Error { }
