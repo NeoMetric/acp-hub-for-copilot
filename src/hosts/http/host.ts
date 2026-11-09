@@ -9,7 +9,8 @@ import * as path from 'node:path';
 import { textOf } from '../../engine/chat/messages';
 import type { ChatMessage, ChatRequest } from '../../engine/model/chat';
 import type { ChatIdentity, HostPort, Log } from '../../engine/ports/host';
-import type { ConfigReader, SecretStore, StateStore } from '../../engine/ports/state';
+import type { ConfigReader } from '../../engine/ports/state';
+import { createFileStore } from '../../engine/store/fileStore';
 import { defaultWorkspaceOf, loadConfig } from './config';
 
 /** The header a client names its chat with; a client that sends none gets a name from its opening. */
@@ -18,9 +19,6 @@ export const CHAT_ID_HEADER = 'x-chat-id';
 /** The header a client names the folder its chat works in with. */
 export const CWD_HEADER = 'x-acp-cwd';
 
-const STATE_FILE = 'state.json';
-const SECRETS_FILE = 'secrets.json';
-
 /**
  * How long a chat's client has to return the result of a tool call. An agent
  * whose adapter names no wait leaves the engine's own wait unbounded, so a
@@ -28,8 +26,6 @@ const SECRETS_FILE = 'secrets.json';
  * lives.
  */
 export const DEFAULT_TOOL_CALL_WAIT_MS = 120_000;
-/** How the extension names an agent's key in its own secret storage; the file keeps the same name. */
-const SECRET_PREFIX = 'acpHub.apiKey.';
 
 /** Writes one message to the server's stderr, which is where a headless host tells what it does. */
 export const stderrLog: Log = (message, level = 'info') => {
@@ -68,8 +64,7 @@ export function createHeadlessHost(options: HeadlessHostOptions): HostPort {
 	fs.mkdirSync(root, { recursive: true });
 
 	const settings = loadConfig(root, log);
-	const state = new FileStateStore(path.join(root, STATE_FILE), log);
-	const secrets = new FileSecretStore(path.join(root, SECRETS_FILE), log);
+	const { state, secrets } = createFileStore(root);
 
 	return {
 		log,
@@ -232,109 +227,4 @@ export class ToolCallParking {
 		}
 		return true;
 	}
-}
-
-/** Every write replaces a whole JSON document, through a temp file in the same folder. */
-let tempSeq = 0;
-
-async function writeAtomic(file: string, value: unknown, mode?: number): Promise<void> {
-	await fs.promises.mkdir(path.dirname(file), { recursive: true });
-	const temp = `${file}.${process.pid}.${++tempSeq}.tmp`;
-	try {
-		await fs.promises.writeFile(temp, `${JSON.stringify(value, undefined, '\t')}\n`, { encoding: 'utf8', mode });
-		await fs.promises.rename(temp, file);
-	} catch (error) {
-		await fs.promises.rm(temp, { force: true }).catch(() => undefined);
-		throw error;
-	}
-}
-
-function readJsonObject(file: string, log: Log): Record<string, unknown> {
-	let text: string;
-	try {
-		text = fs.readFileSync(file, 'utf8');
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-			log(`Could not read ${file} (${messageOf(error)}); starting empty.`, 'warn');
-		}
-		return {};
-	}
-	try {
-		const parsed: unknown = JSON.parse(text);
-		if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-			return parsed as Record<string, unknown>;
-		}
-		log(`${file} does not hold a JSON object; starting empty.`, 'warn');
-	} catch (error) {
-		log(`Could not parse ${file} (${messageOf(error)}); starting empty.`, 'warn');
-	}
-	return {};
-}
-
-/** The engine's key/value state, as one JSON document under the store root. */
-class FileStateStore implements StateStore {
-
-	private readonly values: Record<string, unknown>;
-	private pending: Promise<void> = Promise.resolve();
-
-	constructor(private readonly file: string, log: Log) {
-		this.values = readJsonObject(file, log);
-	}
-
-	get<T>(key: string): T | undefined {
-		return this.values[key] as T | undefined;
-	}
-
-	keys(): readonly string[] {
-		return Object.keys(this.values);
-	}
-
-	update(key: string, value: unknown): Promise<void> {
-		this.values[key] = value;
-		return this.save();
-	}
-
-	/** Queues the write, so two updates never interleave their temp files and renames. */
-	private save(): Promise<void> {
-		const next = this.pending.catch(() => undefined).then(() => writeAtomic(this.file, this.values));
-		this.pending = next.catch(() => undefined);
-		return next;
-	}
-}
-
-/** The agents' keys, in a file only the owner's account can read. */
-class FileSecretStore implements SecretStore {
-
-	private readonly values: Record<string, unknown>;
-	private pending: Promise<void> = Promise.resolve();
-
-	constructor(private readonly file: string, log: Log) {
-		this.values = readJsonObject(file, log);
-	}
-
-	async get(id: string): Promise<string | undefined> {
-		await this.pending;
-		const value = this.values[`${SECRET_PREFIX}${id}`];
-		return typeof value === 'string' && value.length > 0 ? value : undefined;
-	}
-
-	async set(id: string, value: string): Promise<void> {
-		this.values[`${SECRET_PREFIX}${id}`] = value;
-		await this.save();
-	}
-
-	async delete(id: string): Promise<void> {
-		delete this.values[`${SECRET_PREFIX}${id}`];
-		await this.save();
-	}
-
-	private save(): Promise<void> {
-		const next = this.pending.catch(() => undefined).then(() => writeAtomic(this.file, this.values, 0o600));
-		this.pending = next.catch(() => undefined);
-		return next;
-	}
-}
-
-function messageOf(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

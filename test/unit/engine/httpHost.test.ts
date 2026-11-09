@@ -93,7 +93,10 @@ describe('the headless host', () => {
 		await host.state.update('acpHub.probe', { again: 2 });
 
 		expect(fs.readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([]);
-		expect(JSON.parse(fs.readFileSync(path.join(root, 'state.json'), 'utf8'))).toEqual({ 'acpHub.probe': { again: 2 } });
+		expect(JSON.parse(fs.readFileSync(path.join(root, 'state.json'), 'utf8'))).toEqual({
+			revision: 2,
+			values: { 'acpHub.probe': { again: 2 } },
+		});
 	});
 
 	it('keeps the agents keys in a file of their own', async () => {
