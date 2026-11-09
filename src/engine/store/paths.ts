@@ -18,3 +18,12 @@ export function storageRoot(env: NodeJS.ProcessEnv = process.env): string {
 	const configured = env[STORAGE_ROOT_ENV]?.trim();
 	return path.resolve(configured ? configured : path.join(os.homedir(), '.acp-hub'));
 }
+
+/**
+ * The folder the agents are installed in, below the store root both gateways
+ * share. Both derive it from the root, so an agent installed by one gateway is
+ * the install the other launches, with the same logs and pid registry.
+ */
+export function agentsRoot(root: string): string {
+	return path.join(path.resolve(root), 'agents');
+}

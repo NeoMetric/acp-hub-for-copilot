@@ -17,7 +17,7 @@ import { recordStoragePath } from './core/storageCleanup';
 import { UsageStore } from './core/usage';
 import { ControlService } from './engine/control/ControlService';
 import type { ConfigReader } from './engine/ports/state';
-import { storageRoot } from './engine/store/paths';
+import { agentsRoot, storageRoot } from './engine/store/paths';
 import { createVsCodeHost } from './hosts/vscode/host';
 import { SidebarHost } from './sidebar/host';
 
@@ -25,11 +25,13 @@ export function activate(context: vscode.ExtensionContext): void {
 	const output = vscode.window.createOutputChannel('ACP Hub', { log: true });
 	const log = scopedLog(output);
 	const bridge = new McpBridge(log);
-	const storageDir = context.globalStorageUri.fsPath;
+	const extensionStorageDir = context.globalStorageUri.fsPath;
 	// One store for both gateways, so a chat saved in VS Code resumes in the server, and back.
-	const shared = openSharedStore({ root: storageRoot(), fallbackRoot: storageDir, log });
+	const shared = openSharedStore({ root: storageRoot(), fallbackRoot: extensionStorageDir, log });
 	const state = shared.store.state;
 	log(`The shared store is in ${shared.root}.`, 'debug');
+	// The install root of both gateways: an agent installed here is installed for the server, with its logs and pid registry.
+	const storageDir = agentsRoot(shared.root);
 	const legacyState = stateStoreOf(context.globalState);
 	if (legacyState) {
 		void migrateState(legacyState, state).catch(error => log(`Could not copy the extension's saved state into the shared store: ${error instanceof Error ? error.message : String(error)}`, 'warn'));
@@ -46,7 +48,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		log,
 		state,
 		secrets,
-		storageRoot: storageDir,
+		storageRoot: shared.root,
 		settings,
 		windowFolder: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? storageDir,
 		agentName: id => findAdapter(id)?.displayName ?? id,
@@ -131,7 +133,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				onSignInUrl: prompt => sidebar.showSignInUrl(adapter.id, prompt),
 			},
 			requestDumpDir: context.globalStorageUri,
-			profilePromptsDir: path.join(path.dirname(path.dirname(storageDir)), 'prompts'),
+			profilePromptsDir: path.join(path.dirname(path.dirname(extensionStorageDir)), 'prompts'),
 			signIn: id => { void chooseSignIn(id); },
 			showOutput: () => output.show(),
 		});

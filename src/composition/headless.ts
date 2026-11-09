@@ -13,6 +13,7 @@ import type { ToolBridge } from '../engine/chat/types';
 import { UsageStore } from '../engine/chat/usage';
 import { ControlService, type ControlSurface } from '../engine/control/ControlService';
 import type { HostPort, Log } from '../engine/ports/host';
+import { agentsRoot } from '../engine/store/paths';
 import { defaultWorkspaceOf } from '../hosts/http/config';
 import { createHeadlessHost, stderrLog } from '../hosts/http/host';
 
@@ -55,7 +56,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 	const log = options.log ?? stderrLog;
 	const extensionDir = options.extensionDir ?? process.cwd();
 	const host = createHeadlessHost({ root, log, owner: options.owner });
-	const agentsDir = path.join(root, 'agents');
+	const agentsDir = agentsRoot(root);
 	/** Where the agents are installed, and where an install reports what it does. */
 	const install = {
 		storageDir: agentsDir,
