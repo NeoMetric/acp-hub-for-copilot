@@ -6,10 +6,7 @@
 import type { AgentAdapter, ModelChoice, ModelPolicy } from './adapter';
 import type { AgentSession } from '../engine/acp/protocol';
 import type { ModelInfoWire } from '../hosts/http/wire';
-import { effortLevelsOf, findModelOption, flattenChoices, MODEL_VERSION } from './models';
-
-/** The model picker's title for the thinking effort of every agent. */
-const EFFORT_TITLE = 'Thinking Effort';
+import { EFFORT_TITLE, effortLevelsOf, findModelOption, flattenChoices, MODEL_VERSION } from './models';
 
 /** The models a session offers, and the thinking effort the agent accepts for them. */
 export interface ModelChoices {
