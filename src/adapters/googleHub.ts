@@ -1,7 +1,7 @@
 import * as cp from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as net from 'node:net';
-import { killTree, trackChild } from '../core/processes';
+import { killTree, trackChild } from '../core/processHost';
 
 /**
  * The folder under `~/.gemini` where `agy acp` keeps its conversations. The language server that

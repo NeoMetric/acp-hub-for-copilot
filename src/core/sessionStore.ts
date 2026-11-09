@@ -3,8 +3,10 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { createHash } from 'crypto';
 import type * as vscode from 'vscode';
+import { messageFingerprintOf, shortHash } from './sessionFingerprint';
+
+export { messageFingerprintOf, shortHash };
 
 const MAX_SAVED_SESSIONS = 40;
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -60,15 +62,6 @@ export interface SavedSession {
 	/** Set when the extension made this session by forking, so it may remove it from the agent once the entry expires. */
 	readonly forked?: boolean;
 	readonly savedAt: number;
-}
-
-export function shortHash(text: string): string {
-	return createHash('sha1').update(text).digest('hex').slice(0, 12);
-}
-
-/** The fingerprint of the text of an agent message, as the agent expects it in a fork point. */
-export function messageFingerprintOf(text: string): string {
-	return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
 }
 
 export function hashAll(values: readonly string[]): string[] {
