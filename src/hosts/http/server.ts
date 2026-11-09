@@ -20,8 +20,8 @@ import type { Log } from '../../engine/ports/host';
 import { ControlPage } from '../../ui/controlPage';
 import type { ControlAction, ControlState } from '../../ui/messages';
 import { ACTION_ROUTE, EVENTS_ROUTE, STATE_ROUTE } from '../../ui/transport';
-import { DEFAULT_TOOL_CALL_WAIT_MS, rememberHeaders, ToolCallParking } from './host';
-import { API_VERSION, SERVER_NAME, type HealthWire, type ModelWire } from './wire';
+import { DEFAULT_TOOL_CALL_WAIT_MS, rememberExtras, ToolCallParking, type RequestExtras } from './host';
+import { API_VERSION, SERVER_NAME, type AcpRequestExtras, type HealthWire, type ModelWire } from './wire';
 
 /** The package version esbuild bakes into the bundle; it is undefined when the sources run unbundled. */
 declare const __ACP_HUB_VERSION__: string | undefined;
@@ -30,7 +30,7 @@ declare const __ACP_HUB_VERSION__: string | undefined;
 const VERSION = typeof __ACP_HUB_VERSION__ === 'undefined' ? 'dev' : __ACP_HUB_VERSION__;
 
 /** The most a completion body may hold; a bigger one is refused rather than read into memory. */
-const MAX_BODY_BYTES = 8 * 1024 * 1024;
+const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
 /**
  * The model id that names whatever the agent has selected. A chat-completions
@@ -53,11 +53,13 @@ interface TurnUsage {
 	readonly promptTokens: number;
 	readonly cachedTokens: number;
 	readonly outputTokens: number;
+	readonly reasoningTokens?: number;
 }
 
 /** What the events of one turn said, gathered so the response can be written in one piece. */
 interface TurnResult {
 	text: string;
+	reasoning: string;
 	toolCalls: TurnToolCall[];
 	usage?: TurnUsage;
 	stopReason?: string;
@@ -524,7 +526,7 @@ async function complete(composition: HeadlessComposition, parking: ToolCallParki
 		return;
 	}
 	const messages = messagesOf(body.messages);
-	const chatRequest = chatRequestOf(composition, request, messages, toolsOf(body), target.model);
+	const chatRequest = chatRequestOf(composition, request, body, messages, toolsOf(body), target.model);
 	// A turn the client continues after a tool call carries that call's result;
 	// only a call this chat still holds may be settled, so a stale or foreign
 	// call id is refused instead of resuming the wrong turn.
@@ -559,15 +561,55 @@ interface TurnClient {
 	readonly disconnected: () => void;
 }
 
-/** Builds the engine's request, naming the chat the way the host does when the client names none. */
-function chatRequestOf(composition: HeadlessComposition, request: http.IncomingMessage, messages: readonly ChatMessage[], tools: readonly ToolDef[], model: string): ChatRequest {
-	const headers = { chatId: headerOf(request, 'x-chat-id'), cwd: headerOf(request, 'x-acp-cwd') };
-	const draft: ChatRequest = { chatId: '', cwd: '', messages, tools, model: model === AGENT_DEFAULT_MODEL ? undefined : model };
-	rememberHeaders(draft, headers);
+/**
+ * Builds the engine's request from the body, naming the chat the way the host
+ * does when the client names none. What the wire said beyond the engine's
+ * neutral request — the `acp` extras and the older headers — is left with the
+ * host, which alone saw it.
+ */
+function chatRequestOf(composition: HeadlessComposition, request: http.IncomingMessage, body: Record<string, unknown>, messages: readonly ChatMessage[], tools: readonly ToolDef[], model: string): ChatRequest {
+	const extras: RequestExtras = {
+		acp: acpExtrasOf(body.acp),
+		headers: { chatId: headerOf(request, 'x-chat-id'), cwd: headerOf(request, 'x-acp-cwd') },
+	};
+	const draft: ChatRequest = {
+		chatId: '',
+		cwd: '',
+		messages,
+		tools,
+		model: model === AGENT_DEFAULT_MODEL ? undefined : model,
+		effort: effortOf(body.reasoning_effort),
+		systemGuidance: extras.acp?.systemGuidance,
+	};
+	rememberExtras(draft, extras);
 	// A stock OpenAI client sends no chat id, so the host names the chat by its
 	// folder and its opening words; the engine must then be given that name.
 	const identity = composition.host.chatIdentity(draft);
-	return { chatId: identity.id, cwd: identity.cwd, messages, tools, model: draft.model };
+	const named: ChatRequest = { ...draft, chatId: identity.id, cwd: identity.cwd };
+	rememberExtras(named, extras);
+	return named;
+}
+
+/** The `acp` field of a body, narrowed to the context a chat sends. */
+function acpExtrasOf(value: unknown): AcpRequestExtras {
+	if (!isObject(value)) {
+		return {};
+	}
+	const text = (field: unknown): string | undefined => typeof field === 'string' && field.length > 0 ? field : undefined;
+	const folders = Array.isArray(value.workspaceFolders) ? value.workspaceFolders.filter((folder): folder is string => typeof folder === 'string') : undefined;
+	return {
+		chatId: text(value.chatId),
+		label: text(value.label),
+		cwd: text(value.cwd),
+		workspaceFolders: folders,
+		systemGuidance: text(value.systemGuidance),
+		chatContext: text(value.chatContext),
+	};
+}
+
+/** The effort the client picked for the turn, which is the engine's own name for it. */
+function effortOf(value: unknown): string | undefined {
+	return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 /**
@@ -643,6 +685,8 @@ async function stream(service: ChatService, request: ChatRequest, model: string,
 			gather(turn, event);
 			if (event.type === 'text') {
 				write(chunkOf(id, created, model, { content: event.text }, null));
+			} else if (event.type === 'thought') {
+				write(chunkOf(id, created, model, { reasoning_content: event.text }, null));
 			} else if (event.type === 'tool-call') {
 				client.toolCall(event);
 				write(chunkOf(id, created, model, { tool_calls: [toolCallDelta(turn.toolCalls.length - 1, event)] }, null));
@@ -694,7 +738,7 @@ async function failParkedToolCall(parking: ToolCallParking, service: ChatService
 }
 
 function emptyTurn(): TurnResult {
-	return { text: '', toolCalls: [] };
+	return { text: '', reasoning: '', toolCalls: [] };
 }
 
 /** Keeps what one event of the turn said, for the body written once the turn is done. */
@@ -703,19 +747,20 @@ function gather(turn: TurnResult, event: StreamEvent): void {
 		case 'text':
 			turn.text += event.text;
 			return;
+		case 'thought':
+			turn.reasoning += event.text;
+			return;
 		case 'tool-call':
 			turn.toolCalls.push({ callId: event.callId, name: event.name, input: event.input });
 			return;
 		case 'usage':
-			turn.usage = { promptTokens: event.promptTokens, cachedTokens: event.cachedTokens, outputTokens: event.outputTokens };
+			turn.usage = { promptTokens: event.promptTokens, cachedTokens: event.cachedTokens, outputTokens: event.outputTokens, reasoningTokens: event.reasoningTokens };
 			return;
 		case 'done':
 			turn.stopReason = event.stopReason;
 			return;
 		case 'error':
 			turn.error = event.message;
-			return;
-		case 'thought':
 			return;
 	}
 }
@@ -733,6 +778,9 @@ function finishOf(turn: TurnResult): FinishReason {
 
 function completionOf(turn: TurnResult, model: string): unknown {
 	const message: Record<string, unknown> = { role: 'assistant', content: turn.text.length > 0 ? turn.text : null };
+	if (turn.reasoning.length > 0) {
+		message.reasoning_content = turn.reasoning;
+	}
 	if (turn.toolCalls.length > 0) {
 		message.tool_calls = turn.toolCalls.map(call => ({ id: call.callId, type: 'function', function: { name: call.name, arguments: argumentsOf(call.input) } }));
 	}
@@ -774,6 +822,7 @@ function usageOf(usage: TurnUsage): unknown {
 		completion_tokens: usage.outputTokens,
 		total_tokens: usage.promptTokens + usage.outputTokens,
 		...(usage.cachedTokens > 0 ? { prompt_tokens_details: { cached_tokens: usage.cachedTokens } } : {}),
+		completion_tokens_details: { reasoning_tokens: usage.reasoningTokens ?? 0 },
 	};
 }
 
@@ -821,11 +870,7 @@ function partsOf(message: Record<string, unknown>, role: ChatRole): Part[] {
 				parts.push({ type: 'text', text: message.content });
 			}
 		} else if (Array.isArray(message.content)) {
-			for (const item of message.content) {
-				if (isObject(item) && item.type === 'text' && typeof item.text === 'string') {
-					parts.push({ type: 'text', text: item.text });
-				}
-			}
+			parts.push(...contentPartsOf(message.content, role === 'user'));
 		}
 	}
 	if (role === 'assistant' && Array.isArray(message.tool_calls)) {
@@ -837,25 +882,69 @@ function partsOf(message: Record<string, unknown>, role: ChatRole): Part[] {
 		}
 	}
 	if (role === 'tool') {
-		const text = contentTextOf(message.content);
-		parts.push({ type: 'tool-result', callId: typeof message.tool_call_id === 'string' ? message.tool_call_id : '', content: [{ type: 'text', text }], ...(isErrorText(text) ? { isError: true } : {}) });
+		const content = contentPartsOf(message.content, true);
+		// A tool result always says something: an empty output is an empty text part.
+		if (content.length === 0) {
+			content.push({ type: 'text', text: '' });
+		}
+		const text = textOfParts(content);
+		parts.push({ type: 'tool-result', callId: typeof message.tool_call_id === 'string' ? message.tool_call_id : '', content, ...(isErrorText(text) ? { isError: true } : {}) });
 	}
 	return parts;
+}
+
+/**
+ * The parts of a message's content array: its text, and — where a client may
+ * send one — each image, as a `data:` URL. A tool's own output keeps both
+ * kinds, so a screenshot it returned reaches the agent as an image rather than
+ * as a URL the agent cannot open.
+ */
+function contentPartsOf(value: unknown, images: boolean): Part[] {
+	if (typeof value === 'string') {
+		return value.length > 0 ? [{ type: 'text', text: value }] : [];
+	}
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	const parts: Part[] = [];
+	for (const item of value) {
+		if (!isObject(item)) {
+			continue;
+		}
+		if (item.type === 'text' && typeof item.text === 'string') {
+			parts.push({ type: 'text', text: item.text });
+			continue;
+		}
+		const image = images ? imageOf(item) : undefined;
+		if (image) {
+			parts.push(image);
+		}
+	}
+	return parts;
+}
+
+/** The image of one content part, whose URL a client sends inline as base64. */
+function imageOf(item: Record<string, unknown>): Part | undefined {
+	if (item.type !== 'image_url') {
+		return undefined;
+	}
+	const url = typeof item.image_url === 'string' ? item.image_url
+		: isObject(item.image_url) && typeof item.image_url.url === 'string' ? item.image_url.url
+			: undefined;
+	const match = url === undefined ? null : /^data:([^;,]+);base64,([\s\S]*)$/.exec(url);
+	if (!match) {
+		return undefined;
+	}
+	return { type: 'image', mimeType: match[1], data: Buffer.from(match[2], 'base64') };
+}
+
+function textOfParts(parts: readonly Part[]): string {
+	return parts.map(part => part.type === 'text' ? part.text : '').join('\n');
 }
 
 /** A client that ran a tool and failed it says so in the text: `error: …`, as MCP results do. */
 function isErrorText(text: string): boolean {
 	return /^\s*error\s*:/i.test(text);
-}
-
-function contentTextOf(value: unknown): string {
-	if (typeof value === 'string') {
-		return value;
-	}
-	if (!Array.isArray(value)) {
-		return '';
-	}
-	return value.map(item => isObject(item) && typeof item.text === 'string' ? item.text : '').join('\n');
 }
 
 function parseArguments(value: unknown): unknown {

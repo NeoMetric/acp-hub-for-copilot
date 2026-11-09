@@ -12,6 +12,7 @@ import { DEFAULT_CHAT_OWNER, type ChatIdentity, type HostPort, type Log } from '
 import type { ConfigReader } from '../../engine/ports/state';
 import { createFileStore } from '../../engine/store/fileStore';
 import { defaultWorkspaceOf, loadConfig } from './config';
+import type { AcpRequestExtras } from './wire';
 
 /** The header a client names its chat with; a client that sends none gets a name from its opening. */
 export const CHAT_ID_HEADER = 'x-chat-id';
@@ -38,16 +39,45 @@ export interface RequestHeaders {
 	readonly cwd?: string;
 }
 
+/** What a request's wire said about the chat: the `acp` extras, and the older headers. */
+export interface RequestExtras {
+	readonly acp?: AcpRequestExtras;
+	readonly headers?: RequestHeaders;
+}
+
 /**
- * The headers of each request, beside it as the VS Code host keeps what the
+ * The extras of each request, beside it as the VS Code host keeps what the
  * workbench sent: the engine hands the host a neutral request and the server is
  * the only part that saw the wire.
+ *
+ * The extras are kept for each message as well as for the request, because the
+ * engine asks for the chat's context with a slice of the messages it was given:
+ * a slice is a new array, but it holds the same messages.
  */
-const HEADERS = new WeakMap<ChatRequest, RequestHeaders>();
+const EXTRAS = new WeakMap<ChatRequest, RequestExtras>();
+const MESSAGE_EXTRAS = new WeakMap<ChatMessage, RequestExtras>();
 
-/** Records what the headers said about `request`, so the host can name its chat. */
-export function rememberHeaders(request: ChatRequest, headers: RequestHeaders): void {
-	HEADERS.set(request, headers);
+/** Records what the wire said about `request`, so the host can name its chat. */
+export function rememberExtras(request: ChatRequest, extras: RequestExtras): void {
+	EXTRAS.set(request, extras);
+	for (const message of request.messages) {
+		MESSAGE_EXTRAS.set(message, extras);
+	}
+}
+
+function extrasOf(request: ChatRequest): RequestExtras | undefined {
+	return EXTRAS.get(request);
+}
+
+/** The extras of a request, found from any of the messages it carried. */
+function extrasOfMessages(messages: readonly ChatMessage[]): RequestExtras | undefined {
+	for (const message of messages) {
+		const extras = MESSAGE_EXTRAS.get(message);
+		if (extras) {
+			return extras;
+		}
+	}
+	return undefined;
 }
 
 export interface HeadlessHostOptions {
@@ -82,10 +112,11 @@ export function createHeadlessHost(options: HeadlessHostOptions): HeadlessHost {
 		storageRoot: root,
 		writeSetting: (key, value) => settings.set(key, value),
 		chatIdentity: request => identityOf(request, settings, options.owner ?? DEFAULT_CHAT_OWNER),
-		guidanceOf: request => request.systemGuidance,
+		// The guidance is the extension's own: it took its persona out before sending, so it is used as it stands.
+		guidanceOf: request => extrasOf(request)?.acp?.systemGuidance ?? request.systemGuidance,
 		// The host writes no sections of its own into the text the engine forwards.
 		stripHostSections: text => text,
-		chatWideContextOf: () => undefined,
+		chatWideContextOf: messages => extrasOfMessages(messages)?.acp?.chatContext,
 		// The engine never asks this: it hands a tool call to the response that is
 		// open, and this host keeps that call in `ToolCallParking` until the client
 		// re-posts its result. A call with no response to carry it is refused by
@@ -109,18 +140,18 @@ export function createHeadlessHost(options: HeadlessHostOptions): HeadlessHost {
 /**
  * The chat a request belongs to. A client that names its chat keeps the name;
  * every other chat is named by the folder it works in and its opening words, so
- * a stock OpenAI client that re-posts the same conversation finds it again.
+ * a stock OpenAI client that re-posts the same conversation finds it again. The
+ * `acp` extras name it first, then the headers, then what the request itself says.
  */
 function identityOf(request: ChatRequest, settings: ConfigReader, owner: string): ChatIdentity {
-	const headers = HEADERS.get(request);
-	const cwd = folderOf(request, headers, settings);
+	const extras = extrasOf(request);
+	const cwd = folderOf(request, extras, settings);
 	const opening = openingOf(request.messages);
 	return {
-		id: namedChatId(request, headers) ?? fingerprintOf(cwd, opening),
+		id: namedChatId(request, extras) ?? fingerprintOf(cwd, opening),
 		cwd,
-		// A request carries one folder, which the engine takes as where the agent is rooted.
-		workspaceFolders: [],
-		label: labelOf(opening),
+		workspaceFolders: extras?.acp?.workspaceFolders ?? [],
+		label: trimmed(extras?.acp?.label) ?? labelOf(opening),
 		owner,
 	};
 }
@@ -136,12 +167,12 @@ export function ownerOfToken(token: string | undefined): string {
 		: `bearer:${createHash('sha256').update(token).digest('hex').slice(0, 8)}`;
 }
 
-function namedChatId(request: ChatRequest, headers: RequestHeaders | undefined): string | undefined {
-	return trimmed(headers?.chatId) ?? trimmed(request.chatId);
+function namedChatId(request: ChatRequest, extras: RequestExtras | undefined): string | undefined {
+	return trimmed(extras?.acp?.chatId) ?? trimmed(extras?.headers?.chatId) ?? trimmed(request.chatId);
 }
 
-function folderOf(request: ChatRequest, headers: RequestHeaders | undefined, settings: ConfigReader): string {
-	return trimmed(headers?.cwd) ?? trimmed(request.cwd) ?? defaultWorkspaceOf(settings) ?? process.cwd();
+function folderOf(request: ChatRequest, extras: RequestExtras | undefined, settings: ConfigReader): string {
+	return trimmed(extras?.acp?.cwd) ?? trimmed(extras?.headers?.cwd) ?? trimmed(request.cwd) ?? defaultWorkspaceOf(settings) ?? process.cwd();
 }
 
 /** The first thing the user said, which names the chat and seeds its fingerprint. */

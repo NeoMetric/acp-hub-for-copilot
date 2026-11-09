@@ -14,7 +14,7 @@ import type { ToolBridge } from '../../../src/engine/chat/types';
 import type { ChatRequest } from '../../../src/engine/model/chat';
 import { DEFAULT_CHAT_OWNER } from '../../../src/engine/ports/host';
 import { configFileOf } from '../../../src/hosts/http/config';
-import { createHeadlessHost, ownerOfToken, rememberHeaders } from '../../../src/hosts/http/host';
+import { createHeadlessHost, ownerOfToken, rememberExtras } from '../../../src/hosts/http/host';
 
 const NO_LOG = (): void => undefined;
 
@@ -143,8 +143,8 @@ describe('the headless host', () => {
 		const host = hostAt(storeRoot());
 		const first = chat('hello');
 		const second = chat('hello');
-		rememberHeaders(first, { chatId: 'client-one' });
-		rememberHeaders(second, { chatId: 'client-two' });
+		rememberExtras(first, { headers: { chatId: 'client-one' } });
+		rememberExtras(second, { headers: { chatId: 'client-two' } });
 
 		expect(host.chatIdentity(first).id).toBe('client-one');
 		expect(host.chatIdentity(second).id).toBe('client-two');
@@ -156,7 +156,7 @@ describe('the headless host', () => {
 		fs.writeFileSync(configFileOf(root), JSON.stringify({ acpHub: { defaultWorkspace: '/configured' } }));
 
 		const named = chat('hello', '/request');
-		rememberHeaders(named, { cwd: '/from-header' });
+		rememberExtras(named, { headers: { cwd: '/from-header' } });
 		expect(host.chatIdentity(named).cwd).toBe('/from-header');
 		expect(host.chatIdentity(chat('hello', '/request')).cwd).toBe('/request');
 		expect(host.chatIdentity(chat('hello', '')).cwd).toBe('/configured');

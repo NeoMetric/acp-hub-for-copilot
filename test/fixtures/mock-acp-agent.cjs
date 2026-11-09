@@ -22,6 +22,7 @@
 //   env:<NAME>   replies with the value of that environment variable
 //   count        replies with the number of session/new requests received
 //   permission   asks the client for permission first, then replies with the outcome
+//   think        thinks first, then replies with "hello"
 //   tool         calls the MCP tool "do_a_thing", then replies with what it returned
 //   tool2        calls it twice in a row, then replies with what the second call returned
 //   forget       fails as if the session no longer existed
@@ -69,6 +70,14 @@ function text(sessionId, value) {
 		jsonrpc: '2.0',
 		method: 'session/update',
 		params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } } },
+	});
+}
+
+function thought(sessionId, value) {
+	send({
+		jsonrpc: '2.0',
+		method: 'session/update',
+		params: { sessionId, update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: value } } },
 	});
 }
 
@@ -160,6 +169,12 @@ function handlePrompt(message) {
 			text(sessionId, `tool failed: ${error.message}`);
 			reply(message.id, { stopReason: 'end_turn' });
 		});
+		return;
+	}
+	if (prompt === 'think') {
+		thought(sessionId, 'pondering');
+		text(sessionId, 'hello');
+		reply(message.id, { stopReason: 'end_turn', _meta: { quota: { token_count: { inputTokens: 3, outputTokens: 2, reasoningOutputTokens: 7 } } } });
 		return;
 	}
 	if (prompt.startsWith('env:')) {
