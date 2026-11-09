@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- `npm run typecheck`, `npm run lint` and `npm test` must pass at the end of every task.
+- `npm run typecheck`, `npm run lint` and `npm test` must pass at the end of every task, with one deliberate exception: **Tasks 1–4 are a single TDD cycle.** Task 1 lands the boundary test red and Tasks 2–3 turn it green; the suite must be fully green again at the end of Task 4. No other task may leave the suite red.
 - The extension's behaviour must not change. `test/unit/forkChats.test.ts` (34 tests) is the equivalence proof and must pass unmodified except where a task says otherwise.
 - No file under `src/core` may contain an agent id, vendor or display-name comparison — `test/unit/noAgentBranching.test.ts` enforces this.
 - No adapter may import from `src/core` anything outside the allow-list defined in Task 1.
@@ -24,7 +24,7 @@
 - **An adapter that sets a `forker` while its agent also advertises `session/fork`.** The plan must say which wins; both today's behaviour and a user's expectation (use the protocol's own fork) must agree.
 - **A policy that plans `fork` for an agent that turned out not to advertise it.** The core must fall back to a rebuild, not throw, and the chat must still answer.
 - **Two chats mid-turn on the same saved session.** Keeping the source id and restarting must never end another chat's in-flight turn.
-- **A `toolWaitMs` of 0, negative or `NaN`.** The core must clamp to a finite wait; the old behaviour of waiting forever must not survive.
+- **A `toolWaitMs` of 0, negative or `NaN`.** The core must clamp to a positive finite wait when a policy names one; an *unset* value keeps today's "wait as long as the agent does", because bounding that belongs to the host, not this plan.
 - **A new adapter that omits `sessionPolicy` entirely.** It must behave exactly like today's Claude/Codex adapters, from a default, without touching core.
 
 ---
@@ -184,7 +184,7 @@ git commit -m "refactor: move ACP protocol types out of the client"
 - Create: `src/core/processHost.ts`
 - Modify: `src/core/sessionStore.ts` (re-export `shortHash`, `messageFingerprintOf`)
 - Modify: `src/core/processes.ts` (re-export `killTree`, `trackChild`)
-- Modify: `src/adapters/googleFork.ts:7`, `src/adapters/googleHub.ts:4`
+- Modify: `src/adapters/googleFork.ts:7`, `src/adapters/googleHub.ts:4`, `src/adapters/googleQuota.ts:1`
 - Test: `test/unit/sessionFingerprint.test.ts`
 
 **Interfaces:**

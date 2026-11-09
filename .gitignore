@@ -11,3 +11,6 @@ Desktop.ini
 .env
 .env.local
 storage-paths.json
+
+# Subagent-driven-development scratch (ledger, briefs, review packages)
+.superpowers/
