@@ -544,6 +544,9 @@ export class ChatService {
 	/** Closes every chat session and the agent process. */
 	async close(): Promise<void> {
 		this.stopAgent();
+		// The bridge's streams and heartbeats belong to sessions that are going away;
+		// a host that closes leaves none of either behind.
+		this.deps.bridge.drain?.();
 		await this.closeAllSessions();
 	}
 

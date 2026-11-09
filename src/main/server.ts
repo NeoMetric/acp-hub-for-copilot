@@ -11,6 +11,7 @@ import type { Part } from '../engine/model/chat';
 import { storageRoot } from '../engine/store/paths';
 import { ownerOfToken, stderrLog } from '../hosts/http/host';
 import { createServer } from '../hosts/http/server';
+
 /** The port the server listens on when the operator names none. */
 const DEFAULT_PORT = 8791;
 
@@ -34,6 +35,7 @@ function toolBridgeOf(bridge: McpBridge): ToolBridge {
 		),
 		updateTools: (token, tools) => bridge.updateTools(token, tools),
 		unregisterSession: token => bridge.unregisterSession(token),
+		drain: () => bridge.drain(),
 	};
 }
 
@@ -88,7 +90,7 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 	server.on('error', error => {
 		stderrLog(`The server stopped: ${error.message}`, 'error');
 		void composition.close().finally(() => {
-			bridge.dispose();
+			bridge.drain();
 			process.exit(1);
 		});
 	});
@@ -104,7 +106,7 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 			void composition.close()
 				.catch(error => stderrLog(`Could not stop every agent: ${error instanceof Error ? error.message : String(error)}`, 'warn'))
 				.finally(() => {
-					bridge.dispose();
+					bridge.drain();
 					process.exit(0);
 				});
 		});

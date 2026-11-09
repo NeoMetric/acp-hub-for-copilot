@@ -25,6 +25,12 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024;
  * which loses the answer to a question the user is still thinking about.
  */
 const STREAM_HEARTBEAT_MS = 20_000;
+/**
+ * How many notification streams one ACP session keeps open. A client that
+ * reconnects without closing the stream it had would otherwise leave one
+ * heartbeat per attempt running for as long as the process lives.
+ */
+export const MAX_STREAMS_PER_SESSION = 8;
 
 /** The content of one tool call, in the shape the caller returned it. */
 export interface McpToolResult {
@@ -121,9 +127,27 @@ export class McpBridge implements Disposable {
 	private readonly sessions = new Map<string, McpSession>();
 	/** The open notification streams of each session, by token. */
 	private readonly streams = new Map<string, Set<http.ServerResponse>>();
+	/** The heartbeat of each stream, so closing a stream or the bridge stops it. */
+	private readonly heartbeats = new Map<http.ServerResponse, NodeJS.Timeout>();
 	private disposed = false;
+	/** Bumped when the bridge is drained, so a start that was overtaken closes its server. */
+	private generation = 0;
 
-	constructor(private readonly log: Log, private readonly heartbeatMs = STREAM_HEARTBEAT_MS) { }
+	constructor(private readonly log: Log, private readonly heartbeatMs = STREAM_HEARTBEAT_MS, private readonly maxStreams = MAX_STREAMS_PER_SESSION) { }
+
+	/** How many notification streams are open, for the host that reports its health. */
+	get openStreams(): number {
+		let count = 0;
+		for (const streams of this.streams.values()) {
+			count += streams.size;
+		}
+		return count;
+	}
+
+	/** How many heartbeats run; a drained bridge has none. */
+	get activeHeartbeats(): number {
+		return this.heartbeats.size;
+	}
 
 	/** Registers a tool set for a new ACP session and returns its endpoint. */
 	async registerSession(tools: readonly ToolDef[], execute: McpToolExecutor, options: McpSessionOptions = {}): Promise<McpServerEndpoint> {
@@ -172,9 +196,23 @@ export class McpBridge implements Disposable {
 
 	dispose(): void {
 		this.disposed = true;
+		this.drain();
+	}
+
+	/**
+	 * Closes every notification stream, stops their heartbeats and stops the
+	 * server, so a host that is going away leaves no timer behind. A drained
+	 * bridge starts again on the next session it is asked for.
+	 */
+	drain(): void {
+		this.generation++;
 		for (const token of [...this.streams.keys()]) {
 			this.closeStreams(token);
 		}
+		for (const heartbeat of this.heartbeats.values()) {
+			clearInterval(heartbeat);
+		}
+		this.heartbeats.clear();
 		this.sessions.clear();
 		this.server?.close();
 		this.server = undefined;
@@ -196,6 +234,7 @@ export class McpBridge implements Disposable {
 	}
 
 	private startServer(): Promise<void> {
+		const generation = this.generation;
 		return new Promise<void>((resolve, reject) => {
 			const server = http.createServer((request, response) => {
 				void this.handleRequest(request, response).catch(error => {
@@ -207,6 +246,12 @@ export class McpBridge implements Disposable {
 			server.on('error', onError);
 			server.listen(0, '127.0.0.1', () => {
 				server.off('error', onError);
+				// The bridge was drained while the server was binding: nothing may use it now.
+				if (generation !== this.generation) {
+					server.close();
+					reject(new Error('The tool bridge was drained while it was starting.'));
+					return;
+				}
 				server.keepAliveTimeout = 120_000;
 				server.headersTimeout = 125_000;
 				// A tool call waits for the chat that owns it, which can take as long
@@ -324,7 +369,6 @@ export class McpBridge implements Disposable {
 		const streams = this.streams.get(token) ?? new Set<http.ServerResponse>();
 		streams.add(response);
 		this.streams.set(token, streams);
-		this.log(`Opened a notification stream for an agent session (${streams.size} open).`, 'debug');
 
 		const heartbeat = setInterval(() => {
 			if (!response.writableEnded && !response.destroyed) {
@@ -332,16 +376,43 @@ export class McpBridge implements Disposable {
 			}
 		}, this.heartbeatMs);
 		heartbeat.unref();
+		this.heartbeats.set(response, heartbeat);
 
-		const forget = () => {
-			clearInterval(heartbeat);
-			streams.delete(response);
-			if (streams.size === 0 && this.streams.get(token) === streams) {
-				this.streams.delete(token);
-			}
-		};
+		const forget = (): void => this.forgetStream(token, response);
 		response.on('close', forget);
 		response.on('error', forget);
+
+		this.log(`Opened a notification stream for an agent session (${streams.size} open).`, 'debug');
+		// A client that reconnects without closing the stream it had would leave one
+		// heartbeat per attempt; the newest streams are the ones the agent reads.
+		while (streams.size > this.maxStreams) {
+			const oldest = streams.values().next().value;
+			if (!oldest) {
+				break;
+			}
+			this.log(`Closing the oldest notification stream of an agent session: ${this.maxStreams} is the most one keeps.`, 'debug');
+			this.forgetStream(token, oldest);
+			if (!oldest.writableEnded && !oldest.destroyed) {
+				oldest.end();
+			}
+		}
+	}
+
+	/** Forgets one stream: its heartbeat stops, and its session forgets it once none is left. */
+	private forgetStream(token: string, response: http.ServerResponse): void {
+		const heartbeat = this.heartbeats.get(response);
+		if (heartbeat) {
+			clearInterval(heartbeat);
+			this.heartbeats.delete(response);
+		}
+		const streams = this.streams.get(token);
+		if (!streams) {
+			return;
+		}
+		streams.delete(response);
+		if (streams.size === 0 && this.streams.get(token) === streams) {
+			this.streams.delete(token);
+		}
 	}
 
 	/** Writes one JSON-RPC notification to every open stream of a session. */
@@ -365,6 +436,11 @@ export class McpBridge implements Disposable {
 		const streams = this.streams.get(token);
 		this.streams.delete(token);
 		for (const stream of streams ?? []) {
+			const heartbeat = this.heartbeats.get(stream);
+			if (heartbeat) {
+				clearInterval(heartbeat);
+				this.heartbeats.delete(stream);
+			}
 			if (!stream.writableEnded && !stream.destroyed) {
 				stream.end();
 			}

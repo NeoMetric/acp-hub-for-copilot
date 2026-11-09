@@ -32,6 +32,8 @@ export interface ToolBridge {
 	registerSession(tools: readonly ToolDef[], execute: (name: string, input: unknown, signal: AbortSignal) => Promise<ToolResult | undefined>, options?: { readonly maxResultChars?: number }): Promise<BridgeEndpoint>;
 	updateTools(token: string, tools: readonly ToolDef[]): void;
 	unregisterSession(token: string): void;
+	/** Closes every stream and its heartbeat and stops the loopback server, for a host that is going away. */
+	drain?(): void;
 }
 
 /** One tool call handed to the host, settled when its result comes back. */
