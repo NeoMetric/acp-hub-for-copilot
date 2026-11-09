@@ -4,8 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
-import type { Log } from '../../engine/ports/host';
+import type { Log, LogLevel } from '../../engine/ports/host';
 import { ensureToken, readToken, tokenFileOf } from '../../main/token';
+import { STATE_ROUTE } from '../../ui/transport';
 import { API_VERSION, SERVER_NAME, type HealthWire } from '../http/wire';
 
 /** What a client needs to reach the server: where it answers, and the token it wants. */
@@ -148,6 +149,8 @@ export class ServerLink {
 				return;
 			}
 			child.once('exit', () => resolve());
+			// A child that never started reports the failure and no exit, so that is the other way out.
+			child.once('error', () => resolve());
 		});
 		try {
 			// A closed pipe is how the server learns its window is gone, before any kill.
@@ -161,7 +164,10 @@ export class ServerLink {
 			}
 		}, KILL_AFTER_MS);
 		try {
-			await exited;
+			// A window that closes must not wait on a process that will never report an exit.
+			if (!await settlesWithin(exited, KILL_AFTER_MS + 1000)) {
+				this.deps.log(`The server on port ${this.deps.port} did not report that it left; the window stops anyway.`, 'warn');
+			}
 		} finally {
 			clearTimeout(killer);
 		}
@@ -242,8 +248,9 @@ export class ServerLink {
 		child.stderr?.on('data', (text: string) => {
 			stderr += text;
 			for (const line of text.split(/\r?\n/)) {
-				if (line.trim()) {
-					this.deps.log(line.trim(), 'warn');
+				const said = line.trim();
+				if (said) {
+					this.deps.log(said, levelOf(said));
 				}
 			}
 		});
@@ -255,6 +262,10 @@ export class ServerLink {
 		let spawnError: string | undefined;
 		child.on('error', error => {
 			spawnError = error.message;
+			// A child that never started is no server: nothing may count it as one this window owns.
+			if (this.child === child) {
+				this.child = undefined;
+			}
 		});
 		child.on('exit', (code, signal) => {
 			this.deps.log(`The server on port ${this.deps.port} exited (${signal ?? `code ${code}`}).`, 'warn');
@@ -373,25 +384,40 @@ export class ServerLink {
 		return { kind: 'compatible' };
 	}
 
-	/** Why the server cannot be used, or `undefined` when the token it wants is the one this window holds. */
+	/**
+	 * Why the server cannot be used, or `undefined` when the token it wants is the one this window holds.
+	 *
+	 * The cheap state route is asked, not the model list: a cold server fills that list by waking
+	 * every agent, which can take longer than a probe is allowed. A probe that runs out of its own
+	 * time is no answer about the token either, so an answering `/health` is not undone by it.
+	 */
 	private async verifyToken(): Promise<string | undefined> {
 		const token = readToken(this.deps.root, process.env);
+		let response: Response;
 		try {
-			const response = await this.fetchOf(`${this.baseUrl}/v1/models`, {
+			response = await this.fetchOf(`${this.baseUrl}${STATE_ROUTE}`, {
 				headers: token ? { authorization: `Bearer ${token}` } : {},
 				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
 			});
-			await response.arrayBuffer();
-			if (response.status === 401) {
-				return `The ACP Hub server on port ${this.deps.port} rejected the token; check ${tokenFileOf(this.deps.root)}.`;
-			}
-			if (!response.ok) {
-				return `The ACP Hub server on port ${this.deps.port} answered the model list with HTTP ${response.status}.`;
-			}
-			return undefined;
 		} catch (error) {
+			if (timedOut(error)) {
+				this.deps.log(`The server on port ${this.deps.port} did not answer the token check within ${PROBE_TIMEOUT_MS} ms; its token is left unchecked.`, 'debug');
+				return undefined;
+			}
 			return `The ACP Hub server on port ${this.deps.port} stopped answering: ${messageOf(error)}`;
 		}
+		try {
+			await response.arrayBuffer();
+		} catch {
+			// The status already said what matters; a body that did not arrive says nothing more.
+		}
+		if (response.status === 401) {
+			return `The ACP Hub server on port ${this.deps.port} rejected the token; check ${tokenFileOf(this.deps.root)}.`;
+		}
+		if (!response.ok) {
+			return `The ACP Hub server on port ${this.deps.port} answered the state check with HTTP ${response.status}.`;
+		}
+		return undefined;
 	}
 
 	private didNotAnswer(): string {
@@ -450,13 +476,31 @@ function delay(ms: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/** Whether `work` finished before `ms` went by; the timer is cleared either way. */
+async function settlesWithin(work: Promise<void>, ms: number): Promise<boolean> {
+	let timer: NodeJS.Timeout | undefined;
+	const bound = new Promise<false>(resolve => {
+		timer = setTimeout(() => resolve(false), ms);
+	});
+	try {
+		return await Promise.race([work.then(() => true as const), bound]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 function messageOf(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-/** Whether the child has left, however it did. */
+/** Whether a fetch gave up on its own timer, rather than on a server that went away. */
+function timedOut(error: unknown): boolean {
+	return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+}
+
+/** Whether the child has left, however it did; one that never started has no pid and never exits. */
 function gone(child: ChildProcess): boolean {
-	return child.exitCode !== null || child.signalCode !== null;
+	return child.pid === undefined || child.exitCode !== null || child.signalCode !== null;
 }
 
 /** Ends a server this window started when the window is already closing: no waiting, just the pipe and the kill. */
@@ -473,4 +517,22 @@ function stopChild(child: ChildProcess): void {
 
 function lastLine(text: string): string | undefined {
 	return text.split(/\r?\n/).map(line => line.trim()).filter(line => line).pop();
+}
+
+/** The level a line of the server's own log names, which it writes before the message. */
+function levelOf(line: string): LogLevel {
+	const words = line.split(/\s+/);
+	const at = /^\d{4}-\d{2}-\d{2}T/.test(words[0]) ? 1 : 0;
+	switch ((words[at] ?? '').toUpperCase()) {
+		case 'DEBUG':
+			return 'debug';
+		case 'WARN':
+		case 'WARNING':
+			return 'warn';
+		case 'ERROR':
+			return 'error';
+		default:
+			// INFO and a line the server did not format are both news, not warnings.
+			return 'info';
+	}
 }

@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as net from 'node:net';
@@ -13,6 +14,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Log } from '../../src/engine/ports/host';
 import { ServerLink, type LinkState, type ServerLinkDeps } from '../../src/hosts/vscode/serverLink';
+import { API_VERSION, SERVER_NAME } from '../../src/hosts/http/wire';
 import { tokenFileOf } from '../../src/main/token';
 
 const STUB = path.resolve(__dirname, '..', 'fixtures', 'stub-server.cjs');
@@ -86,15 +88,37 @@ async function within(work: Promise<void>, ms: number): Promise<'done' | 'timeou
 }
 
 /** A stub server started by the test itself, on the port the test picked. */
-function startStub(options: { port: number; token?: string; args?: readonly string[] }): ChildProcess {
+function startStub(options: { port: number; token?: string; args?: readonly string[]; env?: Record<string, string> }): ChildProcess {
 	const child = nodeSpawn(process.execPath, [STUB, ...(options.args ?? [])], {
-		env: { ...process.env, ACP_HUB_PORT: String(options.port), ...(options.token ? { ACP_HUB_TOKEN: options.token } : {}) },
+		env: { ...process.env, ACP_HUB_PORT: String(options.port), ...(options.token ? { ACP_HUB_TOKEN: options.token } : {}), ...options.env },
 		stdio: ['pipe', 'ignore', 'pipe'],
 		windowsHide: true,
 	});
 	children.push(child);
 	child.stderr?.resume();
 	return child;
+}
+
+/**
+ * The spawn the link is given when the server cannot start at all: no pid, the
+ * failure reported once, and no exit after it, the way `spawn` fails with ENOENT.
+ */
+function neverStarting(): ServerLinkDeps['spawn'] {
+	const spawn = (() => {
+		const child = new EventEmitter() as unknown as ChildProcess;
+		Object.assign(child, {
+			pid: undefined,
+			exitCode: null,
+			signalCode: null,
+			stdin: null,
+			stdout: null,
+			stderr: null,
+			kill: () => false,
+		});
+		setTimeout(() => child.emit('error', Object.assign(new Error('spawn acp-hub-server ENOENT'), { code: 'ENOENT' })), 0);
+		return child;
+	}) as unknown as ServerLinkDeps['spawn'];
+	return spawn;
 }
 
 /** A server of the test's own, answering every route with the body it is given. */
@@ -261,6 +285,69 @@ describe('the link to the server', () => {
 		const link = makeLink({ root, port });
 
 		expect(reasonOf(await link.ensure())).toContain(tokenFileOf(root));
+	});
+
+	it('a healthy server whose model list is slow is not called unavailable', async () => {
+		const port = await freePort();
+		startStub({ port, env: { ACP_HUB_SLOW_MODELS_MS: '4000' } });
+		await waitForHealth(port);
+		const link = makeLink({ root: storeRoot(), port });
+		const started = Date.now();
+
+		const state = await link.ensure();
+
+		expect(readyOf(state).owned).toBe(false);
+		expect(Date.now() - started, 'the token check does not wait on the cold model list').toBeLessThan(2_000);
+	});
+
+	it('a token check that runs out of time is no answer about the token', async () => {
+		const port = await freePort();
+		const server = http.createServer((request, response) => {
+			if (request.url === '/health') {
+				response.writeHead(200, { 'content-type': 'application/json' });
+				response.end(JSON.stringify({ status: 'ok', name: SERVER_NAME, version: '0.0.0', apiVersion: API_VERSION, openSessions: 0, agents: [] }));
+				return;
+			}
+			// The state route never answers, the way a server that is still warming up holds the request.
+		});
+		servers.push(server);
+		await new Promise<void>(resolve => server.listen(port, '127.0.0.1', () => resolve()));
+		const link = makeLink({ root: storeRoot(), port });
+
+		const state = await link.ensure();
+
+		expect(readyOf(state).owned, 'a /health that answers is not undone by a slow token check').toBe(false);
+	});
+
+	it('a server that never starts owns nothing, and dispose does not wait for it', async () => {
+		const port = await freePort();
+		const link = makeLink({ root: storeRoot(), port, spawn: neverStarting() });
+
+		expect(reasonOf(await link.ensure())).toContain('could not be started');
+
+		// Another window started its server on the same port while this one was failing.
+		startStub({ port });
+		await waitForHealth(port);
+
+		expect(readyOf(await link.ensure()).owned, 'a child that never started is not a server this window owns').toBe(false);
+		expect(await within(link.dispose(), 2_000), 'dispose never waits for an exit that cannot come').toBe('done');
+	});
+
+	it('relays a healthy start at the level the server names, not as a warning', async () => {
+		const port = await freePort();
+		const lines: Array<{ message: string; level: string | undefined }> = [];
+		const log: Log = (message, level) => { lines.push({ message, level }); };
+		const link = makeLink({ root: storeRoot(), port, log });
+
+		expect(readyOf(await link.ensure()).owned).toBe(true);
+
+		const deadline = Date.now() + 2_000;
+		while (Date.now() < deadline && !lines.some(line => line.message.includes('listening'))) {
+			await delay(25);
+		}
+		const start = lines.find(line => line.message.includes('listening'));
+		expect(start, 'the server says where it listens').toBeDefined();
+		expect(start?.level).toBe('info');
 	});
 
 	it('takes over when the owner\'s server dies', async () => {
