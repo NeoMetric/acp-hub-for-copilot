@@ -220,8 +220,10 @@ export class SidebarRelay implements ControlTransport, Disposable {
 		this.latest = state;
 		this.deliver(state);
 		for (const agent of state.agents) {
-			if (agent.signInUrl && !signInUrlOf(previous, agent.id)) {
-				const url = agent.signInUrl.url;
+			// Identity is the URL: an agent that re-requests an expired device code
+			// gets a new page opened, and the same URL is never opened twice.
+			const url = agent.signInUrl?.url;
+			if (url && url !== signInUrlOf(previous, agent.id)) {
 				void this.deps.openExternal(url).catch(error => this.deps.log(`Could not open the sign-in page: ${messageOf(error)}`, 'warn'));
 			}
 		}
@@ -323,8 +325,9 @@ export class SidebarRelay implements ControlTransport, Disposable {
 	}
 }
 
-function signInUrlOf(state: ControlState | undefined, agentId: string): { url: string; message: string } | undefined {
-	return state?.agents.find(agent => agent.id === agentId)?.signInUrl;
+/** The sign-in URL the state holds for an agent, which is how a prompt is identified. */
+function signInUrlOf(state: ControlState | undefined, agentId: string): string | undefined {
+	return state?.agents.find(agent => agent.id === agentId)?.signInUrl?.url;
 }
 
 function parseFrame(text: string): unknown {

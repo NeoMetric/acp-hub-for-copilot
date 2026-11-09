@@ -275,6 +275,30 @@ describe('SidebarRelay', () => {
 		expect(deps.openExternal).toHaveBeenCalledTimes(1);
 	});
 
+	it('a re-issued sign-in url for the same agent opens again', async () => {
+		const first = { url: 'https://example.com/device-one', message: 'Enter code ABCD' };
+		const stub = await startStub({ state: stateOf({ signInUrl: first }) });
+		const { deps, states } = relayOf(stubLink(stub.baseUrl).link);
+		await vi.waitFor(() => { expect(deps.openExternal).toHaveBeenCalledTimes(1); });
+
+		// An expired device code is re-requested, so the same agent gets a different url.
+		const second = { url: 'https://example.com/device-two', message: 'Enter code EFGH' };
+		stub.push(stateOf({ signInUrl: second }));
+		await vi.waitFor(() => { expect(deps.openExternal).toHaveBeenCalledTimes(2); });
+		expect(deps.openExternal).toHaveBeenLastCalledWith(second.url);
+
+		stub.push(stateOf({ signInUrl: { ...second } }));
+		await vi.waitFor(() => { expect(states).toHaveLength(3); });
+		expect(deps.openExternal).toHaveBeenCalledTimes(2);
+
+		// A cleared url and then the same one again is a new page.
+		stub.push(stateOf());
+		await vi.waitFor(() => { expect(states).toHaveLength(4); });
+		stub.push(stateOf({ signInUrl: second }));
+		await vi.waitFor(() => { expect(states).toHaveLength(5); });
+		expect(deps.openExternal).toHaveBeenCalledTimes(3);
+	});
+
 	it('reconnects after the stream drops and shows the link error meanwhile', async () => {
 		const stub = await startStub({ state: stateOf() });
 		const { link, change } = stubLink(stub.baseUrl);
