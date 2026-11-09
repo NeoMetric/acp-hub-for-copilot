@@ -666,14 +666,6 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	 */
 	private async fork(reuse: Reuse, options: CreateSessionOptions, point: ForkPoint | undefined, editedOwnChat: boolean): Promise<AgentSession | undefined> {
 		const source = reuse.saved.sessionId;
-		const live = [...this.sessions].map(([chatKey, session]) => ({ chatKey, sessionId: session.acp.sessionId, hasTurn: session.turn !== undefined }));
-		const plan = this.policy.planContinuation({ saved: reuse.saved, live, editedOwnChat, agentSupportsFork: this.agent.supportsFork, externalForker: this.adapter.forker });
-		if (plan.how === 'rebuild') {
-			return undefined;
-		}
-		if (plan.how === 'resume') {
-			return this.agent.resumeSession(source, options);
-		}
 		const running = [...this.sessions.values()].find(session => session.acp.sessionId === source && session.turn);
 		if (running) {
 			// A chat the user stopped, or left, to branch off may still be winding down. The fork point is a
@@ -681,20 +673,31 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			this.log(`[reuse] Saved session ${source} is in the middle of a turn; cancelling it before the fork.`, 'warn');
 			await this.turns.abort(running);
 		}
+		const forker = this.adapter.forker;
+		// Without a fork point there is no step to cut at, and a declined notice is not asked again.
+		if (forker && (!point || this.forkNoticeState() === 'declined')) {
+			return undefined;
+		}
+		// The program is found before the policy is asked, so the chats it weighs are read afterwards, as the
+		// pre-policy code read them: a chat that starts a turn meanwhile must be counted, or a restart for the
+		// fork would end its turn.
+		const program = forker ? await forker.locate(this.settings ?? {}, this.log, this.launch?.entryPath) : undefined;
+		if (forker && !program) {
+			this.noteMissingForker(forker);
+			return undefined;
+		}
+		const live = [...this.sessions].map(([chatKey, session]) => ({ chatKey, sessionId: session.acp.sessionId, hasTurn: session.turn !== undefined }));
+		const plan = this.policy.planContinuation({ saved: reuse.saved, live, editedOwnChat, agentSupportsFork: this.agent.supportsFork, externalForker: forker });
+		if (plan.how === 'rebuild') {
+			return undefined;
+		}
+		if (plan.how === 'resume') {
+			return this.agent.resumeSession(source, options);
+		}
 		if (plan.how === 'fork-native') {
 			return this.agent.forkSession(source, options, point);
 		}
-		const forker = this.adapter.forker;
-		if (!forker) {
-			return undefined;
-		}
-		// Without a fork point there is no step to cut at.
-		if (!point || this.forkNoticeState() === 'declined') {
-			return undefined;
-		}
-		const program = await forker.locate(this.settings ?? {}, this.log, this.launch?.entryPath);
-		if (!program) {
-			this.noteMissingForker(forker);
+		if (!forker || !program || !point) {
 			return undefined;
 		}
 		if (editedOwnChat && !plan.keepSourceId) {

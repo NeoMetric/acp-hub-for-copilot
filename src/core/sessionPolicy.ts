@@ -76,11 +76,18 @@ export function policyOf(adapter: AgentAdapter): SessionPolicy {
 	return adapter.sessionPolicy ?? nativeSessionPolicy;
 }
 
+/** The wait a tool call gets when the policy names one the core cannot use: one day, so a lost result fails the call instead of hanging the chat. */
+export const DEFAULT_TOOL_WAIT_MS = 24 * 60 * 60_000;
+
 /**
- * The wait a tool call gets from the policy. A policy that answers no usable wait leaves it
- * unbounded, as an adapter that named no timeout always did.
+ * The wait a tool call gets from the policy. A policy that names no wait at all leaves it unbounded, as an
+ * adapter that named no timeout always did; a wait that is zero, negative or not a number is the default, so
+ * a lost tool result fails the call rather than hanging the chat.
  */
 export function effectiveToolWaitMs(policy: SessionPolicy, settings: AgentSettings): number {
 	const ms = policy.toolWaitMs(settings);
-	return Number.isFinite(ms) && ms > 0 ? ms : Number.POSITIVE_INFINITY;
+	if (ms === Number.POSITIVE_INFINITY) {
+		return ms;
+	}
+	return Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_TOOL_WAIT_MS;
 }

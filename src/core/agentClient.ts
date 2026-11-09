@@ -14,6 +14,10 @@ import { levelOfLine, type Log, type LogLevel } from './logging';
 import { forgetAgent, killOrphanedServers, killStrayAgents, killTree, killTreeSync, pipeLines, recordAgent, trackChild, untrackChild } from './processes';
 import { isAuthRequiredError, JsonRpcConnection, RpcConnectionClosedError } from './rpc';
 
+/** Re-exports from `protocol` so every existing import site keeps working. */
+export type { AcpAuthMethod, AcpTokenUsage, AgentSession, ForkPoint, AcpConfigOption, AcpConfigOptionChoice, AcpConfigOptionGroup, AcpModelInfo, AcpModels, AcpMcpHttpServer } from './protocol';
+export { RpcError } from './protocol';
+
 const ACP_PROTOCOL_VERSION = 1;
 const INVALID_PARAMS_CODE = -32602;
 
@@ -951,10 +955,6 @@ function withForkPoint(extra: Record<string, unknown>, point: ForkPoint | undefi
 	const fork = { version: 1, messageId: point.messageId, messageFingerprint: point.messageFingerprint, messageOccurrence: point.messageOccurrence };
 	return { ...extra, _meta: { ...meta, jetbrains: { ...jetbrains, air: { ...air, fork } } } };
 }
-
-// Re-exports from protocol for backward compatibility
-export type { AcpAuthMethod, AcpTokenUsage, AcpContentBlock, AgentSession, ForkPoint, AcpConfigOption, AcpConfigOptionChoice, AcpConfigOptionGroup, AcpModelInfo, AcpModels, AcpMcpHttpServer } from './protocol';
-export { RpcError } from './protocol';
 
 function numberSetting(settings: AgentSettings, key: string, fallback: number): number {
 	const value = settings[key];

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ConversationForkRequest, ConversationForker, ForkResult } from '../core/adapter';
-import type { ForkPoint } from '../core/agentClient';
+import type { ForkPoint } from '../core/protocol';
 import type { Log } from '../core/logging';
 import { messageFingerprintOf } from '../core/sessionFingerprint';
 import { APP_DATA_DIR, callHub, startHub, type Hub } from './googleHub';

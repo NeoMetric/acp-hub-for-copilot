@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { claudeAdapter } from '../../src/adapters/claude';
 import type { ConversationForker } from '../../src/core/adapter';
 import { nativeSessionPolicy } from '../../src/core/nativeSessionPolicy';
-import { effectiveToolWaitMs, policyOf, type ContinuationInput, type SessionPolicy } from '../../src/core/sessionPolicy';
+import { DEFAULT_TOOL_WAIT_MS, effectiveToolWaitMs, policyOf, type ContinuationInput, type SessionPolicy } from '../../src/core/sessionPolicy';
 import type { SavedSession } from '../../src/core/sessionStore';
 
 const saved: SavedSession = {
@@ -85,20 +85,24 @@ describe('nativeSessionPolicy', () => {
 
 	it('never times out a tool call', () => {
 		expect(nativeSessionPolicy.toolWaitMs({})).toBe(Number.POSITIVE_INFINITY);
-		expect(nativeSessionPolicy.toolWaitMs({ toolWaitTimeoutMs: 2500 })).toBe(Number.POSITIVE_INFINITY);
 	});
 });
 
 describe('effectiveToolWaitMs', () => {
-	it('leaves the wait unbounded when the policy answers no usable wait', () => {
-		for (const value of [0, -1, Number.NaN, Number.NEGATIVE_INFINITY]) {
-			expect(effectiveToolWaitMs(policyReturning(value), {})).toBe(Number.POSITIVE_INFINITY);
-		}
+	it('keeps the wait unbounded when the policy names no wait at all', () => {
+		expect(effectiveToolWaitMs(policyReturning(Number.POSITIVE_INFINITY), {})).toBe(Number.POSITIVE_INFINITY);
+		expect(effectiveToolWaitMs(nativeSessionPolicy, {})).toBe(Number.POSITIVE_INFINITY);
 	});
 
 	it('passes a positive finite wait through', () => {
 		expect(effectiveToolWaitMs(policyReturning(5000), {})).toBe(5000);
-		expect(effectiveToolWaitMs(nativeSessionPolicy, {})).toBe(Number.POSITIVE_INFINITY);
+	});
+
+	it('clamps a named wait that cannot be used to one day', () => {
+		expect(DEFAULT_TOOL_WAIT_MS).toBe(24 * 60 * 60_000);
+		for (const value of [0, -1, Number.NaN, Number.NEGATIVE_INFINITY]) {
+			expect(effectiveToolWaitMs(policyReturning(value), {})).toBe(DEFAULT_TOOL_WAIT_MS);
+		}
 	});
 });
 

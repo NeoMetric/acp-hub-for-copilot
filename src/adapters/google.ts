@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { AcpAuthMethod } from '../core/agentClient';
+import type { AcpAuthMethod } from '../core/protocol';
 import type { AgentAdapter, AgentSettings, InstallContext, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
 import { HOST_IDENTITY } from '../core/hostIdentity';
 import { REGISTRY, registryAgent } from '../core/registry';

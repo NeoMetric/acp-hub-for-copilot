@@ -1,4 +1,4 @@
-import type { AcpAuthMethod } from '../core/agentClient';
+import type { AcpAuthMethod } from '../core/protocol';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentAdapter, AgentSettings, AuthenticateRequest, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
