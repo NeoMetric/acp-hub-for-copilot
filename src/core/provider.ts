@@ -17,6 +17,7 @@ import { createRequestDump, summarizeRequest } from './requestDump';
 import { isAuthRequiredError } from '../engine/acp/rpc';
 import { policyOf, type SessionPolicy } from './sessionPolicy';
 import { SavedSessionStore, toolsHashOf } from './sessionStore';
+import { stateStoreOf } from './stateStore';
 import { createSessionPrompt } from './systemPrompt';
 import { buildPromptBlocks } from './provider/assemble';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './provider/heldCalls';
@@ -90,7 +91,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		private readonly deps: ProviderDeps,
 	) {
 		this.log = deps.log;
-		this.saved = new SavedSessionStore(deps.state, `acpHub.savedSessions.${adapter.id}`);
+		this.saved = new SavedSessionStore(stateStoreOf(deps.state), `acpHub.savedSessions.${adapter.id}`);
 		this.warm = new WarmSession({
 			adapter,
 			bridge: deps.bridge,

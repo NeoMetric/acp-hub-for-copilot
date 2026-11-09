@@ -5,7 +5,7 @@
 
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import type * as vscode from 'vscode';
+import type { StateStore } from '../../src/engine/ports/state';
 import { guidanceChangeOf, guidanceLineHashes } from '../../src/core/provider';
 import { guidanceChangeBlock } from '../../src/core/provider/assemble';
 import { mergeGuidanceChange } from '../../src/core/provider/keys';
@@ -210,13 +210,13 @@ describe('messageFingerprintOf', () => {
 });
 
 describe('SavedSessionStore', () => {
-	function memento(): vscode.Memento {
+	function memento(): StateStore {
 		const values = new Map<string, unknown>();
 		return {
 			keys: () => [...values.keys()],
 			get: <T>(key: string, fallback?: T) => (values.has(key) ? values.get(key) as T : fallback),
 			update: (key: string, value: unknown) => { values.set(key, value); return Promise.resolve(); },
-		} as vscode.Memento;
+		};
 	}
 
 	it('replaces the entry of a key and forgets it', () => {

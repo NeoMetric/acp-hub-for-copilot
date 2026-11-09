@@ -76,7 +76,7 @@ Harder in a gateway than in the extension:
 Current behavior is tuned to VS Code Copilot Chat's prompts:
 
 - Identity/persona sentences are stripped by regexes (`src/core/identityPatterns.ts`) because the agent has its own identity.
-- An intro is appended to the agent's system prompt with required tool arguments and pointers to instruction files (`src/core/systemPrompt.ts`).
+- An intro is appended to the agent's system prompt with required tool arguments and pointers to instruction files (`src/engine/chat/systemPrompt.ts`).
 - Workspace folders, working directory, user/mode instructions and chat context are parsed from VS Code's prompt structure (`src/core/requestContext.ts`, `src/core/convert.ts`).
 - The system guidance is hashed to decide whether a session can be reused.
 

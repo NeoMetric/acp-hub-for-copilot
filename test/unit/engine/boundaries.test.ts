@@ -38,6 +38,14 @@ describe('engine boundaries', () => {
 		assertEngineIsHostFree();
 	});
 
+	/** The chat modules that live in the engine; each keeps a shim at its old path. */
+	for (const name of ['cache', 'sessionStore', 'sessionFingerprint', 'usage', 'systemPrompt']) {
+		it(`holds ${name}.ts without reaching for a host`, () => {
+			expect(existsSync(`src/engine/chat/${name}.ts`), `src/engine/chat/${name}.ts exists`).toBe(true);
+			assertEngineIsHostFree();
+		});
+	}
+
 	it('constructs the ACP client without a host in scope', () => {
 		expect(existsSync('src/engine/acp/agentClient.ts'), 'the ACP client lives in the engine').toBe(true);
 
