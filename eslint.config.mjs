@@ -45,4 +45,24 @@ export default tseslint.config(
 			'@typescript-eslint/no-require-imports': 'off',
 		},
 	},
+	{
+		files: ['src/adapters/**/*.ts'],
+		rules: {
+			'no-restricted-imports': [
+				'error',
+				{
+					name: '../core/sessionStore',
+					message: 'Use sessionFingerprint instead',
+				},
+				{
+					name: '../core/processes',
+					message: 'Use processHost instead',
+				},
+				{
+					name: '../core/rpc',
+					message: 'Use protocol instead',
+				},
+			],
+		},
+	},
 );
