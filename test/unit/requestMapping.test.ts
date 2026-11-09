@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as vscode from 'vscode';
 import { stripIdentity } from '../../src/core/identityPatterns';
-import { chatIdOf, chatLabelOf, resolveCwd, systemGuidanceOf, workspaceFoldersOf } from '../../src/hosts/vscode/identity';
+import { chatIdOf, chatLabelOf, resolveCwd, sessionKey, systemGuidanceOf, workspaceFoldersOf } from '../../src/hosts/vscode/identity';
 import { bodyOf } from '../../src/hosts/vscode/requestMapping';
 import { assistant, image, system, toolCall, user } from './messages';
 import { LanguageModelTextPart, LanguageModelToolResultPart } from './vscode-mock';
@@ -18,7 +18,7 @@ interface Body {
 	messages: Array<{ role: string; content?: string | unknown[]; tool_calls?: unknown[]; tool_call_id?: string }>;
 	tools?: unknown[];
 	reasoning_effort?: string;
-	acp: { chatId?: string; label?: string; cwd?: string; workspaceFolders?: string[]; systemGuidance?: string; chatContext?: string };
+	acp: { chatId?: string; sessionKey?: string; label?: string; cwd?: string; workspaceFolders?: string[]; systemGuidance?: string; chatContext?: string };
 }
 
 const MODEL = { id: 'claude-sonnet-4' } as unknown as vscode.LanguageModelChatInformation;
@@ -63,6 +63,24 @@ describe('bodyOf', () => {
 		expect(body.acp.workspaceFolders).toEqual(workspaceFoldersOf(messages));
 		expect(body.acp.cwd).toBe(resolveCwd(workspaceFoldersOf(messages), 'c:\\window'));
 		expect(body.acp.systemGuidance).toBe(stripIdentity(systemGuidanceOf(messages) ?? ''));
+	});
+
+	it('keys the agent session on the chat session key, apart from the id its figures use', () => {
+		const options = optionsOf({ modelOptions: { _conversationId: 'conversation-1' } });
+		const opening = [hostSystem('c:\\work\\app'), globalContext(), request()];
+		const other = [hostSystem('c:\\work\\app'), globalContext(), user('<userRequest>\nnow research it\n</userRequest>')];
+		const one = bodyOf(MODEL, 'claude', opening, options, 'c:\\window') as Body;
+		const two = bodyOf(MODEL, 'claude', other, options, 'c:\\window') as Body;
+
+		// The session key hashes the whole opening, not just the first message, so a
+		// sub-agent of one chat — same conversation, different opening — gets a session of its own.
+		expect(one.acp.sessionKey).toBe(sessionKey(opening, options));
+		expect(two.acp.sessionKey).toBe(sessionKey(other, options));
+		expect(one.acp.sessionKey).not.toBe(two.acp.sessionKey);
+		// The id the figures of the chat use is the same for both, as it was before.
+		expect(one.acp.chatId).toBe(chatIdOf(opening, options));
+		expect(two.acp.chatId).toBe(one.acp.chatId);
+		expect(one.acp.sessionKey).not.toBe(one.acp.chatId);
 	});
 
 	it('leaves out the guidance when the request carries no system message', () => {

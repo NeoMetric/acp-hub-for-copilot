@@ -62,6 +62,13 @@ export interface ModelWire {
 
 /** The request context the extension sends in the `acp` field of a chat body. */
 export interface AcpRequestExtras {
+	/**
+	 * The id the engine keys this chat's agent session on. It rests on the chat's
+	 * whole opening, so a chat and each of its sub-agents — which share a
+	 * conversation but open differently — get sessions of their own.
+	 */
+	sessionKey?: string;
+	/** The id of the chat for per-chat figures; the sub-agents of one chat share it. */
 	chatId?: string;
 	label?: string;
 	cwd?: string;

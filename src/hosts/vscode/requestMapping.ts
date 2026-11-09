@@ -8,7 +8,7 @@ import { stripIdentity } from '../../core/identityPatterns';
 import { acpModelValue, effortOf } from '../../core/models';
 import type { ChatMessage } from '../../engine/model/chat';
 import type { AcpRequestExtras } from '../http/wire';
-import { chatIdOf, chatLabelOf, chatWideContextOf, resolveCwd, stripHostSections, systemGuidanceOf, workspaceFoldersOf } from './identity';
+import { chatIdOf, chatLabelOf, chatWideContextOf, resolveCwd, sessionKey, stripHostSections, systemGuidanceOf, workspaceFoldersOf } from './identity';
 
 /**
  * The body of one chat request, as the server reads it. It carries what the
@@ -68,6 +68,7 @@ export function bodyOf(
 		...(tools.length > 0 ? { tools: tools.map(toolOf) } : {}),
 		...(effort === undefined ? {} : { reasoning_effort: effort }),
 		acp: {
+			sessionKey: sessionKey(messages, options),
 			chatId: chatIdOf(messages, options),
 			label: chatLabelOf(messages),
 			cwd: resolveCwd(folders, windowFolder),

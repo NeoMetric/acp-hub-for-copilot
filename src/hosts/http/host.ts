@@ -167,8 +167,16 @@ export function ownerOfToken(token: string | undefined): string {
 		: `bearer:${createHash('sha256').update(token).digest('hex').slice(0, 8)}`;
 }
 
+/**
+ * The name the chat is listed under. `acp.chatId` names it for its figures and is
+ * shared by the sub-agents of one chat; the request's own name is the session key
+ * the server derived for the engine, so it names the chat only when the client sent
+ * no session key of its own. A chat named nowhere is named by its folder and opening.
+ */
 function namedChatId(request: ChatRequest, extras: RequestExtras | undefined): string | undefined {
-	return trimmed(extras?.acp?.chatId) ?? trimmed(extras?.headers?.chatId) ?? trimmed(request.chatId);
+	const own = trimmed(request.chatId);
+	const session = trimmed(extras?.acp?.sessionKey);
+	return trimmed(extras?.acp?.chatId) ?? trimmed(extras?.headers?.chatId) ?? (session !== undefined && session === own ? undefined : own);
 }
 
 function folderOf(request: ChatRequest, extras: RequestExtras | undefined, settings: ConfigReader): string {

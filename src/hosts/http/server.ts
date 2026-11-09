@@ -562,10 +562,11 @@ interface TurnClient {
 }
 
 /**
- * Builds the engine's request from the body, naming the chat the way the host
- * does when the client names none. What the wire said beyond the engine's
- * neutral request — the `acp` extras and the older headers — is left with the
- * host, which alone saw it.
+ * Builds the engine's request from the body. The engine keys the chat's session on
+ * the session key the client sent, so a chat and each of its sub-agents keep
+ * sessions of their own; when the client sends none the host names the chat, as it
+ * does for a stock client, and the engine is given that name. The chat's id for
+ * its figures is read from the extras by the host, and is untouched here.
  */
 function chatRequestOf(composition: HeadlessComposition, request: http.IncomingMessage, body: Record<string, unknown>, messages: readonly ChatMessage[], tools: readonly ToolDef[], model: string): ChatRequest {
 	const extras: RequestExtras = {
@@ -582,12 +583,18 @@ function chatRequestOf(composition: HeadlessComposition, request: http.IncomingM
 		systemGuidance: extras.acp?.systemGuidance,
 	};
 	rememberExtras(draft, extras);
-	// A stock OpenAI client sends no chat id, so the host names the chat by its
+	// A stock OpenAI client sends no session key, so the host names the chat by its
 	// folder and its opening words; the engine must then be given that name.
 	const identity = composition.host.chatIdentity(draft);
-	const named: ChatRequest = { ...draft, chatId: identity.id, cwd: identity.cwd };
+	const named: ChatRequest = { ...draft, chatId: trimmedOf(extras.acp?.sessionKey) ?? identity.id, cwd: identity.cwd };
 	rememberExtras(named, extras);
 	return named;
+}
+
+/** A name the body sent, when it holds more than whitespace. */
+function trimmedOf(value: string | undefined): string | undefined {
+	const text = value?.trim();
+	return text ? text : undefined;
 }
 
 /** The `acp` field of a body, narrowed to the context a chat sends. */
@@ -598,6 +605,7 @@ function acpExtrasOf(value: unknown): AcpRequestExtras {
 	const text = (field: unknown): string | undefined => typeof field === 'string' && field.length > 0 ? field : undefined;
 	const folders = Array.isArray(value.workspaceFolders) ? value.workspaceFolders.filter((folder): folder is string => typeof folder === 'string') : undefined;
 	return {
+		sessionKey: text(value.sessionKey),
 		chatId: text(value.chatId),
 		label: text(value.label),
 		cwd: text(value.cwd),

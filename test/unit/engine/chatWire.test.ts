@@ -121,6 +121,55 @@ describe('the chat wire', () => {
 		expect(requests[0].chatId).toBe('from-extras');
 	});
 
+	it('keys the engine session on acp.sessionKey and the chat figures on acp.chatId', async () => {
+		const server = await start();
+		const model = await firstModel(server.url);
+		const requests = recordEngine(plainTurn);
+
+		await post(`${server.url}/v1/chat/completions`, { ...chat(model), acp: { chatId: 'one-chat', sessionKey: 'session-a' } });
+
+		expect(requests[0].chatId).toBe('session-a');
+		expect(server.host.chatIdentity(requests[0]).id).toBe('one-chat');
+	});
+
+	it('gives two sub-agents of one chat sessions of their own', async () => {
+		const server = await start();
+		const model = await firstModel(server.url);
+		const requests = recordEngine(plainTurn);
+
+		await post(`${server.url}/v1/chat/completions`, { ...chat(model), acp: { chatId: 'one-chat', sessionKey: 'opening-a' } });
+		await post(`${server.url}/v1/chat/completions`, { ...chat(model), acp: { chatId: 'one-chat', sessionKey: 'opening-b' } });
+
+		expect(requests.map(request => request.chatId)).toEqual(['opening-a', 'opening-b']);
+		expect(requests.map(request => server.host.chatIdentity(request).id)).toEqual(['one-chat', 'one-chat']);
+	});
+
+	it('settles a parked tool call across the requests of a turn by its session key', async () => {
+		const server = await start();
+		const model = await firstModel(server.url);
+		recordEngine(index => index === 0
+			? [{ type: 'tool-call', callId: 'call-1', name: 'do_a_thing', input: { answer: 42 } }]
+			: plainTurn());
+		const asked = await post(`${server.url}/v1/chat/completions`, { ...chat(model, 'tool'), tools: [TOOL], acp: { chatId: 'one-chat', sessionKey: 'session-a' } });
+		const call = (await asked.json() as any).choices[0].message.tool_calls[0];
+		expect(call).toBeDefined();
+		const answer = (sessionKey: string, text: string): Promise<Response> => post(`${server.url}/v1/chat/completions`, {
+			model,
+			tools: [TOOL],
+			acp: { chatId: 'one-chat', sessionKey },
+			messages: [
+				{ role: 'user', content: 'tool' },
+				{ role: 'assistant', content: null, tool_calls: [call] },
+				{ role: 'tool', tool_call_id: call.id, content: text },
+			],
+		});
+
+		// Another session of the same chat cannot settle this call...
+		expect((await answer('session-b', 'wrong session')).status).toBe(400);
+		// ...and the session that parked it can, on the request that follows it.
+		expect((await answer('session-a', 'a 42')).status).toBe(200);
+	});
+
 	it('still names a chat no client names, from its folder and opening', async () => {
 		const server = await start();
 		const model = await firstModel(server.url);
