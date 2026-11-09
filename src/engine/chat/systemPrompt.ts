@@ -33,6 +33,12 @@ export interface ToolArguments {
 }
 
 /**
+ * What the append is built from. Which folders a chat may read its customization
+ * files from is decided before it is called, so it does not need them.
+ */
+export type AppendInput = Pick<SessionPromptInput, 'toolAccess' | 'customFiles' | 'toolArguments' | 'guidance'>;
+
+/**
  * The folders whose customization files the chat may use, its own winning over
  * the window's; an untrusted workspace offers none, since its files could carry
  * instructions aimed at the agent.
@@ -63,7 +69,7 @@ Follow Microsoft content policies. Avoid content that violates copyrights. If yo
  * memory tool are all left to Copilot: its own system prompt carries them, and
  * that prompt is forwarded untouched.
  */
-export function buildSystemPromptAppend(input: SessionPromptInput): string | undefined {
+export function buildSystemPromptAppend(input: AppendInput): string | undefined {
 	const sections: string[] = [];
 	const carried = scanGuidance(input.guidance);
 
@@ -173,7 +179,7 @@ function customFilesSections(files: readonly CustomFile[], carried: GuidanceScan
 }
 
 /** The arguments a tool's JSON schema marks as required. */
-export function requiredArguments(inputSchema: object | undefined): string[] {
+export function requiredArguments(inputSchema: unknown): string[] {
 	const required = (inputSchema as { required?: unknown } | undefined)?.required;
 	return Array.isArray(required) ? required.filter((name): name is string => typeof name === 'string') : [];
 }

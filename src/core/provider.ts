@@ -14,7 +14,7 @@ import type { Log } from './logging';
 import { effortOf } from './models';
 import { createRequestDump } from './requestDump';
 import { resolveCwd, systemGuidanceOf, workspaceFoldersOf } from './requestContext';
-import { createSessionPrompt } from './systemPrompt';
+import { createSessionPrompt, type PromptWorkspace } from './systemPrompt';
 import { createVsCodeHost, rememberSent, sentOf } from '../hosts/vscode/host';
 import { ChatError } from '../engine/chat/ChatError';
 import { ChatService } from '../engine/chat/ChatService';
@@ -84,7 +84,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			createClient: deps.createClient && ((adapter, ctx, clientDeps) => deps.createClient!(adapter, ctx, clientDeps)),
 			client: deps.client,
 			buildSessionPrompt: (tools, folders, guidance) => this.buildSessionPrompt(tools, folders, guidance),
-			transcriptOptions: () => readTranscriptOptions(),
+			transcriptOptions: () => readTranscriptOptions(this.host.settings),
 			dumpRequest: (request, settings) => this.recordRequest(request, settings),
 			refineWindow: (model, size) => this.models?.refineWindow(model, size),
 			finished: turn => this.turnEmitter.fire(turn),
@@ -305,8 +305,8 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 
 	/** A chat still starts when the customization files cannot be read; it just has no extras. */
 	private async buildSessionPrompt(tools: readonly ToolDef[], chatFolders: readonly string[] | undefined, guidance: string | undefined): Promise<string | undefined> {
-		this.sessionPrompt ??= createSessionPrompt(this.log, this.adapter.systemPrompt, this.deps.profilePromptsDir);
-		return this.sessionPrompt(tools as unknown as readonly vscode.LanguageModelChatTool[], chatFolders, guidance);
+		this.sessionPrompt ??= createSessionPrompt(this.log, this.adapter.systemPrompt, vsCodeWorkspace, this.deps.profilePromptsDir);
+		return this.sessionPrompt(tools, chatFolders, guidance);
 	}
 
 	private sessionPrompt: ReturnType<typeof createSessionPrompt> | undefined;
@@ -348,6 +348,19 @@ function reportThinking(progress: vscode.Progress<vscode.LanguageModelResponsePa
 	if (ThinkingPart) {
 		progress.report(new ThinkingPart(text) as vscode.LanguageModelResponsePart);
 	}
+}
+
+/** The window's folders and file locations, which the engine is given rather than asking for. */
+function vsCodeWorkspace(): PromptWorkspace {
+	const chat = vscode.workspace.getConfiguration('chat');
+	return {
+		trusted: vscode.workspace.isTrusted,
+		windowFolders: (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath),
+		locations: {
+			instructions: chat.get<Record<string, boolean>>('instructionsFilesLocations'),
+			prompt: chat.get<Record<string, boolean>>('promptFilesLocations'),
+		},
+	};
 }
 
 /** One workbench message as the engine's own. */

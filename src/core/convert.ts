@@ -5,6 +5,13 @@
 
 import * as vscode from 'vscode';
 import type { AcpContentBlock, AcpImageBlock, AcpTextBlock } from '../engine/acp/protocol';
+import {
+	DEFAULT_TRANSCRIPT_OPTIONS,
+	readTranscriptOptions,
+	TRANSCRIPT_MAX_CHARACTERS,
+	TRANSCRIPT_MAX_TOOL_RESULT_CHARACTERS,
+	type TranscriptOptions,
+} from '../engine/chat/messages';
 
 export type { AcpContentBlock, AcpImageBlock, AcpTextBlock };
 
@@ -361,42 +368,17 @@ export function carriesToolResults(messages: readonly vscode.LanguageModelChatRe
 	return messages.slice(firstMessageAfterReply(messages)).some(message => message.content.some(part => part instanceof vscode.LanguageModelToolResultPart));
 }
 
-/** Upper bound for the restored conversation, so a long chat cannot swamp the new turn. */
-export const TRANSCRIPT_MAX_CHARACTERS = 40_000;
-
-/** Upper bound for one tool result in a `full` transcript, so a single file read cannot crowd out the rest. */
-export const TRANSCRIPT_MAX_TOOL_RESULT_CHARACTERS = 4_000;
-
 /** Upper bound for the arguments of one tool call in a `full` transcript. */
 const TRANSCRIPT_MAX_TOOL_INPUT_CHARACTERS = 1_000;
 
-export interface TranscriptOptions {
-	/** `compact` names the tools that ran; `full` also includes their arguments and results as text. */
-	readonly detail: 'compact' | 'full';
-	readonly maxCharacters: number;
-	readonly maxToolResultCharacters: number;
-}
-
-export const DEFAULT_TRANSCRIPT_OPTIONS: TranscriptOptions = {
-	detail: 'compact',
-	maxCharacters: TRANSCRIPT_MAX_CHARACTERS,
-	maxToolResultCharacters: TRANSCRIPT_MAX_TOOL_RESULT_CHARACTERS,
+// The transcript options and their settings reader are the engine's, so the server reads them without a window.
+export {
+	DEFAULT_TRANSCRIPT_OPTIONS,
+	readTranscriptOptions,
+	TRANSCRIPT_MAX_CHARACTERS,
+	TRANSCRIPT_MAX_TOOL_RESULT_CHARACTERS,
 };
-
-/** The transcript settings (`acpHub.resume.*`), which apply to every agent. */
-export function readTranscriptOptions(): TranscriptOptions {
-	const config = vscode.workspace.getConfiguration('acpHub');
-	const positive = (key: string, fallback: number): number => {
-		const value = config.get<number>(key, fallback);
-		return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
-	};
-
-	return {
-		detail: config.get<string>('resume.transcriptDetail', DEFAULT_TRANSCRIPT_OPTIONS.detail) === 'full' ? 'full' : 'compact',
-		maxCharacters: positive('resume.transcriptMaxCharacters', DEFAULT_TRANSCRIPT_OPTIONS.maxCharacters),
-		maxToolResultCharacters: positive('resume.transcriptMaxToolResultCharacters', DEFAULT_TRANSCRIPT_OPTIONS.maxToolResultCharacters),
-	};
-}
+export type { TranscriptOptions };
 
 function clip(text: string, limit: number): string {
 	return text.length > limit ? `${text.slice(0, limit)}… [${text.length - limit} more character(s) cut]` : text;

@@ -79,7 +79,13 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 	// relays the calls; a chat's session keeps the call parked for the re-post.
 	const bridge = new McpBridge(stderrLog);
 	// The same root the extension uses, so an agent installed in one gateway is installed in both.
-	const composition = createHeadlessComposition({ root: storageRoot(env), bridge: toolBridgeOf(bridge), log: stderrLog, owner: ownerOfToken(token) });
+	const composition = createHeadlessComposition({
+		root: storageRoot(env),
+		bridge: toolBridgeOf(bridge),
+		log: stderrLog,
+		owner: ownerOfToken(token),
+		promptsDir: env.ACP_HUB_PROMPTS_DIR?.trim() || undefined,
+	});
 	const server = createServer({ composition, token, page: { control: composition.control } });
 
 	server.listen(port, '127.0.0.1', () => {

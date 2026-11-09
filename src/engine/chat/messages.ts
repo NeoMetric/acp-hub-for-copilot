@@ -5,6 +5,7 @@
 
 import type { AcpContentBlock, AcpImageBlock, AcpTextBlock } from '../acp/protocol';
 import type { ChatMessage, Part } from '../model/chat';
+import type { ConfigReader } from '../ports/state';
 
 /**
  * The roles as the host's own message API numbers them. A fingerprint of a
@@ -341,6 +342,20 @@ export const DEFAULT_TRANSCRIPT_OPTIONS: TranscriptOptions = {
 	maxCharacters: TRANSCRIPT_MAX_CHARACTERS,
 	maxToolResultCharacters: TRANSCRIPT_MAX_TOOL_RESULT_CHARACTERS,
 };
+
+/** The transcript settings (`acpHub.resume.*`), which apply to every agent. */
+export function readTranscriptOptions(config: ConfigReader): TranscriptOptions {
+	const positive = (key: string, fallback: number): number => {
+		const value = config.get<number>(key);
+		return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+	};
+
+	return {
+		detail: config.get<string>('resume.transcriptDetail') === 'full' ? 'full' : DEFAULT_TRANSCRIPT_OPTIONS.detail,
+		maxCharacters: positive('resume.transcriptMaxCharacters', DEFAULT_TRANSCRIPT_OPTIONS.maxCharacters),
+		maxToolResultCharacters: positive('resume.transcriptMaxToolResultCharacters', DEFAULT_TRANSCRIPT_OPTIONS.maxToolResultCharacters),
+	};
+}
 
 function clip(text: string, limit: number): string {
 	return text.length > limit ? `${text.slice(0, limit)}… [${text.length - limit} more character(s) cut]` : text;
