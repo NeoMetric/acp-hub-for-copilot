@@ -37,10 +37,10 @@ jobs:
             Write-Host "::error::$($vsix.Name) ships no dist/server.js"
             exit 1
           }
-          # The server ships as a bundle only; its sources, and the extension's, stay out.
-          $leaked = @($paths | Where-Object { $_ -match '^extension/src/' -or $_ -match 'hosts[\\/]http' })
+          # The server ships as a bundle only; its sources, the extension's, and the working copy's dev tree stay out.
+          $leaked = @($paths | Where-Object { $_ -match '^extension/src/' -or $_ -match 'hosts[\\/]http' -or $_ -match '^extension/\.superpowers/' })
           if ($leaked.Count -gt 0) {
-            $leaked | ForEach-Object { Write-Host "::error::$($vsix.Name) ships server source: $_" }
+            $leaked | ForEach-Object { Write-Host "::error::$($vsix.Name) ships source or dev-tree files: $_" }
             exit 1
           }
       - uses: actions/upload-artifact@v4

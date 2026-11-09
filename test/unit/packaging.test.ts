@@ -44,6 +44,15 @@ describe('packaging', () => {
 		expect(ignored).toContain('test/**');
 	});
 
+	it('keeps the development tree and the adapter dependencies out of the VSIX', () => {
+		const ignored = ignoredPaths();
+		// The superpowers process keeps its ledgers in the working copy; none of it is the extension.
+		expect(ignored).toContain('.superpowers/**');
+		// The adapter manifests ship, the dependencies an adapter installed never do.
+		expect(ignored).toContain('adapters/**/node_modules/**');
+		expect(ignored, 'adapters/** must keep shipping: the VSIX carries the adapter manifests').not.toContain('adapters/**');
+	});
+
 	it('builds the page once, into the bundle the sidebar and the server both load', () => {
 		const outfile = outfileOf(entryOf(readFileSync('esbuild.js', 'utf8'), 'src/ui/main.ts'));
 		expect(outfile).toBe('dist/sidebar.js');
