@@ -40,6 +40,7 @@ export function modelsOfSession(adapter: AgentAdapter, session: AgentSession, lo
 	const models = toModelVariants(adapter.modelPolicy, choices, effortLevels);
 	log(`Offering ${choices.length} ${adapter.displayName} model(s) for chat and ${choices.length} for the Copilot agent: ${choices.map(choice => choice.value).join(', ')}`);
 	log(`Thinking effort levels reported by the agent: ${effortLevels.join(', ') || 'none'}`);
+	log(`Published ${adapter.displayName} model ids: ${models.map(model => `${model.id} ("${model.name}")`).join('; ')}`, 'debug');
 	return models;
 }
 

@@ -581,7 +581,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 					// A fork that cannot be made (the source is mid-turn, or the tool that forks is missing) leaves `opened` empty: the chat gets a new session.
 					const opened = reuse.kind === 'resume'
 						? await agent.resumeSession(reuse.saved.sessionId, options)
-						: await this.fork(reuse, options, point);
+						: await this.fork(reuse, options, point, reuse.saved.key === key);
 					if (opened) {
 						acp = opened;
 						reused = { how: reuse.kind === 'resume' ? 'resumed' : 'forked', from: reuse.saved.sessionId, logged: false };
@@ -651,7 +651,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	 * the program that forks for this agent is missing.
 	 * Whatever fails throws, and the caller falls back to a new session.
 	 */
-	private async fork(reuse: Reuse, options: CreateSessionOptions, point: ForkPoint | undefined): Promise<AgentSession | undefined> {
+	private async fork(reuse: Reuse, options: CreateSessionOptions, point: ForkPoint | undefined, editedOwnChat: boolean): Promise<AgentSession | undefined> {
 		const source = reuse.saved.sessionId;
 		const running = [...this.sessions.values()].find(session => session.acp.sessionId === source && session.turn);
 		if (running) {
@@ -673,16 +673,24 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			this.noteMissingForker(forker);
 			return undefined;
 		}
-		// The forker may rewind the source's stored conversation, so no chat may still hold it open.
-		for (const [key, session] of [...this.sessions]) {
-			if (session.acp.sessionId === source) {
-				await this.destroySession(key);
-			}
-		}
 		// Rewinding the source only helps if the agent reads it again, which needs a restart; a restart
 		// would end the turn of another chat, so then the fork takes an id of its own instead.
-		const busy = [...this.sessions.values()].some(session => session.turn !== undefined);
-		const keepSourceId = !busy;
+		const busyChats = [...this.sessions].filter(([, session]) => session.turn !== undefined && session.acp.sessionId !== source).map(([chatKey]) => chatKey);
+		// Keeping the source's id moves the chat that had the source onto a copy, which misses the cache. That is
+		// right for an edit, whose chat is leaving the old turns behind, but a copy of another chat leaves that chat in place.
+		const keepSourceId = editedOwnChat && busyChats.length === 0;
+		if (editedOwnChat && !keepSourceId) {
+			this.log(`[reuse] The fork takes a new session id, which misses the cache once, because ${busyChats.length} other chat(s) are in the middle of a turn: ${busyChats.join(', ')}.`, 'warn');
+		}
+		// An edited chat leaves its old session, and a rewind needs it let go of. A copy leaves the source open, so its
+		// chat goes on in the live session: closing and resuming a conversation makes the agent send all of it uncached.
+		if (editedOwnChat) {
+			for (const [key, session] of [...this.sessions]) {
+				if (session.acp.sessionId === source) {
+					await this.destroySession(key);
+				}
+			}
+		}
 		// The restart runs beside the fork, which uses a language server of its own, and is waited on
 		// before the copy is opened. Should it fail, the rewound conversation is not read again, so the
 		// chat is rebuilt from its transcript rather than continued on the wrong one.

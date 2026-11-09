@@ -248,7 +248,7 @@ describe('external conversation forking', () => {
 		await h.send(chat(1), 'c1');
 		await h.send(chat(2), 'c1');
 
-		await h.send(chat(3), 'c2');
+		await h.send(chat(2, { 2: 'edited question' }), 'c1');
 
 		expect(closedBeforeFork).toContain('s1');
 		// The restart runs beside the fork and is done before the copy is opened.
@@ -258,8 +258,6 @@ describe('external conversation forking', () => {
 		// Starting the agent again runs beside the fork instead of after it.
 		expect(h.agent.ensureStarted).toHaveBeenCalled();
 		expect(order.indexOf('resume s1')).toBeGreaterThan(order.indexOf('fork keepSourceId=true'));
-		const entries = h.state.values.get(h.storeKey) as SavedSession[];
-		expect(entries.find(entry => entry.key.includes('c1'))?.sessionId).toBe('full-copy');
 	});
 
 	it('rebuilds from the transcript when the restart fails, rather than continue on the whole conversation', async () => {
@@ -274,7 +272,7 @@ describe('external conversation forking', () => {
 		await h.send(chat(1), 'c1');
 		await h.send(chat(2), 'c1');
 
-		await h.send(chat(3), 'c2');
+		await h.send(chat(2, { 2: 'edited question' }), 'c1');
 
 		expect(h.agent.resumed).not.toContain('s1');
 		expect(h.agent.prompts.at(-1)?.texts.join('\n')).toContain('question 1');
@@ -299,20 +297,43 @@ describe('external conversation forking', () => {
 
 		await h.send(chat(1), 'c1');
 		await h.send(chat(2), 'c1');
-		await h.send(chat(3), 'c2');
+		await h.send(chat(2, { 2: 'edited question' }), 'c1');
 
 		expect(keepSourceId).toBe(false);
 		expect(h.agent.restart).not.toHaveBeenCalled();
-		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 'copy-of-other', texts: ['question 3'] });
+		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 'copy-of-other', texts: ['edited question'] });
 	});
 
-	it('continues a fork in the source session when the forker keeps its id, and moves the source chat to the copy', async () => {
+	it('continues an edited chat in the source session when the forker keeps its id', async () => {
 		let closedBeforeFork: string[] = [];
 		const forker = {
 			locate: vi.fn(async () => 'agy'),
-			fork: vi.fn(async () => {
+			fork: vi.fn(async (_program: string, request: { keepSourceId: boolean }) => {
 				closedBeforeFork = [...h.agent.closed];
+				expect(request.keepSourceId).toBe(true);
 				return { sessionId: 's1', sourceMovedTo: 'full-copy' };
+			}),
+			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
+		};
+		const h = harness({ ...googleAdapter, forker });
+		h.agent.supportsFork = false;
+		h.agent.supportsDelete = false;
+		await h.send(chat(1), 'c1');
+		await h.send(chat(2), 'c1');
+
+		await h.send(chat(2, { 2: 'edited question' }), 'c1');
+
+		// The source was let go of before its conversation was rewound, and the edited chat goes on in it.
+		expect(closedBeforeFork).toContain('s1');
+		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 's1', texts: ['edited question'] });
+	});
+
+	it('leaves the chat a copy was taken from in its own session, and gives the copy an id of its own', async () => {
+		const forker = {
+			locate: vi.fn(async () => 'agy'),
+			fork: vi.fn(async (_program: string, request: { keepSourceId: boolean }) => {
+				expect(request.keepSourceId).toBe(false);
+				return { sessionId: 'copy-of-c1' };
 			}),
 			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
 		};
@@ -324,17 +345,17 @@ describe('external conversation forking', () => {
 
 		await h.send(chat(3), 'c2');
 
-		// The source was let go of before its conversation was rewound, and the new chat goes on in it.
-		expect(closedBeforeFork).toContain('s1');
-		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 's1', texts: ['question 3'] });
+		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 'copy-of-c1', texts: ['question 3'] });
+		expect(h.agent.restart).not.toHaveBeenCalled();
 		const entries = h.state.values.get(h.storeKey) as SavedSession[];
-		expect(entries.find(entry => entry.key.includes('c1'))?.sessionId).toBe('full-copy');
-		expect(entries.find(entry => entry.key.includes('c2'))?.sessionId).toBe('s1');
+		expect(entries.find(entry => entry.key.includes('c1'))?.sessionId).toBe('s1');
 
-		// The source chat comes back on the whole conversation.
+		// The chat the copy was taken from goes on in the session it had, which is still open: nothing closes or
+		// resumes it, since a conversation that is opened again is sent to the model uncached.
 		await h.send(chat(3), 'c1');
-		expect(h.agent.resumed).toContain('full-copy');
-		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 'full-copy', texts: ['question 3'] });
+		expect(h.agent.closed).not.toContain('s1');
+		expect(h.agent.resumed).not.toContain('s1');
+		expect(h.agent.prompts.at(-1)).toEqual({ sessionId: 's1', texts: ['question 3'] });
 	});
 
 	it('uses a transcript when the external CLI is missing or declined', async () => {
