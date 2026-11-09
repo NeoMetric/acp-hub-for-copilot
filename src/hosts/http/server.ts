@@ -210,6 +210,7 @@ function sendPage(response: http.ServerResponse): void {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="/sidebar.css">
+<style>${PAGE_THEME}</style>
 <title>ACP Hub</title>
 </head>
 <body>
@@ -220,6 +221,89 @@ function sendPage(response: http.ServerResponse): void {
 	response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
 	response.end(body);
 }
+
+/**
+ * The stylesheet uses VS Code's theme variables, which a browser does not
+ * define. These values stand in for them, so the page keeps its layout and
+ * becomes legible outside the editor; inside the webview this block is not
+ * served at all and VS Code's own colours apply.
+ */
+const PAGE_THEME = `
+:root {
+	color-scheme: light dark;
+	--vscode-foreground: #24292f;
+	--vscode-descriptionForeground: #57606a;
+	--vscode-sideBar-background: #ffffff;
+	--vscode-panel-border: #d0d7de;
+	--vscode-widget-border: #d0d7de;
+	--vscode-button-background: #0969da;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #0860ca;
+	--vscode-button-border: transparent;
+	--vscode-button-secondaryBackground: #eaeef2;
+	--vscode-button-secondaryForeground: #24292f;
+	--vscode-badge-background: #0969da;
+	--vscode-badge-foreground: #ffffff;
+	--vscode-icon-foreground: #57606a;
+	--vscode-errorForeground: #cf222e;
+	--vscode-textLink-foreground: #0969da;
+	--vscode-input-background: #ffffff;
+	--vscode-input-foreground: #24292f;
+	--vscode-input-border: #d0d7de;
+	--vscode-progressBar-background: #0969da;
+	--vscode-textCodeBlock-background: #f6f8fa;
+	--vscode-toolbar-hoverBackground: #eaeef2;
+	--vscode-editorHoverWidget-background: #ffffff;
+	--vscode-editorHoverWidget-border: #d0d7de;
+	--vscode-editorHoverWidget-foreground: #24292f;
+	--vscode-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	--vscode-font-size: 13px;
+	--vscode-editor-font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--vscode-foreground: #e6edf3;
+		--vscode-descriptionForeground: #9198a1;
+		--vscode-sideBar-background: #0d1117;
+		--vscode-panel-border: #30363d;
+		--vscode-widget-border: #30363d;
+		--vscode-button-background: #238636;
+		--vscode-button-foreground: #ffffff;
+		--vscode-button-hoverBackground: #2ea043;
+		--vscode-button-secondaryBackground: #21262d;
+		--vscode-button-secondaryForeground: #e6edf3;
+		--vscode-badge-background: #1f6feb;
+		--vscode-badge-foreground: #ffffff;
+		--vscode-icon-foreground: #9198a1;
+		--vscode-errorForeground: #f85149;
+		--vscode-textLink-foreground: #58a6ff;
+		--vscode-input-background: #0d1117;
+		--vscode-input-foreground: #e6edf3;
+		--vscode-input-border: #30363d;
+		--vscode-progressBar-background: #1f6feb;
+		--vscode-textCodeBlock-background: #161b22;
+		--vscode-toolbar-hoverBackground: #21262d;
+		--vscode-editorHoverWidget-background: #161b22;
+		--vscode-editorHoverWidget-border: #30363d;
+		--vscode-editorHoverWidget-foreground: #e6edf3;
+	}
+}
+html, body { height: 100%; }
+body {
+	margin: 0;
+	padding: 0;
+	background: var(--vscode-sideBar-background);
+	color: var(--vscode-foreground);
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+}
+#root {
+	max-width: 780px;
+	margin: 0 auto;
+	padding: 20px 24px 48px;
+}
+@media (max-width: 480px) { #root { padding: 14px 14px 32px; } }
+`;
 
 /** One file the page loads, or a message that names the build it is missing from. */
 async function sendFile(response: http.ServerResponse, file: string, contentType: string): Promise<void> {
