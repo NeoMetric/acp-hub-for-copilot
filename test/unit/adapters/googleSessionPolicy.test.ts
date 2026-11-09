@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { googleSessionPolicy } from '../../../src/adapters/googleSessionPolicy';
 import type { ConversationForker } from '../../../src/core/adapter';
-import type { SavedSession } from '../../../src/core/sessionStore';
+import type { SavedSession } from '../../../src/engine/chat/sessionStore';
 
 const saved: SavedSession = {
 	key: 'chat',

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { characterCountOf } from '../../core/convert';
+import { characterCountOf } from './tokenCount';
 import { CHARS_PER_TOKEN } from '../../engine/chat/usageReport';
 import type { Log } from '../../engine/ports/host';
 import type { StateStore } from '../../engine/ports/state';

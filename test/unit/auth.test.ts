@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, LaunchContext } from '../../src/core/adapter';
 import { signIn, signInWithApiKey, signOut, terminalMethodsFrom, validateApiKey } from '../../src/core/auth';
-import { AgentSecretStore } from '../../src/core/secrets';
-import { FakeSecretStorage } from './secrets';
+import type { SecretStore } from '../../src/engine/ports/state';
 
 function makeAdapter(id: string, auth: AgentAdapter['auth']): AgentAdapter {
 	return { id, displayName: `Test ${id}`, auth } as unknown as AgentAdapter;
@@ -17,8 +16,14 @@ const adapter = makeAdapter('a1', [
 
 const ctx = { entryPath: '/x/entry.js' } as LaunchContext;
 
-function makeStore(): AgentSecretStore {
-	return new AgentSecretStore(new FakeSecretStorage().asSecretStorage());
+/** The agents' credentials, in memory, as the server keeps them in the shared store. */
+function makeStore(): SecretStore {
+	const values = new Map<string, string>();
+	return {
+		get: (id: string) => Promise.resolve(values.get(id)),
+		set: (id: string, value: string) => { values.set(id, value); return Promise.resolve(); },
+		delete: (id: string) => { values.delete(id); return Promise.resolve(); },
+	};
 }
 
 describe('terminalMethodsFrom', () => {

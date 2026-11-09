@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import type { ConversationForkRequest, ConversationForker, ForkResult } from '../core/adapter';
 import type { ForkPoint } from '../core/protocol';
 import type { Log } from '../core/logging';
-import { messageFingerprintOf } from '../core/sessionFingerprint';
+import { messageFingerprintOf } from '../engine/chat/sessionFingerprint';
 import { APP_DATA_DIR, callHub, startHub, type Hub } from './googleHub';
 
 const PLANNER_RESPONSE = 'CORTEX_STEP_TYPE_PLANNER_RESPONSE';

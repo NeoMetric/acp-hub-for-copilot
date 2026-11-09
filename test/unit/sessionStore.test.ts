@@ -6,11 +6,11 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { StateStore } from '../../src/engine/ports/state';
-import { guidanceChangeOf, guidanceLineHashes } from '../../src/core/provider';
-import { guidanceChangeBlock } from '../../src/core/provider/assemble';
-import { mergeGuidanceChange } from '../../src/core/provider/keys';
-import { describeToolChange, toolChangeOf } from '../../src/core/provider/keys';
-import { findCheckpoint, findForkSource, hashAll, isPrefixOf, messageFingerprintOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/core/sessionStore';
+import { guidanceChangeOf, guidanceLineHashes } from '../../src/engine/chat/keys';
+import { guidanceChangeBlock } from '../../src/engine/chat/assemble';
+import { mergeGuidanceChange } from '../../src/engine/chat/keys';
+import { describeToolChange, toolChangeOf } from '../../src/engine/chat/keys';
+import { findCheckpoint, findForkSource, hashAll, isPrefixOf, messageFingerprintOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/engine/chat/sessionStore';
 
 const check: ReuseCheck = { cwd: '/work', toolsHash: toolsHashOf(['a', 'b']), guidanceHash: 'g1' };
 

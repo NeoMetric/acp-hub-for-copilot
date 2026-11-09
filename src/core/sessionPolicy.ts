@@ -5,7 +5,7 @@
 
 import type { AgentAdapter, AgentSettings, ConversationForker } from './adapter';
 import { nativeSessionPolicy } from './nativeSessionPolicy';
-import type { SavedSession } from './sessionStore';
+import type { SavedSession } from '../engine/chat/sessionStore';
 
 /** A chat's agent session that is open now, for a policy that must know whether the saved conversation is in use or mid-turn. */
 export interface LiveSessionInfo {

@@ -5,10 +5,9 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as vscode from 'vscode';
-import { conversationIdOf, describeRequest, resolveCwd, systemGuidanceOf, workspaceFoldersOf } from '../../src/core/requestContext';
-import { sessionKey } from '../../src/core/provider';
+import { conversationIdOf, resolveCwd, sessionKey, systemGuidanceOf, workspaceFoldersOf } from '../../src/hosts/vscode/identity';
 import { buildSystemPromptAppend } from '../../src/core/systemPrompt';
-import { assistant, image, system, toolCall, toolResult, user } from './messages';
+import { assistant, system, toolCall, toolResult, user } from './messages';
 
 const options = (modelOptions?: Record<string, unknown>) => ({ modelOptions, tools: [], toolMode: 1 }) as unknown as vscode.ProvideLanguageModelChatResponseOptions;
 
@@ -203,55 +202,6 @@ describe('sessionKey with request context', () => {
 			expect(sessionKey([hostSystem('/repo/one'), user('x')], id)).not.toBe(sessionKey([hostSystem('/repo/two'), user('x')], id));
 			expect(sessionKey([hostSystem('/repo/one'), user('x')], id)).toContain('/repo/one');
 		});
-	});
-});
-
-describe('describeRequest', () => {
-	it('lists each message with its raw role and the tags of its text', () => {
-		const description = describeRequest([
-			system('<instructions>\nbe nice\n</instructions>'),
-			globalContext(oneFolder('/repo')),
-			user('<context>\nToday\n</context>\n<userRequest>\nhi\n</userRequest>'),
-		], options());
-
-		expect(description.messages.map(message => message.role)).toEqual([3, 1, 1]);
-		expect(description.messages[0].parts[0]).toMatchObject({ kind: 'text', tags: ['instructions'] });
-		expect(description.messages[1].parts[0]).toMatchObject({ kind: 'text', tags: ['environment_info', 'workspace_info'] });
-		expect(description.messages[2].parts[0]).toMatchObject({ kind: 'text', tags: ['context', 'userRequest'] });
-	});
-
-	it('ignores angle brackets that are not a tag with a closing partner', () => {
-		const description = describeRequest([user('a < b and <br> then Map<string, number>')], options());
-
-		expect(description.messages[0].parts[0]).toMatchObject({ tags: [] });
-	});
-
-	it('records images by type and size, without their bytes', () => {
-		const description = describeRequest([user('look', image([1, 2, 3]))], options());
-
-		expect(description.messages[0].parts[1]).toEqual({ kind: 'data', mimeType: 'image/png', bytes: 3 });
-	});
-
-	it('shortens the text to a preview but keeps its full length', () => {
-		const description = describeRequest([user('x'.repeat(1000))], options(), { previewLength: 20 });
-		const part = description.messages[0].parts[0];
-
-		expect(part).toMatchObject({ kind: 'text', chars: 1000 });
-		expect(part.kind === 'text' && part.text.length).toBeLessThanOrEqual(21);
-	});
-
-	it('keeps the whole text when asked for the full request', () => {
-		const description = describeRequest([user('x'.repeat(1000))], options(), { previewLength: Infinity });
-		const part = description.messages[0].parts[0];
-
-		expect(part.kind === 'text' && part.text.length).toBe(1000);
-	});
-
-	it('reports the options Copilot passed, including every model option key', () => {
-		const description = describeRequest([user('hi')], options({ _conversationId: 'c1', _enableThinking: true, _otelTraceContext: null }));
-
-		expect(description.options.modelOptions).toEqual({ _conversationId: '"c1"', _enableThinking: 'true', _otelTraceContext: 'null' });
-		expect(description.options.toolCount).toBe(0);
 	});
 });
 

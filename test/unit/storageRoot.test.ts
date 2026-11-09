@@ -87,9 +87,6 @@ vi.mock('../../src/engine/chat/usage', () => ({
 vi.mock('../../src/engine/mcp/bridge', () => ({
 	McpBridge: class { dispose() { } },
 }));
-vi.mock('../../src/core/bridge', () => ({
-	McpBridge: class { dispose() { } },
-}));
 // The Google adapter reads its CLI's data folder when the registry is loaded.
 vi.mock('../../src/adapters/googleHub', () => ({
 	APP_DATA_DIR: 'antigravity-copilot',

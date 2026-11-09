@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, UsageContext, UsageReading } from '../../src/core/adapter';
 import { RpcError } from '../../src/engine/acp/rpc';
-import { FRESH_MS, READ_TIMEOUT_MS, READY_TIMEOUT_MS, UsageStore } from '../../src/core/usage';
+import { FRESH_MS, READ_TIMEOUT_MS, READY_TIMEOUT_MS, UsageStore } from '../../src/engine/chat/usage';
 
 const ctx = {} as UsageContext;
 const reading: UsageReading = { windows: [{ label: '5-hour', usedPercent: 40 }] };

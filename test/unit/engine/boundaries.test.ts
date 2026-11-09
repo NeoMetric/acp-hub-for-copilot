@@ -70,10 +70,9 @@ describe('engine boundaries', () => {
 		}
 		expect(readFileSync('src/hosts/vscode/identity.ts', 'utf8'), 'the VS Code host keeps the sections it strips')
 			.toMatch(/environment_info[\s\S]*workspace_info[\s\S]*userMemory[\s\S]*sessionMemory[\s\S]*repoMemory/);
-		expect(readFileSync('src/core/provider.ts', 'utf8'), 'the provider no longer reads the conversation id').not.toContain('_conversationId');
 	});
 
-	/** The chat modules that live in the engine; each keeps a shim at its old path. */
+	/** The chat modules that live in the engine. */
 	for (const name of ['cache', 'sessionStore', 'sessionFingerprint', 'usage', 'systemPrompt']) {
 		it(`holds ${name}.ts without reaching for a host`, () => {
 			expect(existsSync(`src/engine/chat/${name}.ts`), `src/engine/chat/${name}.ts exists`).toBe(true);

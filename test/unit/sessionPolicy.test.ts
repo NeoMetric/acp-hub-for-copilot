@@ -3,7 +3,7 @@ import { claudeAdapter } from '../../src/adapters/claude';
 import type { ConversationForker } from '../../src/core/adapter';
 import { nativeSessionPolicy } from '../../src/core/nativeSessionPolicy';
 import { DEFAULT_TOOL_WAIT_MS, effectiveToolWaitMs, policyOf, type ContinuationInput, type SessionPolicy } from '../../src/core/sessionPolicy';
-import type { SavedSession } from '../../src/core/sessionStore';
+import type { SavedSession } from '../../src/engine/chat/sessionStore';
 
 const saved: SavedSession = {
 	key: 'chat',

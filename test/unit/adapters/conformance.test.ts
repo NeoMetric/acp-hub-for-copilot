@@ -6,7 +6,7 @@ import { googleAdapter } from '../../../src/adapters/google';
 import type { ConversationForker } from '../../../src/core/adapter';
 import { ADAPTERS } from '../../../src/core/agents';
 import { policyOf, type ContinuationInput, type SessionPolicy } from '../../../src/core/sessionPolicy';
-import type { SavedSession } from '../../../src/core/sessionStore';
+import type { SavedSession } from '../../../src/engine/chat/sessionStore';
 
 /** The stored conversation every plan in this suite continues. */
 const saved: SavedSession = {

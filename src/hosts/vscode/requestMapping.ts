@@ -198,7 +198,7 @@ function toolOf(tool: vscode.LanguageModelChatTool): unknown {
  * The engine's view of one message, which only the chat-wide context needs: its
  * sections are always written as text, so no other part is converted.
  */
-function engineMessageOf(message: vscode.LanguageModelChatRequestMessage): ChatMessage {
+export function engineMessageOf(message: vscode.LanguageModelChatRequestMessage): ChatMessage {
 	const role = roleOf(message);
 	return {
 		role,

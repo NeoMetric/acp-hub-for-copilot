@@ -6,9 +6,9 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as vscode from 'vscode';
-import { fingerprint, isSystemMessage, textOf } from '../../core/convert';
 import { stripIdentity } from '../../core/identityPatterns';
 import { textOf as textOfMessage } from '../../engine/chat/messages';
+import { fingerprint, isSystemMessage, textOf } from './messageText';
 import type { ChatContext } from '../../engine/chat/types';
 import type { ChatMessage } from '../../engine/model/chat';
 
