@@ -123,6 +123,31 @@ class MemoryState implements StateStore {
 const ready = (baseUrl: string): LinkState => ({ kind: 'ready', endpoint: { baseUrl }, owned: false });
 const unavailable: LinkState = { kind: 'unavailable', reason: 'No server answered on port 8791.' };
 
+/** Resolves with `work`, or fails the test when it takes longer than `ms`. */
+async function within<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	const bound = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => reject(new Error(`${what} waited longer than ${ms} ms`)), ms);
+	});
+	try {
+		return await Promise.race([work, bound]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** Waits until `ready()` holds, or fails the test. */
+async function waitUntil(ready: () => boolean, what: string, timeoutMs = 3_000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (ready()) {
+			return;
+		}
+		await new Promise(resolve => setTimeout(resolve, 10));
+	}
+	throw new Error(`Timed out waiting for ${what}.`);
+}
+
 const logs: string[] = [];
 const log: Log = message => { logs.push(message); };
 
@@ -217,6 +242,55 @@ describe('ServerProvider models', () => {
 		expect(fired).toBe(1);
 		link.publish(unavailable);
 		expect(fired).toBe(2);
+	});
+
+	it('answers from the saved list at once, and reports the live list when it differs', async () => {
+		const saved = [{ id: 'sonnet', name: 'Sonnet', family: 'sonnet', version: '1', maxInputTokens: 1_000, maxOutputTokens: 100 }];
+		const state = new MemoryState();
+		await state.update(savedModelsKey('claude'), saved);
+		const baseUrl = await serverWith([modelWire('claude', 'sonnet'), modelWire('claude', 'opus')]);
+		// A cold server: the link is still finding one while the picker asks.
+		let release = (): void => { };
+		const gate = new Promise<void>(resolve => { release = resolve; });
+		const link = new FakeLink(async () => {
+			await gate;
+			return ready(baseUrl);
+		});
+		const provider = providerOf({ link, state });
+		let fired = 0;
+		provider.onDidChangeLanguageModelChatInformation(() => { fired++; });
+
+		const models = await within(provider.provideLanguageModelChatInformation(modelsOptions, token()), 500, 'the picker');
+		expect(models).toEqual(saved);
+
+		release();
+		await waitUntil(() => fired > 0, 'the live list to be reported');
+		const live = state.get<Array<{ id: string }>>(savedModelsKey('claude'));
+		expect(live?.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent', 'opus', 'opus::agent']);
+	});
+
+	it('lists again after a refresh, so an agent that changed is not stuck', async () => {
+		const baseUrl = await serverWith([modelWire('claude', 'sonnet')]);
+		const link = new FakeLink(() => ready(baseUrl));
+		const state = new MemoryState();
+		const provider = providerOf({ link, state });
+		await provider.provideLanguageModelChatInformation(modelsOptions, token());
+		const listed = link.ensured;
+
+		provider.refresh();
+		await provider.provideLanguageModelChatInformation(modelsOptions, token());
+
+		await waitUntil(() => link.ensured > listed, 'the models to be listed again');
+	});
+
+	it('refresh asks the workbench to list the models again', () => {
+		const provider = providerOf();
+		let fired = 0;
+		provider.onDidChangeLanguageModelChatInformation(() => { fired++; });
+
+		provider.refresh();
+
+		expect(fired).toBe(1);
 	});
 });
 

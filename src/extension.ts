@@ -15,8 +15,10 @@ import { vendorOf } from './core/vendors';
 import { agentsRoot, storageRoot } from './engine/store/paths';
 import { ServerLink } from './hosts/vscode/serverLink';
 import { ServerProvider } from './hosts/vscode/serverProvider';
+import { changedAgents } from './sidebar/agentChanges';
 import { SidebarHost } from './sidebar/host';
 import { SidebarRelay } from './sidebar/relay';
+import type { ControlState } from './ui/messages';
 
 /** The port a window uses when the user names none; the server's own default. */
 const DEFAULT_PORT = 8791;
@@ -67,6 +69,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	// The uninstall hook deletes the agents with the extension.
 	recordStoragePath(extensionDir, agentsDir);
 
+	const providers = new Map<string, ServerProvider>();
+
 	const binding = new ServerLink({
 		root,
 		port: settings.get<number>('server.port') ?? DEFAULT_PORT,
@@ -99,6 +103,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			// A chat whose folders this machine does not have runs in the agents folder, as it always did.
 			windowFolder: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? agentsDir,
 		});
+		providers.set(agent.id, provider);
 		context.subscriptions.push(
 			vscode.lm.registerLanguageModelChatProvider(vendor, provider),
 			provider,
@@ -125,10 +130,21 @@ export function activate(context: vscode.ExtensionContext): void {
 		assetUri: relative => vscode.Uri.joinPath(context.extensionUri, relative),
 	});
 
+	// An agent that was installed, uninstalled, switched on or off, signed in or given a key changes
+	// which models the picker may offer, so that agent's provider is asked to list them again.
+	let drawn: ControlState | undefined;
+	const unsubscribeCards = relay.onState(state => {
+		for (const agentId of changedAgents(drawn, state)) {
+			providers.get(agentId)?.refresh();
+		}
+		drawn = state;
+	});
+
 	context.subscriptions.push(
 		output,
 		binding,
 		relay,
+		{ dispose: unsubscribeCards },
 		vscode.window.registerWebviewViewProvider('acpHub.agents', sidebar),
 		vscode.commands.registerCommand('acpHub.showLogs', () => output.show()),
 		vscode.commands.registerCommand('acpHub.signIn', async () => {

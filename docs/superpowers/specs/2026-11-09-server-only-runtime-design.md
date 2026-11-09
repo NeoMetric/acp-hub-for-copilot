@@ -105,7 +105,9 @@ agent id, so a provider filters on `owned_by`.
   `--exit-with-parent`), exits when its stdin closes. A closed pipe is how a
   crashed or force-killed extension host is noticed on Windows too. A server
   started by hand has no such flag and runs until stopped. `deactivate()` also
-  sends a graceful stop.
+  sends a graceful stop, bounded in time: a child that never started (a missing
+  bundle, `ENOENT`) has no pid and reports no exit, so it is treated as gone
+  rather than waited for.
 - **Window 1 closes while window 2 is attached to its server:** window 2's next
   health check or request fails, and it runs the same attach-or-start step.
   "Takeover" means exactly this: window 2 starts a new server of its own, which
@@ -118,7 +120,11 @@ agent id, so a provider filters on `owned_by`.
   server that answers but is not ACP Hub, or is too old or too new, is never
   killed or restarted; the providers show a readable "server on port N is not
   compatible" message, and the user can change the port setting. A rejected
-  token (401) shows its own message naming the token file.
+  token (401) shows its own message naming the token file. The token is checked
+  against the cheap authenticated `GET /api/state`, never `/v1/models`: a cold
+  server fills that list by waking each agent, which can outlast a probe. A
+  probe that runs out of its own time says nothing about the token, so an
+  answering `/health` is not turned into "unavailable" by it.
 - **Health watch:** a light periodic probe (and any failed request) moves the
   provider to "server unavailable" with a readable message and retries the
   attach-or-start step.
@@ -128,7 +134,13 @@ agent id, so a provider filters on `owned_by`.
 One class instance per agent, implementing `LanguageModelChatProvider`:
 
 - `provideLanguageModelChatInformation`: `GET /v1/models`, keep entries with
-  `owned_by === agentId`, map to `LanguageModelChatInformation`.
+  `owned_by === agentId`, map to `LanguageModelChatInformation`. The list a
+  window saved last time is answered at once when it is non-empty, and the
+  server's list is fetched in the background: an empty answer never empties the
+  picker, and a cold server never holds it. `refresh()` asks the workbench to
+  list again, and the extension calls it for every agent whose sidebar card
+  shows a changed install, enabled, sign-in or saved-key state — so an install,
+  uninstall, switch or sign-in reaches the picker.
 - `provideLanguageModelChatResponse`: translate VS Code messages and tools to
   OpenAI JSON, `POST /v1/chat/completions` with `stream: true`, translate the
   SSE deltas to `LanguageModelTextPart` and `LanguageModelToolCallPart`, abort

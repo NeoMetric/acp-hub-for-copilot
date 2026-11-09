@@ -45,6 +45,8 @@ const mocks = vi.hoisted(() => ({
 	registered: [] as Array<{ vendor: string; provider: unknown }>,
 	/** The dependencies each provider was built with, in registry order. */
 	providers: [] as ProviderDeps[],
+	/** The agents whose models the window asked the workbench to list again, in order. */
+	refreshed: [] as string[],
 	published: 0,
 	/** The dependencies the link was built with, and the listeners it was given. */
 	linkDeps: [] as LinkDeps[],
@@ -54,6 +56,7 @@ const mocks = vi.hoisted(() => ({
 	/** The relay, and the dependencies it was built with. */
 	relays: [] as unknown[],
 	relayDeps: [] as RelayDeps[],
+	relayListeners: new Set<(state: unknown) => void>(),
 	actions: [] as Array<Record<string, unknown>>,
 	/** The sidebar view and the host it was registered with. */
 	views: [] as Array<{ id: string; provider: unknown }>,
@@ -158,11 +161,12 @@ vi.mock('../../src/hosts/vscode/serverLink', () => ({
 }));
 vi.mock('../../src/hosts/vscode/serverProvider', () => ({
 	ServerProvider: class {
-		constructor(deps: ProviderDeps) { mocks.providers.push(deps); }
+		constructor(private readonly deps: ProviderDeps) { mocks.providers.push(deps); }
 		publishModels() {
 			mocks.published += 1;
 			return Promise.resolve();
 		}
+		refresh() { mocks.refreshed.push(this.deps.agentId); }
 		dispose() { }
 	},
 }));
@@ -173,7 +177,10 @@ vi.mock('../../src/sidebar/relay', () => ({
 			mocks.relays.push(this);
 		}
 		send(action: Record<string, unknown>) { mocks.actions.push(action); }
-		onState() { return () => undefined; }
+		onState(listener: (state: unknown) => void) {
+			mocks.relayListeners.add(listener);
+			return () => { mocks.relayListeners.delete(listener); };
+		}
 		dispose() { }
 	},
 }));
@@ -213,6 +220,7 @@ beforeEach(() => {
 	mocks.folders = undefined;
 	mocks.registered.length = 0;
 	mocks.providers.length = 0;
+	mocks.refreshed.length = 0;
 	mocks.published = 0;
 	mocks.linkDeps.length = 0;
 	mocks.linkListeners.clear();
@@ -220,6 +228,7 @@ beforeEach(() => {
 	mocks.disposed = 0;
 	mocks.relays.length = 0;
 	mocks.relayDeps.length = 0;
+	mocks.relayListeners.clear();
 	mocks.actions.length = 0;
 	mocks.views.length = 0;
 	mocks.hosts.length = 0;
@@ -404,6 +413,43 @@ describe('the extension is a client of the server', () => {
 		await deactivate();
 
 		expect(mocks.disposed).toBe(1);
+	});
+
+	it('asks the provider of an agent whose card changed to list its models again', () => {
+		activateOnce();
+		const card = (overrides: Record<string, unknown> = {}) => ({
+			id: 'claude',
+			displayName: 'Claude Agent',
+			install: 'installed',
+			removable: true,
+			signedIn: 'yes',
+			hasSavedKey: false,
+			enabled: true,
+			visible: true,
+			settings: [],
+			usage: { status: 'idle', windows: [] },
+			...overrides,
+		});
+		const draw = (...agents: unknown[]): void => {
+			for (const listener of mocks.relayListeners) {
+				listener({ agents });
+			}
+		};
+
+		// The first snapshot is the first news of every card it holds.
+		draw(card(), card({ id: 'codex' }), card({ id: 'google' }));
+		expect(mocks.refreshed).toEqual(['claude', 'codex', 'google']);
+
+		mocks.refreshed.length = 0;
+		draw(card(), card({ id: 'codex' }), card({ id: 'google' }));
+		expect(mocks.refreshed, 'an unchanged snapshot asks for nothing').toEqual([]);
+
+		draw(card(), card({ id: 'codex', install: 'not-installed' }), card({ id: 'google', enabled: false }));
+		expect(mocks.refreshed, 'the agents whose card changed are the ones listed again').toEqual(['codex', 'google']);
+
+		mocks.refreshed.length = 0;
+		draw(card(), card({ id: 'codex', install: 'not-installed' }), card({ id: 'google', enabled: false, busy: 'Signing in...' }));
+		expect(mocks.refreshed, 'a busy line alone changes no model').toEqual([]);
 	});
 });
 

@@ -45,7 +45,7 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 	readonly onDidChangeLanguageModelChatInformation = this.changeEmitter.event;
 
 	private readonly unsubscribe: () => void;
-	private listed: vscode.LanguageModelChatInformation[] | undefined;
+	private listing: Promise<vscode.LanguageModelChatInformation[]> | undefined;
 	private lastKind: LinkState['kind'] | undefined;
 	private disposed = false;
 
@@ -62,10 +62,14 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 		if (token.isCancellationRequested) {
 			return [];
 		}
-		if (this.listed) {
-			return this.listed;
+		const saved = this.savedModels();
+		if (saved.length > 0) {
+			// A cold server must not hold the picker: the models a window listed last are offered at once,
+			// and the listing below refreshes them in the background when the server answers otherwise.
+			this.listInBackground(saved);
+			return saved;
 		}
-		return this.list();
+		return this.list(saved);
 	}
 
 	async provideLanguageModelChatResponse(
@@ -131,10 +135,11 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 		}
 	}
 
-	/** Forgets the listed models and asks the workbench to list them again, for example after a sign-in. */
+	/** Asks the workbench to list the models again, for example after an agent was installed, enabled or signed in. */
 	refresh(): void {
-		this.listed = undefined;
-		this.changeEmitter.fire();
+		if (!this.disposed) {
+			this.changeEmitter.fire();
+		}
 	}
 
 	dispose(): void {
@@ -147,13 +152,12 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 	}
 
 	/** The models the server publishes for this agent, or the ones a window listed before. */
-	private async list(): Promise<vscode.LanguageModelChatInformation[]> {
-		const saved = this.savedModels();
+	private async list(saved: readonly vscode.LanguageModelChatInformation[]): Promise<vscode.LanguageModelChatInformation[]> {
 		const state = await this.deps.link.ensure();
 		this.lastKind = state.kind;
 		if (state.kind !== 'ready') {
 			this.deps.log(`The server is unavailable (${state.reason}); offering the ${saved.length} saved ${this.deps.agentId} model(s).`, 'warn');
-			return this.keep(saved);
+			return [...saved];
 		}
 
 		try {
@@ -164,26 +168,34 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 			if (models.length === 0) {
 				// A cold server or an agent that is not installed: an empty answer must not empty the picker.
 				this.deps.log(`The server listed no ${this.deps.agentId} models; offering the ${saved.length} saved one(s) instead.`, 'warn');
-				return this.keep(saved);
+				return [...saved];
 			}
-			this.listed = models;
 			if (saved.length > 0 && JSON.stringify(saved) !== JSON.stringify(models)) {
+				// The save lands first, so the workbench that lists again on this news already sees them.
+				await this.save(models);
 				this.changeEmitter.fire();
+				return models;
 			}
 			await this.save(models);
 			return models;
 		} catch (error) {
 			this.deps.log(`Could not list the ${this.deps.agentId} models: ${messageOf(error)}`, 'warn');
-			return this.keep(saved);
+			return [...saved];
 		}
 	}
 
-	/** The models to show when the server had none: the saved ones, which an empty answer never replaces. */
-	private keep(saved: vscode.LanguageModelChatInformation[]): vscode.LanguageModelChatInformation[] {
-		if (saved.length > 0) {
-			this.listed = saved;
+	/** Lists once at a time, so a slow link cannot stack a request per picker redraw. */
+	private listInBackground(saved: readonly vscode.LanguageModelChatInformation[]): void {
+		if (this.listing || this.disposed) {
+			return;
 		}
-		return saved;
+		const work = this.list(saved);
+		this.listing = work;
+		void work.then(() => {
+			if (this.listing === work) {
+				this.listing = undefined;
+			}
+		});
 	}
 
 	private savedModels(): vscode.LanguageModelChatInformation[] {
@@ -199,13 +211,12 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 		}
 	}
 
-	/** A server that came or went changed what can be offered, so the next listing asks again. */
+	/** A server that came or went changed what can be offered, so the workbench lists again. */
 	private linkChanged(state: LinkState): void {
 		if (this.disposed || state.kind === this.lastKind) {
 			return;
 		}
 		this.lastKind = state.kind;
-		this.listed = undefined;
 		this.changeEmitter.fire();
 	}
 
