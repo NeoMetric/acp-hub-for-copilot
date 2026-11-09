@@ -9,6 +9,7 @@ import { AdapterNotInstalledError, type AgentSession } from '../../engine/acp/ag
 import type { Log } from '../logging';
 import { acpModelValue, effortLevelsOf, findModelOption, flattenChoices, toModelVariants } from '../models';
 import { describe, rpcDetailsOf } from '../../engine/chat/sessionOptions';
+import type { StateStore } from '../../engine/ports/state';
 import type { AgentApi } from './types';
 
 const MODEL_RETRY_BASE_MS = 5_000;
@@ -62,7 +63,8 @@ export function withReportedWindows(models: readonly vscode.LanguageModelChatInf
 /** What the model list needs from the provider that owns it. */
 export interface ModelListHost {
 	adapter: AgentAdapter;
-	state: vscode.Memento | undefined;
+	/** The shared store the published models are cached in. */
+	state: StateStore | undefined;
 	log: Log;
 	agentClient(): Promise<AgentApi>;
 	/** The warm session the models are read from. */

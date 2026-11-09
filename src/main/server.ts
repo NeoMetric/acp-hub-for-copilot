@@ -3,13 +3,12 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { createHeadlessComposition } from '../composition/headless';
 import type { CancellationToken } from '../engine/acp/emitter';
 import type { ToolBridge } from '../engine/chat/types';
 import { McpBridge, type McpToolResult } from '../engine/mcp/bridge';
 import type { Part } from '../engine/model/chat';
+import { storageRoot } from '../engine/store/paths';
 import { stderrLog } from '../hosts/http/host';
 import { createServer } from '../hosts/http/server';
 
@@ -69,14 +68,6 @@ function portOf(value: string | undefined): number {
 }
 
 /**
- * The store root: `ACP_HUB_HOME`, else `~/.acp-hub`. It is the same folder the
- * extension uses, so an agent installed in one gateway is installed in both.
- */
-function rootOf(value: string | undefined): string {
-	return path.resolve(value?.trim() || path.join(os.homedir(), '.acp-hub'));
-}
-
-/**
  * Starts the headless gateway: the engine over the store, the HTTP surface, the
  * loopback binding, and the shutdown that stops the agents on the way out.
  */
@@ -86,7 +77,8 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 	// The client runs the tools a turn asks for, so the loopback bridge only
 	// relays the calls; a chat's session keeps the call parked for the re-post.
 	const bridge = new McpBridge(stderrLog);
-	const composition = createHeadlessComposition({ root: rootOf(env.ACP_HUB_HOME), bridge: toolBridgeOf(bridge), log: stderrLog });
+	// The same root the extension uses, so an agent installed in one gateway is installed in both.
+	const composition = createHeadlessComposition({ root: storageRoot(env), bridge: toolBridgeOf(bridge), log: stderrLog });
 	const server = createServer({ composition, token });
 
 	server.listen(port, '127.0.0.1', () => {

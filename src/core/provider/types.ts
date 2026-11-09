@@ -10,6 +10,7 @@ import type { McpBridge } from '../bridge';
 import type { Log } from '../logging';
 import type { AgentApi } from '../../engine/chat/types';
 import type { HostPort } from '../../engine/ports/host';
+import type { StateStore } from '../../engine/ports/state';
 
 /** The chat types live in the engine now; every existing import site keeps working. */
 export type { AgentApi, ActiveTurn, ChatContext, ChatSession, FinishedTurn, GuidanceChange, HeldToolCall, PendingToolCall, Reuse } from '../../engine/chat/types';
@@ -18,8 +19,8 @@ export type { AgentApi, ActiveTurn, ChatContext, ChatSession, FinishedTurn, Guid
 export interface ProviderDeps {
 	log: Log;
 	bridge: McpBridge;
-	/** Extension state; the model list and the saved sessions live in it, keyed by agent. */
-	state: vscode.Memento | undefined;
+	/** Extension state, the store both gateways share; the model list and the saved sessions live in it, keyed by agent. */
+	state: StateStore | undefined;
 	/** The host the engine runs on; a provider built without one makes its own. */
 	host?: HostPort;
 	/** The launch context of the installed agent, or `undefined` when it is not installed. */

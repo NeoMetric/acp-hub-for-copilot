@@ -10,9 +10,12 @@ import { scopedLog } from './core/logging';
 import { killAllChildren, killStrayAgents } from './core/processes';
 import { AcpProvider } from './core/provider';
 import { AgentSecretStore } from './core/secrets';
+import { migrateState, openSharedStore } from './core/sharedStore';
+import { stateStoreOf } from './core/stateStore';
 import { readAgentSettings, settingKey } from './core/settings';
 import { recordStoragePath } from './core/storageCleanup';
 import { UsageStore } from './core/usage';
+import { storageRoot } from './engine/store/paths';
 import { createVsCodeHost } from './hosts/vscode/host';
 import { SidebarHost } from './sidebar/host';
 import type { SettingValue } from './sidebar/messages';
@@ -21,17 +24,25 @@ export function activate(context: vscode.ExtensionContext): void {
 	const output = vscode.window.createOutputChannel('ACP Hub', { log: true });
 	const log = scopedLog(output);
 	const bridge = new McpBridge(log);
-	const secrets = new AgentSecretStore(context.secrets);
+	const storageDir = context.globalStorageUri.fsPath;
+	// One store for both gateways, so a chat saved in VS Code resumes in the server, and back.
+	const shared = openSharedStore({ root: storageRoot(), fallbackRoot: storageDir, log });
+	const state = shared.store.state;
+	log(`The shared store is in ${shared.root}.`, 'debug');
+	const legacyState = stateStoreOf(context.globalState);
+	if (legacyState) {
+		void migrateState(legacyState, state).catch(error => log(`Could not copy the extension's saved state into the shared store: ${error instanceof Error ? error.message : String(error)}`, 'warn'));
+	}
+	const secrets = new AgentSecretStore(context.secrets, shared.store.secrets);
 	const usage = new UsageStore(log);
 	const providers = new Map<string, AcpProvider>();
-	const storageDir = context.globalStorageUri.fsPath;
 	const installEnv = { storageDir, extensionDir: context.extensionUri.fsPath, log, progress: (message: string) => log(message) };
 	recordStoragePath(installEnv.extensionDir, storageDir);
 	// Everything the engine may ask of this host — the extension state, the credentials,
 	// the settings and the window's folder — for the providers of every agent.
 	const host = createVsCodeHost({
 		log,
-		state: context.globalState,
+		state,
 		secrets,
 		storageRoot: storageDir,
 		settings: { get: <T>(section: string) => vscode.workspace.getConfiguration('acpHub').get<T>(section) },
@@ -73,7 +84,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			store: secrets, ctx: launch, runTerminal: options => runInVsCodeTerminal(options, storageDir),
 			startAgent: methodId => providers.get(id)?.startForSignIn(methodId) ?? Promise.resolve(false),
 		});
-		if (result.ok) { await context.globalState.update(`signedIn.${id}`, true); await providers.get(id)?.restart(); providers.get(id)?.refresh(); void refreshUsage(id); }
+		if (result.ok) { await state.update(`signedIn.${id}`, true); await providers.get(id)?.restart(); providers.get(id)?.refresh(); void refreshUsage(id); }
 		return result;
 	}
 	async function refreshUsage(id: string, force = true): Promise<void> {
@@ -84,7 +95,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	}
 	for (const adapter of ADAPTERS) {
 		const provider = new AcpProvider(adapter, {
-			log: scopedLog(output, adapter.id), bridge, state: context.globalState, host,
+			log: scopedLog(output, adapter.id), bridge, state, host,
 			resolveLaunch: () => resolveLaunch(adapter),
 			isEnabled: () => vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(adapter.id, 'enabled'), true),
 			client: {
@@ -102,7 +113,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		context.subscriptions.push(
 			provider,
 			provider.onDidRequireSignIn(() => {
-				void context.globalState.update(`signedIn.${adapter.id}`, false);
+				void state.update(`signedIn.${adapter.id}`, false);
 				sidebar.refresh();
 			}),
 			provider.onDidMeasureRequest(measurement => usage.recordRequest(adapter.id, measurement)),
@@ -118,15 +129,15 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push({
 		dispose: usage.onDidChange(id => {
 			const signedIn = usage.get(id).signedIn;
-			if (signedIn !== undefined && context.globalState.get<boolean>(`signedIn.${id}`) !== signedIn) {
-				void context.globalState.update(`signedIn.${id}`, signedIn);
+			if (signedIn !== undefined && state.get<boolean>(`signedIn.${id}`) !== signedIn) {
+				void state.update(`signedIn.${id}`, signedIn);
 			}
 		}),
 	});
 	const sidebar = new SidebarHost({
 		listAdapters: () => ADAPTERS,
-		getVisibleAgents: () => context.globalState.get<string[]>('sidebar.visibleAgents'),
-		saveVisibleAgents: async ids => { await context.globalState.update('sidebar.visibleAgents', ids); },
+		getVisibleAgents: () => state.get<string[]>('sidebar.visibleAgents'),
+		saveVisibleAgents: async ids => { await state.update('sidebar.visibleAgents', ids); },
 		getInstallState: id => getInstallState(adapterFor(id), { ...installEnv, settings: settingsFor(adapterFor(id)) }),
 		install: async (id, onProgress) => { await installAgent(adapterFor(id), installEnv, update => { if (update.state === 'progress') { onProgress(update.message, update.fraction); } }); onProgress('Starting the agent...'); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
 		uninstall: async id => {
@@ -147,7 +158,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		},
 		isSignedIn: async id => {
 			if (await secrets.get(id)) { return true; }
-			return context.globalState.get<boolean>(`signedIn.${id}`);
+			return state.get<boolean>(`signedIn.${id}`);
 		},
 		hasSavedKey: async id => Boolean(await secrets.get(id)),
 		signIn: chooseSignIn,

@@ -1,4 +1,7 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import packageJson from '../../package.json';
 
 const mocks = vi.hoisted(() => ({
@@ -69,7 +72,13 @@ vi.mock('../../src/core/installers', () => ({
 
 import { activate } from '../../src/extension';
 
+/** A shared store of its own for one test, so nothing touches the user's home folder. */
+const storeRoots: string[] = [];
+
 beforeEach(() => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-extension-'));
+  storeRoots.push(root);
+  process.env.ACP_HUB_HOME = root;
   mocks.enabled = true;
   mocks.disabledIds.clear();
   mocks.installedIds.clear();
@@ -80,13 +89,24 @@ beforeEach(() => {
   mocks.woken.length = 0;
 });
 
+afterEach(async () => {
+  delete process.env.ACP_HUB_HOME;
+  // The store writes in the background; let those writes land before the folder goes.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  for (const root of storeRoots.splice(0)) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    } catch { /* A leftover temp folder is not the test's business. */ }
+  }
+});
+
 it('wakes the agents when the user is back in the window, not when it loses focus or goes idle', () => {
   activate({
     subscriptions: [],
     globalStorageUri: { fsPath: 'storage' },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
-    globalState: { get: () => undefined, update: async () => undefined },
+    globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
     secrets: {},
   } as never);
 
@@ -104,7 +124,7 @@ it('registers a provider for every contributed vendor and the sidebar', () => {
     globalStorageUri: { fsPath: 'storage' },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
-    globalState: { get: () => undefined, update: async () => undefined },
+    globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
     secrets: {},
   };
   activate(context as never);
@@ -123,7 +143,7 @@ it('loads the usage of installed, enabled agents into the sidebar at startup', a
     globalStorageUri: { fsPath: 'storage' },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
-    globalState: { get: () => undefined, update: async () => undefined },
+    globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
     secrets: {},
   } as never);
 
@@ -151,7 +171,7 @@ it('does not start a usage read for disabled or uninstalled agents', async () =>
     globalStorageUri: { fsPath: 'storage' },
     extensionUri: { fsPath: 'extension' },
     extension: { packageJSON: { version: '1' } },
-    globalState: { get: () => undefined, update: async () => undefined },
+    globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
     secrets: {},
   } as never);
 

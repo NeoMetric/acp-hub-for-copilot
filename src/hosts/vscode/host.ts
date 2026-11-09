@@ -4,11 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { stateStoreOf } from '../../core/stateStore';
 import { stripIdentity } from '../../core/identityPatterns';
 import type { ChatRequest } from '../../engine/model/chat';
 import type { ChatIdentity, HostPort, Log } from '../../engine/ports/host';
-import type { ConfigReader, SecretStore } from '../../engine/ports/state';
+import type { ConfigReader, SecretStore, StateStore } from '../../engine/ports/state';
 import { chatIdOf, chatLabelOf, chatWideContextOf, stripHostSections, systemGuidanceOf, workspaceFoldersOf } from './identity';
 
 /**
@@ -37,8 +36,8 @@ export function sentOf(request: ChatRequest): SentRequest | undefined {
 /** Everything the extension already has, and the only window the host has on it. */
 export interface VsCodeHostDeps {
 	readonly log: Log;
-	/** Extension state; absent for a provider built without one, which then keeps nothing. */
-	readonly state: vscode.Memento | undefined;
+	/** Extension state, the store both gateways share; absent for a provider built without one, which then keeps nothing. */
+	readonly state: StateStore | undefined;
 	/** The agent credentials; a host built without them hands back none. */
 	readonly secrets?: SecretStore;
 	/** The settings of the agents, as the `acpHub` configuration holds them. */
@@ -63,7 +62,7 @@ export interface VsCodeHostDeps {
 export function createVsCodeHost(deps: VsCodeHostDeps): HostPort {
 	return {
 		log: deps.log,
-		state: stateStoreOf(deps.state) ?? emptyState,
+		state: deps.state ?? emptyState,
 		secrets: deps.secrets ?? emptySecrets,
 		settings: deps.settings ?? { get: <T>(section: string) => vscode.workspace.getConfiguration('acpHub').get<T>(section) },
 		storageRoot: deps.storageRoot,
