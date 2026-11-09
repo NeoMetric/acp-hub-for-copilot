@@ -388,7 +388,8 @@ async function sendModels(catalog: ModelCatalog, composition: HeadlessCompositio
 	const data: ModelWire[] = [];
 	for (const adapter of composition.adapters) {
 		const service = composition.serviceOf(adapter.id);
-		if (!service || !await isInstalled(service, composition)) {
+		// A disabled agent is not offered; asking whether it is installed would start it.
+		if (!service || !service.enabled || !await isInstalled(service, composition)) {
 			continue;
 		}
 		const models = await catalog.modelsOf(adapter);
@@ -519,6 +520,12 @@ async function complete(composition: HeadlessComposition, parking: ToolCallParki
 	const service = composition.serviceOf(target.agentId);
 	if (!service) {
 		sendError(response, 404, `Unknown agent "${target.agentId}" in model "${model}".`, 'invalid_request_error', 'model_not_found');
+		return;
+	}
+	// A disabled agent is refused before its install is probed, so the user is told to enable it
+	// rather than to install what they already have.
+	if (!service.enabled) {
+		sendError(response, 404, `The agent of model "${model}" is disabled; enable it from the ACP Hub sidebar to use it.`, 'invalid_request_error', 'model_not_found');
 		return;
 	}
 	if (!await isInstalled(service, composition)) {

@@ -173,6 +173,15 @@ export class ChatService {
 		return this.launch?.workspaceFolder ?? '';
 	}
 
+	/**
+	 * Whether the host wants this agent at all, read from the host's settings every time: a
+	 * disabled agent is neither listed nor started, and is offered again as soon as the
+	 * setting is turned back on.
+	 */
+	get enabled(): boolean {
+		return this.deps.isEnabled?.() !== false;
+	}
+
 	private get settings(): AgentSettings | undefined {
 		return this.launch?.settings;
 	}
@@ -274,6 +283,11 @@ export class ChatService {
 	async respond(request: ChatRequest, sink: (event: StreamEvent) => void, signal: AbortSignal): Promise<void> {
 		if (signal.aborted) {
 			return;
+		}
+		// A disabled agent is not started for any entry point; the host's settings decide, so turning it
+		// back on needs no restart.
+		if (!this.enabled) {
+			throw new ChatError(`The ${this.deps.adapter.displayName} agent is disabled; enable it from the ACP Hub sidebar.`);
 		}
 		const key = request.chatId;
 		const lap = startLaps(this.log, key);

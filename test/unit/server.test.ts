@@ -15,7 +15,8 @@ import { ChatService } from '../../src/engine/chat/ChatService';
 import type { ToolBridge } from '../../src/engine/chat/types';
 import { McpBridge } from '../../src/engine/mcp/bridge';
 import type { Part } from '../../src/engine/model/chat';
-import { createHeadlessHost } from '../../src/hosts/http/host';
+import { settingKey } from '../../src/core/settings';
+import { createHeadlessHost, type HeadlessHost } from '../../src/hosts/http/host';
 import { createServer } from '../../src/hosts/http/server';
 
 const MOCK_AGENT = path.resolve(__dirname, '..', 'fixtures', 'mock-acp-agent.cjs');
@@ -66,6 +67,11 @@ const cleanups: Array<() => Promise<void>> = [];
 
 /** Starts the server on a free port over the mock agent, with a store root of its own. */
 async function start(options: { token?: string; toolCallWaitMs?: number } = {}): Promise<string> {
+	return (await boot(options)).url;
+}
+
+/** Starts the server and hands its host back too, so a test can change what the control page would. */
+async function boot(options: { token?: string; toolCallWaitMs?: number } = {}): Promise<{ url: string; host: HeadlessHost }> {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-server-'));
 	const host = createHeadlessHost({ root, log: NO_LOG });
 	const loopback = new McpBridge(NO_LOG);
@@ -74,6 +80,8 @@ async function start(options: { token?: string; toolCallWaitMs?: number } = {}):
 		host,
 		bridge: toolsOver(loopback),
 		resolveLaunch: () => Promise.resolve({ entryPath: MOCK_AGENT, installDir: '', storageDir: path.join(root, 'agent'), workspaceFolder: root, settings: {} }),
+		// The gate the composition hands the engine, read from `config.json` on every call.
+		isEnabled: () => host.settings.get<boolean>(settingKey(adapter.id, 'enabled')) !== false,
 	});
 	const composition: HeadlessComposition = {
 		host,
@@ -92,7 +100,7 @@ async function start(options: { token?: string; toolCallWaitMs?: number } = {}):
 		loopback.dispose();
 		fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	});
-	return `http://127.0.0.1:${address.port}`;
+	return { url: `http://127.0.0.1:${address.port}`, host };
 }
 
 function post(url: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
@@ -335,6 +343,41 @@ describe('the HTTP server', () => {
 
 		expect(response.status).toBe(400);
 		expect((await response.json() as any).error.code).toBe('tool_call_not_found');
+	});
+
+	describe('an agent the user disabled from the sidebar', () => {
+		const listed = async (url: string): Promise<string[]> => {
+			const body = await (await fetch(`${url}/v1/models`)).json() as { data: Array<{ id: string }> };
+			return body.data.map(entry => entry.id).filter(id => id.startsWith(`${adapter.id}/`));
+		};
+
+		it('is not offered, and a chat with it is refused with the way to enable it', async () => {
+			const { url, host } = await boot();
+			await host.writeSetting(settingKey(adapter.id, 'enabled'), false);
+
+			expect(await listed(url)).toEqual([]);
+
+			const response = await post(`${url}/v1/chat/completions`, chat(`${adapter.id}/mock-1`));
+
+			expect(response.status).toBe(404);
+			const body = await response.json() as any;
+			expect(body.error.code).toBe('model_not_found');
+			expect(body.error.message).toContain('enable it from the ACP Hub sidebar');
+		});
+
+		it('is offered and answers again once the setting is turned back on, without a restart', async () => {
+			const { url, host } = await boot();
+			const model = await firstModel(url);
+			await host.writeSetting(settingKey(adapter.id, 'enabled'), false);
+			expect(await listed(url)).toEqual([]);
+
+			await host.writeSetting(settingKey(adapter.id, 'enabled'), true);
+
+			expect((await listed(url)).length).toBeGreaterThan(0);
+			const response = await post(`${url}/v1/chat/completions`, chat(model));
+			expect(response.status).toBe(200);
+			expect((await response.json() as any).choices[0].message.content).toBe('hello');
+		});
 	});
 
 	it('guards every route but the health probe when a token is configured', async () => {

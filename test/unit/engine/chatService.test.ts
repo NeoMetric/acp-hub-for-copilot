@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../../../src/core/adapter';
 import { AgentClient } from '../../../src/engine/acp/agentClient';
-import { ChatService } from '../../../src/engine/chat/ChatService';
+import { ChatService, type ChatServiceDeps } from '../../../src/engine/chat/ChatService';
 import type { ChatMessage, ChatRequest, ToolResult } from '../../../src/engine/model/chat';
 import type { StreamEvent } from '../../../src/engine/model/stream';
 import type { HostPort } from '../../../src/engine/ports/host';
@@ -65,7 +65,7 @@ function fakeHost(): HostPort {
 const cleanups: Array<() => Promise<void>> = [];
 
 /** A service over the mock ACP agent, which behaves as `MOCK_ACP_MODE` says. */
-function service(mode = 'normal'): ChatService {
+function service(mode = 'normal', deps: Partial<ChatServiceDeps> = {}): ChatService {
 	const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-engine-'));
 	const created = new ChatService({
 		adapter: { ...adapter, launch: () => ({ command: process.execPath, args: [MOCK_AGENT], env: { MOCK_ACP_MODE: mode } }) },
@@ -76,6 +76,7 @@ function service(mode = 'normal'): ChatService {
 			unregisterSession: () => undefined,
 		},
 		resolveLaunch: () => Promise.resolve({ entryPath: MOCK_AGENT, installDir: '', storageDir, workspaceFolder: process.cwd(), settings: {} }),
+		...deps,
 	});
 	cleanups.push(async () => {
 		await created.close();
@@ -162,5 +163,29 @@ describe('ChatService', () => {
 		await chat.respond(request('chat-4'), () => undefined, new AbortController().signal);
 
 		expect(chat.usage()).toMatchObject({ calls: expect.any(Number) });
+	});
+
+	it('does not start an agent the host disabled', async () => {
+		const created = vi.spyOn(AgentClient.prototype, 'createSession');
+		const chat = service('normal', { isEnabled: () => false });
+
+		await expect(chat.respond(request('chat-off'), () => undefined, new AbortController().signal))
+			.rejects.toThrow('enable it from the ACP Hub sidebar');
+
+		expect(created).not.toHaveBeenCalled();
+	});
+
+	it('starts the agent again once the host enables it, without a restart', async () => {
+		const created = vi.spyOn(AgentClient.prototype, 'createSession');
+		const enabled = { value: false };
+		const chat = service('normal', { isEnabled: () => enabled.value });
+		await expect(chat.respond(request('chat-later'), () => undefined, new AbortController().signal)).rejects.toThrow(/disabled/);
+
+		enabled.value = true;
+		const events: StreamEvent[] = [];
+		await chat.respond(request('chat-later'), event => events.push(event), new AbortController().signal);
+
+		expect(created).toHaveBeenCalledTimes(1);
+		expect(events.some(event => event.type === 'text')).toBe(true);
 	});
 });
