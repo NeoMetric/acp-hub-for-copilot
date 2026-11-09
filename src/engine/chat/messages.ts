@@ -16,24 +16,27 @@ const ROLE_NUMBER = { user: 1, assistant: 2, system: 3, tool: 4 } as const;
 const USER_REQUEST = /<userRequest>([\s\S]*?)<\/userRequest>/;
 const ATTACHMENTS = /<attachments>[\s\S]*?<\/attachments>/;
 /**
- * The host's context for the chat as a whole. It is forwarded once, when a
- * session starts, and kept out of the per-turn text so that it is neither sent
- * again with every message nor repeated in a restored transcript.
- */
-const COPILOT_CONTEXT = /<(environment_info|workspace_info|userMemory|sessionMemory|repoMemory)>[\s\S]*?<\/\1>/g;
-/**
  * What the host knows about this turn alone: the clock, the files that changed,
  * the todo list, the terminal, the open editor, and the reminders it repeats
  * next to the request. The agent has no other way to see it, and it is only
  * ever sent with the turn it belongs to.
  */
 const TURN_STATE = /<(context|editorContext|reminderInstructions|toolReferences|notebookFormatInstructions)>[\s\S]*?<\/\1>/g;
-const CHAT_CONTEXT = /<(environment_info|workspace_info|userMemory|sessionMemory|repoMemory)>[\s\S]*?<\/\1>/g;
 /** Reminders the host adds to a user message, such as the tools or guidance in force. */
 const SYSTEM_REMINDERS = /<system_reminder>[\s\S]*?<\/system_reminder>\s*/g;
 /** What the editor had selected or open when the message was sent; it changes with the cursor, not with what was said. */
 const IDE_CONTEXT = /<(ide_selection|ide_opened_file)>[\s\S]*?<\/\1>\s*/g;
 const CUSTOM_INSTRUCTIONS = /(?:^[^\n<]*user provided coding instructions[^\n]*\r?\n)?<instructions>[\s\S]*?<\/instructions>|<modeInstructions>[\s\S]*?<\/modeInstructions>/gm;
+
+/**
+ * Takes the sections of its own prompt out of text the engine is about to
+ * forward. The engine knows no section of any host's prompt, so the host that
+ * wrapped a message around it says how to take it out.
+ */
+export type StripHostSections = (text: string) => string;
+
+/** For a host whose prompt has no sections of its own, or an embedder that prepares its text itself. */
+export const NO_HOST_SECTIONS: StripHostSections = text => text;
 
 /** Concatenated text of a message, ignoring every other part. */
 export function textOf(message: ChatMessage): string {
@@ -49,18 +52,18 @@ const toolResultsOf = (message: ChatMessage): Array<Extract<Part, { type: 'tool-
 
 /**
  * What the user actually said, with the state of the turn it belongs to.
- * The host wraps each request in context of its own (environment, workspace
- * layout, memory); the agent has its own for those, so only the request, its
- * attachments and the turn's state are kept. A message that carries that
- * context without a request, as the host sends it ahead of the first one, comes
- * out empty.
+ * The host wraps a request in context of its own (the environment, the layout
+ * of the workspace, the memory it loaded); the agent has its own for those, so
+ * only the request, its attachments and the turn's state are kept. A message
+ * that carries that context without a request, as the host sends it ahead of the
+ * first one, comes out empty.
  */
-export function promptTextOf(message: ChatMessage): string {
+export function promptTextOf(message: ChatMessage, stripHostSections: StripHostSections = NO_HOST_SECTIONS): string {
 	const text = textOf(message);
 	const request = USER_REQUEST.exec(text);
 	if (!request) {
 		// The instructions of the user and of the mode reach the agent through `customInstructionsBlock`.
-		const withoutContext = text.replace(COPILOT_CONTEXT, '').replace(CUSTOM_INSTRUCTIONS, '');
+		const withoutContext = stripHostSections(text).replace(CUSTOM_INSTRUCTIONS, '');
 		return withoutContext === text ? text : withoutContext.trim();
 	}
 	const kept: string[] = [];
@@ -91,26 +94,6 @@ export function customInstructionsBlock(messages: readonly ChatMessage[]): AcpTe
 			if (!parts.includes(part)) {
 				parts.push(part);
 			}
-		}
-	}
-
-	return parts.length === 0 ? undefined : { type: 'text', text: parts.join('\n\n') };
-}
-
-export function chatContextBlock(messages: readonly ChatMessage[]): AcpTextBlock | undefined {
-	const parts: string[] = [];
-
-	for (const message of messages) {
-		if (message.role !== 'user') {
-			continue;
-		}
-		const text = textOf(message);
-		// The message carrying the request is where the conversation starts.
-		if (USER_REQUEST.test(text)) {
-			break;
-		}
-		for (const match of text.matchAll(CHAT_CONTEXT)) {
-			parts.push(match[0]);
 		}
 	}
 
@@ -288,7 +271,7 @@ export function skillContextAfterReply(messages: readonly ChatMessage[]): { call
  * the tool call that was waiting, so it arrives in the request that would
  * continue the turn.
  */
-export function userWordsAfterReply(messages: readonly ChatMessage[]): Part[] {
+export function userWordsAfterReply(messages: readonly ChatMessage[], stripHostSections: StripHostSections = NO_HOST_SECTIONS): Part[] {
 	const words: Part[] = [];
 	const skillContext = skillContextAfterReply(messages);
 
@@ -296,7 +279,7 @@ export function userWordsAfterReply(messages: readonly ChatMessage[]): Part[] {
 		if (message.role !== 'user') {
 			continue;
 		}
-		const text = promptTextOf(message).trim();
+		const text = promptTextOf(message, stripHostSections).trim();
 		if (text.length > 0 && text !== skillContext?.text) {
 			words.push({ type: 'text', text });
 		}
@@ -319,7 +302,7 @@ export function carriesToolResults(messages: readonly ChatMessage[]): boolean {
  * Only user text and images are forwarded: tool calls and tool results are
  * ignored, because the agent runs tools itself over the MCP bridge.
  */
-export function toAcpContentBlocks(messages: readonly ChatMessage[]): AcpContentBlock[] {
+export function toAcpContentBlocks(messages: readonly ChatMessage[], stripHostSections: StripHostSections = NO_HOST_SECTIONS): AcpContentBlock[] {
 	const blocks: AcpContentBlock[] = [];
 
 	for (const message of messages) {
@@ -327,7 +310,7 @@ export function toAcpContentBlocks(messages: readonly ChatMessage[]): AcpContent
 			continue;
 		}
 
-		const text = promptTextOf(message);
+		const text = promptTextOf(message, stripHostSections);
 		if (text.trim().length > 0) {
 			blocks.push({ type: 'text', text });
 		}
@@ -374,7 +357,7 @@ function toolResultText(part: Extract<Part, { type: 'tool-result' }>): string {
  * `missed` words the framing for a live session that did not answer part of
  * the chat, because the user had another agent answer it.
  */
-export function toTranscriptBlock(messages: readonly ChatMessage[], options: TranscriptOptions = DEFAULT_TRANSCRIPT_OPTIONS, missed = false): AcpTextBlock | undefined {
+export function toTranscriptBlock(messages: readonly ChatMessage[], options: TranscriptOptions = DEFAULT_TRANSCRIPT_OPTIONS, missed = false, stripHostSections: StripHostSections = NO_HOST_SECTIONS): AcpTextBlock | undefined {
 	const { maxCharacters } = options;
 	const full = options.detail === 'full';
 	const entries: string[] = [];
@@ -388,7 +371,7 @@ export function toTranscriptBlock(messages: readonly ChatMessage[], options: Tra
 	for (const message of history) {
 		const lines: string[] = [];
 
-		const text = promptTextOf(message).trim();
+		const text = promptTextOf(message, stripHostSections).trim();
 		if (text.length > 0) {
 			lines.push(text);
 		}

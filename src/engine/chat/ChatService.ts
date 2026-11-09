@@ -236,7 +236,7 @@ export class ChatService {
 		// session stay as they are until the turn ends, so a result is never dropped.
 		// A message the user typed while the turn ran comes next to those results. As
 		// natively, it ends the turn and starts a new one, so it falls through below.
-		const userWords = session?.turn ? userWordsAfterReply(messages) : [];
+		const userWords = session?.turn ? userWordsAfterReply(messages, this.deps.host.stripHostSections) : [];
 		const skillContext = session?.turn ? skillContextAfterReply(messages) : undefined;
 		if (skillContext && session?.turn && !session.turn.pending.has(skillContext.callId)) {
 			this.log(`Skill context could not be matched to a pending tool call for ${key}.`, 'error');
@@ -320,7 +320,11 @@ export class ChatService {
 			startIndex = restoreContext ? lastUser : session.history.length;
 		}
 
-		const blocks = buildPromptBlocks(messages, startIndex, lastUser, restoreContext, session, this.log, transcriptOptions);
+		const blocks = buildPromptBlocks(messages, startIndex, lastUser, restoreContext, session, this.log, transcriptOptions, {
+			// The context of the chat is carried only by the prompt that opens a session.
+			chatContext: restoreContext ? this.deps.host.chatWideContextOf(messages.slice(0, lastUser)) : undefined,
+			stripHostSections: this.deps.host.stripHostSections,
+		});
 		if (blocks.length === 0) {
 			this.log(`The request contained no user text to forward to ${this.deps.adapter.displayName}.`, 'warn');
 			throw new ChatError(`There is no user message to send to ${this.deps.adapter.displayName}.`);

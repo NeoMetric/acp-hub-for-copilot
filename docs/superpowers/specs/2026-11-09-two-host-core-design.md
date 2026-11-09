@@ -167,6 +167,15 @@ so it lands on the same session. Nothing outside `src/hosts/vscode` references
 `<workspace_info>`, `<environment_context>`, `_conversationId`, or Copilot's
 identity sentences.
 
+The prompt sections Copilot wraps around a chat are the same knowledge, and the
+engine names none of them (`environment_info`, `workspace_info`, `userMemory`,
+`sessionMemory`, `repoMemory`). The VS Code host supplies two members for them:
+`stripHostSections(text)` takes its sections out of the text the engine forwards,
+and `chatWideContextOf(messages)` hands back the context it holds for the chat as
+a whole, which the engine forwards once when a session that has seen nothing
+starts. A host whose prompt has no sections of its own returns the text
+unchanged and contributes no context.
+
 ### The agent port: facts and behaviour
 
 The current interface mixes two kinds of thing. They are separated.

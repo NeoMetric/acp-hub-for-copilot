@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ChatRequest, Part, ToolResult } from '../model/chat';
+import type { ChatMessage, ChatRequest, Part, ToolResult } from '../model/chat';
 import type { ConfigReader, SecretStore, StateStore } from './state';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -48,6 +48,19 @@ export interface HostPort {
 	chatIdentity(request: ChatRequest): ChatIdentity;
 	/** The workspace guidance the host wrote into the request, if any. */
 	guidanceOf(request: ChatRequest): string | undefined;
+	/**
+	 * Takes the host's own sections out of text the engine forwards. The engine
+	 * knows no section of any host's prompt, so it asks this instead of naming
+	 * them; a host whose prompt has none hands the text back as it is.
+	 */
+	stripHostSections(text: string): string;
+	/**
+	 * The context the host holds for the chat as a whole — its environment, the
+	 * layout of its workspace, the memory it loaded — read from the messages that
+	 * come before the turn's first request. The engine forwards it once, when a
+	 * session starts; the agent has no other way to see it.
+	 */
+	chatWideContextOf(messages: readonly ChatMessage[]): string | undefined;
 	/** Runs one tool call the agent made and resolves with its result. */
 	executeTool(call: ToolCall, signal: AbortSignal): Promise<ToolResult>;
 	readonly ui: HostUi;

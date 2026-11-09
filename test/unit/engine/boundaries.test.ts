@@ -42,12 +42,20 @@ describe('engine boundaries', () => {
 	 * How Copilot marks up a chat is the VS Code host's business: the engine sees
 	 * neutral messages, and the host that scraped the prompt hands it the chat's
 	 * identity and guidance.
+	 *
+	 * The names are matched wherever they appear, not only between angle brackets:
+	 * a section spelled inside an alternation, as in `(environment_info|...)`, is
+	 * the same host knowledge as a literal `<workspace_info>`, and so is a bare
+	 * name in a comment or a regular expression.
 	 */
 	it('knows nothing of Copilot\'s prompt format, which lives in the VS Code host', () => {
 		expect(existsSync('src/hosts/vscode/identity.ts'), 'the scrapers live in the VS Code host').toBe(true);
+		const hostKnowledge = /environment_info|workspace_info|userMemory|sessionMemory|repoMemory|_conversationId|<environment_context>/;
 		for (const file of sourceFiles(ENGINE_ROOT)) {
-			expect(readFileSync(file, 'utf8'), `${file} names a block only Copilot's prompt has`).not.toMatch(/<workspace_info>|<environment_context>|_conversationId/);
+			expect(readFileSync(file, 'utf8'), `${file} names a block only Copilot's prompt has`).not.toMatch(hostKnowledge);
 		}
+		expect(readFileSync('src/hosts/vscode/identity.ts', 'utf8'), 'the VS Code host keeps the sections it strips')
+			.toMatch(/environment_info[\s\S]*workspace_info[\s\S]*userMemory[\s\S]*sessionMemory[\s\S]*repoMemory/);
 		expect(readFileSync('src/core/provider.ts', 'utf8'), 'the provider no longer reads the conversation id').not.toContain('_conversationId');
 	});
 

@@ -9,7 +9,7 @@ import { stripIdentity } from '../../core/identityPatterns';
 import type { ChatRequest } from '../../engine/model/chat';
 import type { ChatIdentity, HostPort, Log } from '../../engine/ports/host';
 import type { ConfigReader, SecretStore } from '../../engine/ports/state';
-import { chatIdOf, chatLabelOf, systemGuidanceOf, workspaceFoldersOf } from './identity';
+import { chatIdOf, chatLabelOf, chatWideContextOf, stripHostSections, systemGuidanceOf, workspaceFoldersOf } from './identity';
 
 /**
  * What the workbench sent with one request. The engine's {@link ChatRequest}
@@ -69,6 +69,8 @@ export function createVsCodeHost(deps: VsCodeHostDeps): HostPort {
 		storageRoot: deps.storageRoot,
 		chatIdentity: request => identityOf(request, deps),
 		guidanceOf: request => guidanceOf(request),
+		stripHostSections,
+		chatWideContextOf,
 		// The workbench owns the tools of a request: the provider hands the agent's
 		// calls to `McpBridge`, and `ChatService.executeTool` returns the workbench's
 		// results. The port has no part in that path here, so it fails loudly rather

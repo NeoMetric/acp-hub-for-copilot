@@ -7,7 +7,7 @@ import type { AcpContentBlock, AcpTextBlock } from '../acp/protocol';
 import type { ChatMessage } from '../model/chat';
 import type { Log } from '../ports/host';
 import { shortHash } from './sessionStore';
-import { chatContextBlock, customInstructionsBlock, firstUserWordsIn, toAcpContentBlocks, toTranscriptBlock, DEFAULT_TRANSCRIPT_OPTIONS, type TranscriptOptions } from './messages';
+import { customInstructionsBlock, firstUserWordsIn, toAcpContentBlocks, toTranscriptBlock, DEFAULT_TRANSCRIPT_OPTIONS, NO_HOST_SECTIONS, type StripHostSections, type TranscriptOptions } from './messages';
 import type { ChatSession, GuidanceChange } from './types';
 
 /** Roomy enough for the instructions of a long custom mode, which must arrive whole. */
@@ -45,21 +45,30 @@ export function guidanceChangeBlock(change: GuidanceChange): AcpTextBlock {
 	return { type: 'text', text: lines.join('\n') };
 }
 
+/** What the host contributes to a prompt besides the chat's own messages. */
+export interface HostPrompt {
+	/**
+	 * The context the host holds for the chat as a whole, forwarded once when a
+	 * session that has seen nothing starts; the `chatWideContextOf` of the host port.
+	 */
+	readonly chatContext?: string;
+	/** Takes the host's own sections out of the text forwarded; the `stripHostSections` of the host port. */
+	readonly stripHostSections?: StripHostSections;
+}
+
 /**
  * The prompt for one turn: the messages the agent has not seen, preceded by
  * whatever it needs to catch up. A session that has seen nothing yet gets the
  * context of the chat and a transcript of what came before (`restoreContext`),
  * and any change to the user's instructions is sent once.
  */
-export function buildPromptBlocks(messages: readonly ChatMessage[], startIndex: number, lastUser: number, restoreContext: boolean, session: ChatSession, log: Log, options: TranscriptOptions = DEFAULT_TRANSCRIPT_OPTIONS): AcpContentBlock[] {
+export function buildPromptBlocks(messages: readonly ChatMessage[], startIndex: number, lastUser: number, restoreContext: boolean, session: ChatSession, log: Log, options: TranscriptOptions = DEFAULT_TRANSCRIPT_OPTIONS, hostPrompt: HostPrompt = {}): AcpContentBlock[] {
+	const stripHostSections = hostPrompt.stripHostSections ?? NO_HOST_SECTIONS;
 	const preamble: AcpContentBlock[] = [];
-	if (restoreContext) {
+	if (restoreContext && hostPrompt.chatContext) {
 		// The context of the chat comes first, as it does in the prompt the host renders.
-		const chatContext = chatContextBlock(messages.slice(0, lastUser));
-		if (chatContext) {
-			log(`Forwarding ${chatContext.text.length} character(s) of context for the chat.`, 'debug');
-			preamble.push(chatContext);
-		}
+		log(`Forwarding ${hostPrompt.chatContext.length} character(s) of context for the chat.`, 'debug');
+		preamble.push({ type: 'text', text: hostPrompt.chatContext });
 	}
 	if (session.guidanceChange) {
 		log(`Forwarding the guidance change: ${session.guidanceChange.added.length} new line(s), ${session.guidanceChange.removed} gone.`, 'debug');
@@ -75,7 +84,7 @@ export function buildPromptBlocks(messages: readonly ChatMessage[], startIndex: 
 	}
 	if (restoreContext && lastUser > 0) {
 		log(`Roles of the first messages being restored: ${messages.slice(0, 3).map(message => message.role).join(', ')}`, 'debug');
-		const transcript = toTranscriptBlock(messages.slice(0, lastUser), options);
+		const transcript = toTranscriptBlock(messages.slice(0, lastUser), options, false, stripHostSections);
 		if (transcript) {
 			log(`Restoring ${lastUser} earlier message(s) into the new ACP session.`);
 			preamble.push(transcript);
@@ -87,12 +96,12 @@ export function buildPromptBlocks(messages: readonly ChatMessage[], startIndex: 
 	// message the user said in it, so it is left out.
 	const missed = restoreContext ? -1 : firstUserWordsIn(messages, startIndex, lastUser);
 	if (missed >= 0) {
-		const transcript = toTranscriptBlock(messages.slice(missed, lastUser), options, true);
+		const transcript = toTranscriptBlock(messages.slice(missed, lastUser), options, true, stripHostSections);
 		if (transcript) {
 			log(`Catching the session up on ${lastUser - missed} message(s) answered by another agent.`);
 			preamble.push(transcript);
 		}
-		return [...preamble, ...toAcpContentBlocks(messages.slice(lastUser))];
+		return [...preamble, ...toAcpContentBlocks(messages.slice(lastUser), stripHostSections)];
 	}
-	return [...preamble, ...toAcpContentBlocks(messages.slice(startIndex))];
+	return [...preamble, ...toAcpContentBlocks(messages.slice(startIndex), stripHostSections)];
 }

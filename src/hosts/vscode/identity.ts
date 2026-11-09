@@ -8,7 +8,9 @@ import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 import { fingerprint, isSystemMessage, textOf } from '../../core/convert';
 import { stripIdentity } from '../../core/identityPatterns';
+import { textOf as textOfMessage } from '../../engine/chat/messages';
 import type { ChatContext } from '../../engine/chat/types';
+import type { ChatMessage } from '../../engine/model/chat';
 
 /**
  * What a request says about the chat it belongs to. Copilot gives a provider
@@ -122,6 +124,56 @@ export function workspaceFoldersOf(messages: readonly vscode.LanguageModelChatRe
 		return folders;
 	}
 	return undefined;
+}
+
+/**
+ * The sections the host wraps around a prompt: what Copilot holds for the chat
+ * as a whole — the environment, the layout of the workspace, the preferences of
+ * the user and the memory it loaded. An agent has its own way to see those, so
+ * they are kept out of the text of a message; they are forwarded once instead,
+ * when a session that has seen nothing starts.
+ *
+ * This is the VS Code host's knowledge: no other host renders these sections,
+ * and nothing in `src/engine` may name them.
+ */
+const COPILOT_CONTEXT = /<(environment_info|workspace_info|userMemory|sessionMemory|repoMemory)>[\s\S]*?<\/\1>/g;
+
+/** The same sections, collected from the messages ahead of the first request. */
+const CHAT_CONTEXT = /<(environment_info|workspace_info|userMemory|sessionMemory|repoMemory)>[\s\S]*?<\/\1>/g;
+
+/** What Copilot wraps the words of the user in; the first message carrying one is where the chat starts. */
+const USER_REQUEST = /<userRequest>[\s\S]*?<\/userRequest>/;
+
+/** Takes the host's own context sections out of text the engine forwards. */
+export function stripHostSections(text: string): string {
+	return text.replace(COPILOT_CONTEXT, '');
+}
+
+/**
+ * The context Copilot holds for the chat as a whole, which it sends ahead of the
+ * first request: the environment, the layout of the workspace, the preferences
+ * of the user and the memory it loaded. Native keeps it in the conversation as
+ * one message, so it is forwarded once, when a session that has seen nothing
+ * starts, and never again with a turn.
+ */
+export function chatWideContextOf(messages: readonly ChatMessage[]): string | undefined {
+	const sections: string[] = [];
+
+	for (const message of messages) {
+		if (message.role !== 'user') {
+			continue;
+		}
+		const text = textOfMessage(message);
+		// The message carrying the request is where the conversation starts.
+		if (USER_REQUEST.test(text)) {
+			break;
+		}
+		for (const match of text.matchAll(CHAT_CONTEXT)) {
+			sections.push(match[0]);
+		}
+	}
+
+	return sections.length === 0 ? undefined : sections.join('\n\n');
 }
 
 /** The marker Copilot writes into its prompt for its own cache breakpoints, which mean nothing to an agent. */

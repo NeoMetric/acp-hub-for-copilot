@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { buildPromptBlocks } from '../../src/engine/chat/assemble';
-import { lastUserMessageIndex } from '../../src/engine/chat/messages';
+import { DEFAULT_TRANSCRIPT_OPTIONS, lastUserMessageIndex } from '../../src/engine/chat/messages';
 import type { ChatSession } from '../../src/engine/chat/types';
 import type { ChatMessage, Part } from '../../src/engine/model/chat';
 
@@ -70,5 +70,32 @@ describe('buildPromptBlocks catching a session up', () => {
 
 		expect((blocks[0] as { text: string }).text).toContain('<conversation_so_far>');
 		expect((blocks[0] as { text: string }).text).not.toContain('<conversation_since_your_last_turn>');
+	});
+});
+
+describe('buildPromptBlocks with what the host contributes', () => {
+	// The engine names no section of any host's prompt: the host hands over the
+	// context it holds and the way to take its own sections out of a message.
+	const hostPrompt = {
+		chatContext: '<host_context>this machine</host_context>',
+		stripHostSections: (text: string) => text.replace(/<host_context>[\s\S]*?<\/host_context>/g, ''),
+	};
+
+	it('forwards the context of the chat once, ahead of the transcript', () => {
+		const messages = [user('<host_context>this machine</host_context>'), user('1'), user('2')];
+
+		const blocks = buildPromptBlocks(messages, 2, 2, true, session, log, DEFAULT_TRANSCRIPT_OPTIONS, hostPrompt);
+
+		expect(blocks[0]).toEqual({ type: 'text', text: hostPrompt.chatContext });
+		expect((blocks[1] as { text: string }).text).toContain('<conversation_so_far>');
+		expect(blocks[2]).toEqual({ type: 'text', text: '2' });
+	});
+
+	it('takes the host\'s sections out of the text it forwards', () => {
+		const messages = [user('<host_context>this machine</host_context>\nwhat changed?')];
+
+		const blocks = buildPromptBlocks(messages, 0, 0, false, session, log, DEFAULT_TRANSCRIPT_OPTIONS, hostPrompt);
+
+		expect(blocks).toEqual([{ type: 'text', text: 'what changed?' }]);
 	});
 });
