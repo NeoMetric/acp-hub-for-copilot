@@ -187,8 +187,6 @@ export const claudeAdapter: AgentAdapter = {
 	},
 	usage: claudeUsage,
 	sessionPolicy,
-	refreshesTools: true,
-	forkChats: true,
 	signInCompleted,
 	disableBuiltInTools: () => true,
 	mergeConfig,

@@ -37,6 +37,12 @@ export type ContinuationPlan =
 	| { readonly how: 'fork-external'; readonly keepSourceId: boolean; readonly restartFirst: boolean }
 	| { readonly how: 'rebuild' };
 
+/** What a policy may weigh when it decides whether a stored conversation can be continued by forking. */
+export interface CanForkInput {
+	/** Whether the running agent said in `initialize` that it answers `session/fork`. */
+	readonly agentSupportsFork: boolean;
+}
+
 /** The prompt to open a session with: the one the stored session began with, or the one the core rebuilt. */
 export interface OpenPromptInput {
 	/** The prompt the stored session was opened with, when it is known. */
@@ -46,13 +52,15 @@ export interface OpenPromptInput {
 }
 
 /**
- * How one agent continues a stored conversation, what its chats do when the offered tools change,
- * and how long a tool call may wait: every decision the core used to read from a flag on the adapter.
- * The core owns the execution; the adapter owns the choice.
+ * How one agent continues a stored conversation, whether a chat may fork it, what its chats do when
+ * the offered tools change, and how long a tool call may wait: every decision the core used to read
+ * from a flag on the adapter. The core owns the execution; the adapter owns the choice.
  */
 export interface SessionPolicy {
 	/** How a request that can continue `input.saved` instead of starting over goes on. */
 	planContinuation(input: ContinuationInput): ContinuationPlan;
+	/** Whether a chat may continue a stored conversation by forking it at all. */
+	canFork(input: CanForkInput): boolean;
 	/** The session prompt to open with, chosen from the saved prompt and the one the core rebuilt. */
 	promptForOpen(input: OpenPromptInput): string | undefined;
 	/** Whether opening a store-backed session must be given the prompt it was saved with. */

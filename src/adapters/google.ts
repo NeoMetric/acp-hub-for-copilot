@@ -11,6 +11,7 @@ import { googleForker } from './googleFork';
 import { APP_DATA_DIR } from './googleHub';
 import { googleModelPolicy } from './googleModels';
 import { mapQuotaError } from './googleQuota';
+import { googleSessionPolicy } from './googleSessionPolicy';
 import { lastModelCallOf, transcriptFile } from './googleTranscript';
 import { googleUsage } from './googleUsage';
 import { booleanSetting, stringListSetting, stringSetting } from './settingValues';
@@ -254,12 +255,12 @@ export const googleAdapter: AgentAdapter = {
 	],
 	settings: [...REGISTRY.commonSettings, ...registry.settings],
 	modelPolicy: googleModelPolicy,
+	sessionPolicy: googleSessionPolicy,
 	usage: googleUsage,
 	systemPrompt: {
 		toolAccess: 'The tools of the MCP server named `vscode` are VS Code\'s own and act on the user\'s workspace; you see them as `mcp_vscode_<name>`.',
 		listRequiredArguments: true,
 	},
-	rebuildExpiredSessions: true,
 	// `agy acp` sends no usage_update and reports only the sums of a turn over ACP; its own record of
 	// the conversation has the tokens of each model call.
 	lastModelCall: async sessionId => {
@@ -268,10 +269,6 @@ export const googleAdapter: AgentAdapter = {
 	},
 	// `agy acp` cannot fork a session; the CLI's language server copies the conversation instead.
 	forker: googleForker,
-	// Rewinding the source needs the agent to read it afresh, which one process does only on a restart.
-	restartAfterFork: true,
-	// `agy acp` applies the prompt of the request each time it opens a session, so a rebuilt one misses the cache.
-	keepsSessionPrompt: true,
 	// The agent saves a tool result of about 4,000 characters or more to a file and hands the model only its path. With its own
 	// file tools off the model then reasons for minutes about how to get at the content, so results are cut below that size.
 	maxToolResultChars: 3_500,

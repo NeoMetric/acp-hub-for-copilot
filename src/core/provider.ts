@@ -13,14 +13,12 @@ import type { RequestMeasurement } from './cache';
 import { carriesToolResults, characterCountOf, diverged, lastUserMessageIndex, persistentFingerprints, skillContextAfterReply, userWordsAfterReply } from './convert';
 import type { Log } from './logging';
 import { acpModelValue, effortOf } from './models';
-import { nativeSessionPolicy } from './nativeSessionPolicy';
 import { createRequestDump, summarizeRequest } from './requestDump';
 import { isAuthRequiredError } from './rpc';
 import { policyOf, type SessionPolicy } from './sessionPolicy';
 import { SavedSessionStore, toolsHashOf } from './sessionStore';
 import { createSessionPrompt } from './systemPrompt';
 import { buildPromptBlocks } from './provider/assemble';
-import { flagSessionPolicy } from './provider/flagSessionPolicy';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './provider/heldCalls';
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESSION_IDLE_MS } from './provider/idle';
 import { chatContextOf, chatIdOf, chatLabelOf, describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, sessionKey, toolChangeOf, toolsDiffer } from './provider/keys';
@@ -139,13 +137,9 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		return this.launch?.settings;
 	}
 
-	/**
-	 * The session policy the provider asks: the adapter's own, or the one its flags still describe while
-	 * it declares none. The second half goes once every adapter names a policy.
-	 */
+	/** The session policy the provider asks: the adapter's own, or the native default it inherits. */
 	private get policy(): SessionPolicy {
-		const policy = policyOf(this.adapter);
-		return policy === nativeSessionPolicy ? flagSessionPolicy(this.adapter) : policy;
+		return policyOf(this.adapter);
 	}
 
 	/** Whether the agent reports the usage of each model call, not only of the turn. */
@@ -795,15 +789,12 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	}
 
 	/**
-	 * Whether a chat may continue from a stored conversation by forking: the adapter allows it and
-	 * the running agent said in `initialize` that it can. Starts the agent to find out.
+	 * Whether a chat may continue from a stored conversation by forking: the adapter's policy says so,
+	 * which may turn on what the running agent said in `initialize`. Starts the agent to find out.
 	 */
 	private async canFork(): Promise<boolean> {
 		if (this.adapter.forker) {
 			return true;
-		}
-		if (this.adapter.forkChats !== true) {
-			return false;
 		}
 		try {
 			await this.agent.ensureStarted();
@@ -811,10 +802,11 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			// Opening the session starts the agent again and reports why it cannot.
 			return false;
 		}
-		if (!this.agent.supportsFork) {
+		if (!this.policy.canFork({ agentSupportsFork: this.agent.supportsFork })) {
 			this.log(`[reuse] ${this.adapter.displayName} did not advertise session forking; chats are not forked.`, 'debug');
+			return false;
 		}
-		return this.agent.supportsFork;
+		return true;
 	}
 
 	/** A chat still starts when the customization files cannot be read; it just has no extras. */

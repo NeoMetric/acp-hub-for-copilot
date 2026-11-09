@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { assertShellSafe, authenticateMethodFor, googleAdapter, googleLaunchSpec, resolveCommand } from '../../../src/adapters/google';
 import { QuotaLimitError } from '../../../src/adapters/googleQuota';
+import { googleSessionPolicy } from '../../../src/adapters/googleSessionPolicy';
 import type { AgentSettings, InstallContext, LaunchContext } from '../../../src/core/adapter';
 import { HOST_IDENTITY } from '../../../src/core/hostIdentity';
 import { RpcError } from '../../../src/core/rpc';
@@ -41,11 +42,14 @@ describe('googleAdapter', () => {
 		expect(googleAdapter.vendor).toBe('Google Agent');
 		expect(googleAdapter.displayName).toBe('Google Agent');
 		expect(googleAdapter.install.kind).toBe('download');
-		expect(googleAdapter.rebuildExpiredSessions).toBe(true);
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('useAgentBuiltInTools');
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('idleTimeoutSeconds');
 		expect(googleAdapter.settings.map(setting => setting.key)).not.toContain('agyCommand');
 		expect(googleAdapter.settings.map(setting => setting.key)).toContain('replaceSystemPrompt');
+	});
+
+	it('owns how its stored conversations continue in a session policy', () => {
+		expect(googleAdapter.sessionPolicy).toBe(googleSessionPolicy);
 	});
 
 	it('trusts the cache figures agy acp reports', () => {

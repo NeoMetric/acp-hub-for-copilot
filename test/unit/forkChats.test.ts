@@ -11,10 +11,12 @@ import type * as vscode from 'vscode';
 import { claudeAdapter } from '../../src/adapters/claude';
 import { codexAdapter } from '../../src/adapters/codex';
 import { googleAdapter } from '../../src/adapters/google';
+import { googleSessionPolicy } from '../../src/adapters/googleSessionPolicy';
 import type { AgentAdapter } from '../../src/core/adapter';
 import type { AgentSession, ForkPoint, PromptHandlers } from '../../src/core/agentClient';
 import { AcpProvider } from '../../src/core/provider';
 import type { AgentApi, ProviderDeps } from '../../src/core/provider/types';
+import { policyOf, type ContinuationInput } from '../../src/core/sessionPolicy';
 import { messageFingerprintOf, type SavedSession } from '../../src/core/sessionStore';
 import { assistant, system, user } from './messages';
 import { CancellationTokenSource } from './vscode-mock';
@@ -200,10 +202,15 @@ describe('the usage of an agent that reports no cache', () => {
 		expect(logs.some(line => line.startsWith('Turn tokens'))).toBe(false);
 	});
 
-	it('leaves session/fork to Claude; Google forks through its CLI instead', () => {
+	it('leaves session/fork to Claude; Google forks through its CLI instead', async () => {
+		const h = harness();
+		await h.send(chat(1));
+		const [saved] = h.state.values.get(h.storeKey) as SavedSession[];
+		const input: ContinuationInput = { saved, live: [], editedOwnChat: true, agentSupportsFork: true, externalForker: googleAdapter.forker };
+
 		expect(claudeAdapter.reportsCache).not.toBe(false);
-		expect(googleAdapter.forkChats).not.toBe(true);
-		expect(claudeAdapter.forkChats).toBe(true);
+		expect(policyOf(claudeAdapter).planContinuation({ ...input, externalForker: undefined })).toEqual({ how: 'fork-native' });
+		expect(policyOf(googleAdapter).planContinuation(input)).toMatchObject({ how: 'fork-external' });
 	});
 });
 
@@ -241,7 +248,7 @@ describe('external conversation forking', () => {
 			}),
 			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
 		};
-		const h = harness({ ...googleAdapter, forker, restartAfterFork: true });
+		const h = harness({ ...googleAdapter, forker });
 		h.agent.supportsFork = false;
 		h.agent.restart.mockImplementation(async () => { order.push('restart'); });
 		h.agent.resumeSession = (async (sessionId: string) => { order.push(`resume ${sessionId}`); return { sessionId, configOptions: [] }; }) as never;
@@ -266,7 +273,7 @@ describe('external conversation forking', () => {
 			fork: vi.fn(async () => ({ sessionId: 's1', sourceMovedTo: 'full-copy' })),
 			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
 		};
-		const h = harness({ ...googleAdapter, forker, restartAfterFork: true });
+		const h = harness({ ...googleAdapter, forker });
 		h.agent.supportsFork = false;
 		h.agent.restart.mockImplementation(async () => { throw new Error('restart failed'); });
 		await h.send(chat(1), 'c1');
@@ -288,7 +295,7 @@ describe('external conversation forking', () => {
 			}),
 			missing: { message: 'missing', helpLabel: 'Install', helpUrl: 'https://example.com', declineLabel: 'Use transcript' },
 		};
-		const h = harness({ ...googleAdapter, forker, restartAfterFork: true });
+		const h = harness({ ...googleAdapter, forker });
 		h.agent.supportsFork = false;
 		h.agent.hold = true;
 		void h.send(chat(1), 'busy');
@@ -456,7 +463,8 @@ describe('forking a chat at a checkpoint', () => {
 	it('opens a forked Google chat with the prompt the saved session began with, so a reworded host prompt does not miss the cache', async () => {
 		const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fork-prompt-'));
 		try {
-			const { agent, send, logs } = harness({ ...googleAdapter, forker: undefined, forkChats: true }, storageDir);
+			// A Google adapter that forks with the agent's own `session/fork`, as the flag it replaced asked for.
+			const { agent, send, logs } = harness({ ...googleAdapter, forker: undefined, sessionPolicy: { ...googleSessionPolicy, planContinuation: () => ({ how: 'fork-native' }) } }, storageDir);
 			await send(chat(1));
 			await send(chat(2));
 			const original = agent.openedWith.get('s1');

@@ -243,7 +243,6 @@ export const codexAdapter: AgentAdapter = {
 	},
 	usage: codexUsage,
 	sessionPolicy,
-	forkChats: true,
 	mergeConfig,
 	sessionParams,
 	// The config of its home names the bridge, and Codex refuses a session whose config names a server with no transport.

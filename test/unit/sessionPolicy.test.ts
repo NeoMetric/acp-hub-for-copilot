@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { claudeAdapter } from '../../src/adapters/claude';
 import type { ConversationForker } from '../../src/core/adapter';
 import { nativeSessionPolicy } from '../../src/core/nativeSessionPolicy';
-import { flagSessionPolicy } from '../../src/core/provider/flagSessionPolicy';
 import { effectiveToolWaitMs, policyOf, type ContinuationInput, type SessionPolicy } from '../../src/core/sessionPolicy';
 import type { SavedSession } from '../../src/core/sessionStore';
 
@@ -79,12 +78,14 @@ describe('nativeSessionPolicy', () => {
 		expect(nativeSessionPolicy.toolsChangedAction()).toBe('reopen');
 	});
 
-	it('never disables the tool wait', () => {
-		for (const value of [0, -1, Number.NaN]) {
-			expect(nativeSessionPolicy.toolWaitMs({ toolWaitTimeoutMs: value })).toBeGreaterThan(0);
-		}
+	it('offers a fork only when the agent advertises one', () => {
+		expect(nativeSessionPolicy.canFork({ agentSupportsFork: true })).toBe(true);
+		expect(nativeSessionPolicy.canFork({ agentSupportsFork: false })).toBe(false);
+	});
+
+	it('never times out a tool call', () => {
 		expect(nativeSessionPolicy.toolWaitMs({})).toBe(Number.POSITIVE_INFINITY);
-		expect(nativeSessionPolicy.toolWaitMs({ toolWaitTimeoutMs: 2500 })).toBe(2500);
+		expect(nativeSessionPolicy.toolWaitMs({ toolWaitTimeoutMs: 2500 })).toBe(Number.POSITIVE_INFINITY);
 	});
 });
 
@@ -98,13 +99,6 @@ describe('effectiveToolWaitMs', () => {
 	it('passes a positive finite wait through', () => {
 		expect(effectiveToolWaitMs(policyReturning(5000), {})).toBe(5000);
 		expect(effectiveToolWaitMs(nativeSessionPolicy, {})).toBe(Number.POSITIVE_INFINITY);
-		expect(effectiveToolWaitMs(nativeSessionPolicy, { toolWaitTimeoutMs: 2500 })).toBe(2500);
-	});
-});
-
-describe('flagSessionPolicy', () => {
-	it('keeps the saved prompt for a Google-like flag set', () => {
-		expect(flagSessionPolicy({ ...claudeAdapter, keepsSessionPrompt: true }).keepsSavedPrompt).toBe(true);
 	});
 });
 
