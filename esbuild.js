@@ -40,13 +40,14 @@ const builds = tests
 		outfile: "dist/uninstall.js",
 		minify: !watch
 	}, {
-		// The sidebar page runs in a webview, not in node.
+		// The control page: VS Code loads this into the sidebar's webview, and the
+		// HTTP host serves the same file to a browser.
 		...shared,
 		platform: "browser",
 		format: "iife",
 		target: "es2022",
 		external: [],
-		entryPoints: ["src/sidebar/webview/main.ts"],
+		entryPoints: ["src/ui/main.ts"],
 		outfile: "dist/sidebar.js",
 		minify: !watch
 	}, {

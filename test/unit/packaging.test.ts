@@ -39,6 +39,11 @@ describe('packaging', () => {
 		expect(outfile.startsWith('dist/')).toBe(false);
 	});
 
+	it('builds the page once, into the bundle the sidebar and the server both load', () => {
+		const outfile = outfileOf(entryOf(readFileSync('esbuild.js', 'utf8'), 'src/ui/main.ts'));
+		expect(outfile).toBe('dist/sidebar.js');
+	});
+
 	it('keeps the extension as the manifest entry point', () => {
 		expect(packageJson.main).toBe('./dist/extension.js');
 	});

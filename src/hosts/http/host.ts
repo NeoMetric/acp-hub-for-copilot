@@ -57,8 +57,14 @@ export interface HeadlessHostOptions {
 	readonly log?: Log;
 }
 
+/** The headless host, which also writes the settings the control page changes. */
+export interface HeadlessHost extends HostPort {
+	/** Writes one `acpHub.<key>` value into `config.json`. */
+	writeSetting(key: string, value: unknown): Promise<void>;
+}
+
 /** The engine's host, for a process with no window and no workbench. */
-export function createHeadlessHost(options: HeadlessHostOptions): HostPort {
+export function createHeadlessHost(options: HeadlessHostOptions): HeadlessHost {
 	const root = path.resolve(options.root);
 	const log = options.log ?? stderrLog;
 	fs.mkdirSync(root, { recursive: true });
@@ -72,6 +78,7 @@ export function createHeadlessHost(options: HeadlessHostOptions): HostPort {
 		secrets,
 		settings,
 		storageRoot: root,
+		writeSetting: (key, value) => settings.set(key, value),
 		chatIdentity: request => identityOf(request, settings),
 		guidanceOf: request => request.systemGuidance,
 		// The host writes no sections of its own into the text the engine forwards.

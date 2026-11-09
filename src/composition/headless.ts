@@ -10,6 +10,8 @@ import { findInstalled } from '../core/installers';
 import { readAgentSettings, settingKey } from '../core/settings';
 import { ChatService } from '../engine/chat/ChatService';
 import type { ToolBridge } from '../engine/chat/types';
+import { UsageStore } from '../engine/chat/usage';
+import { ControlService, type ControlSurface } from '../engine/control/ControlService';
 import type { HostPort, Log } from '../engine/ports/host';
 import { defaultWorkspaceOf } from '../hosts/http/config';
 import { createHeadlessHost, stderrLog } from '../hosts/http/host';
@@ -40,13 +42,26 @@ export interface HeadlessComposition {
 	close(): Promise<void>;
 }
 
+/** The headless gateway's composition, with the control page's operations over the same agents and store. */
+export interface HeadlessGateways extends HeadlessComposition {
+	readonly control: ControlSurface;
+}
+
 /** The engine wired for a process with no window: the same agents and chats the extension serves. */
-export function createHeadlessComposition(options: HeadlessCompositionOptions): HeadlessComposition {
+export function createHeadlessComposition(options: HeadlessCompositionOptions): HeadlessGateways {
 	const root = path.resolve(options.root);
 	const log = options.log ?? stderrLog;
 	const extensionDir = options.extensionDir ?? process.cwd();
 	const host = createHeadlessHost({ root, log });
 	const agentsDir = path.join(root, 'agents');
+	/** Where the agents are installed, and where an install reports what it does. */
+	const install = {
+		storageDir: agentsDir,
+		extensionDir,
+		log,
+		progress: (message: string) => log(message),
+	};
+	const usage = new UsageStore(log);
 
 	const settingsOf = (adapter: AgentAdapter): AgentSettings => {
 		const result = readAgentSettings(adapter, host.settings);
@@ -62,11 +77,8 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 	const resolveLaunch = async (adapter: AgentAdapter): Promise<LaunchContext | undefined> => {
 		const settings = settingsOf(adapter);
 		const installed = await findInstalled(adapter, {
-			storageDir: agentsDir,
-			extensionDir,
+			...install,
 			settings,
-			log,
-			progress: message => log(`${adapter.id}: ${message}`),
 		});
 		if (!installed) {
 			return undefined;
@@ -91,10 +103,46 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 		}));
 	}
 
+	// The same operations the sidebar drives, over this host's store, agents and
+	// settings, so the browser page installs, signs in and configures as the
+	// extension does.
+	const control = new ControlService({
+		adapters: ADAPTERS,
+		state: host.state,
+		secrets: host.secrets,
+		settings: host.settings,
+		usage,
+		install,
+		writeConfig: (key, value) => host.writeSetting(key, value),
+		host: {
+			// A headless host has no window to sign in through: the page shows the
+			// URL the agent asked for, and the agent's own flow finishes there.
+			signIn: async agentId => ({ ok: false, message: `${agentId} needs a sign-in this server cannot do itself; the page shows the URL the agent asks for.` }),
+			launchOf: adapter => resolveLaunch(adapter),
+			confirmUninstall: async () => true,
+			closeSessions: async agentId => { await services.get(agentId)?.closeAllSessions(); },
+			restartAgent: async agentId => { await services.get(agentId)?.restart(); },
+			prepareAgent: async agentId => {
+				const service = services.get(agentId);
+				if (!service) {
+					return false;
+				}
+				try {
+					await service.client();
+					return true;
+				} catch {
+					return false;
+				}
+			},
+			askAgent: (agentId, prompt) => services.get(agentId)?.askAgent(prompt) ?? Promise.resolve(undefined),
+		},
+	});
+
 	return {
 		host,
 		adapters: ADAPTERS,
 		serviceOf: agentId => services.get(agentId),
+		control,
 		close: async () => {
 			await Promise.all([...services.values()].map(service => service.close()));
 		},

@@ -8,7 +8,7 @@ import type { AgentAdapter } from '../../src/core/adapter';
 import type { InstallState } from '../../src/core/installers';
 import type { ControlSurface } from '../../src/engine/control/ControlService';
 import { SidebarHost, type SidebarPageDeps } from '../../src/sidebar/host';
-import type { AgentCardState, ToWebview } from '../../src/sidebar/messages';
+import type { AgentCardState, ToWebview } from '../../src/ui/messages';
 
 function fakeAdapter(id: string): AgentAdapter {
 	return {
@@ -50,20 +50,21 @@ function setup(overrides: Partial<ControlSurface> = {}) {
 	};
 
 	const posted: AgentCardState[][] = [];
+	let receive: ((message: unknown) => void) | undefined;
 	const host = new SidebarHost(control, page);
 	const webview = {
 		options: {},
 		html: '',
 		cspSource: 'csp',
 		asWebviewUri: (uri: { path: string }) => uri.path,
-		onDidReceiveMessage: () => ({ dispose() { } }),
+		onDidReceiveMessage: (handler: (message: unknown) => void) => { receive = handler; return { dispose() { } }; },
 		postMessage: async (message: ToWebview) => { posted.push(message.agents); return true; },
 	};
 	host.resolveWebviewView({ webview, onDidDispose: () => ({ dispose() { } }) } as never);
 
 	const last = () => posted[posted.length - 1];
 	const card = (id: string) => last().find(item => item.id === id)!;
-	return { host, control, page, posted, webview, last, card };
+	return { host, control, page, posted, webview, last, card, receive: (message: unknown) => receive?.(message) };
 }
 
 describe('SidebarHost', () => {
@@ -78,6 +79,14 @@ describe('SidebarHost', () => {
 		await host.handleMessage({ type: 'ready' });
 		expect(last().map(item => item.id)).toEqual(['a', 'b']);
 		expect(last()[0].settings[0].value).toBe('low');
+	});
+
+	it('takes a page action over the postMessage channel', async () => {
+		const { receive, control, posted } = setup();
+		receive({ type: 'install', agentId: 'a' });
+		await vi.waitFor(() => expect(control.install).toHaveBeenCalledTimes(1));
+		await vi.waitFor(() => expect(posted.at(-1)!.find(item => item.id === 'a')!.install).toBe('installed'));
+		expect(posted).toHaveLength(2);
 	});
 
 	it('shows a sign-in page, opens it, and copies or reopens only the stored URL', async () => {

@@ -53,7 +53,13 @@ export interface AgentCardState {
 	error?: string;
 }
 
-export type ToWebview = { type: 'state'; agents: AgentCardState[]; globalSettings?: SettingView[] };
+/** Everything the page draws, in one snapshot that names no host. */
+export interface ControlState {
+	agents: AgentCardState[];
+	globalSettings?: SettingView[];
+}
+
+export type ToWebview = { type: 'state' } & ControlState;
 
 export type FromWebview =
 	| { type: 'ready' }
@@ -62,3 +68,6 @@ export type FromWebview =
 	| { type: 'addAgent' | 'removeAgent'; agentId: string }
 	| { type: 'setEnabled'; agentId: string; enabled: boolean }
 	| { type: 'setSetting'; agentId: string; key: string; value: SettingValue };
+
+/** Everything the page asks a host to do; the same message travels over either transport. */
+export type ControlAction = FromWebview;

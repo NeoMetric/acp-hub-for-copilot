@@ -4,15 +4,21 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import * as fs from 'node:fs';
 import * as http from 'node:http';
+import * as path from 'node:path';
 import type { HeadlessComposition } from '../../composition/headless';
 import { AdapterNotInstalledError } from '../../engine/acp/agentClient';
 import type { AcpConfigOption, AgentSession } from '../../engine/acp/protocol';
 import type { ChatService } from '../../engine/chat/ChatService';
 import { ChatError } from '../../engine/chat/ChatError';
+import type { ControlSurface } from '../../engine/control/ControlService';
 import type { ChatMessage, ChatRequest, ChatRole, Part, ToolDef } from '../../engine/model/chat';
 import type { StreamEvent } from '../../engine/model/stream';
 import type { Log } from '../../engine/ports/host';
+import { ControlPage } from '../../ui/controlPage';
+import type { ControlAction, ControlState } from '../../ui/messages';
+import { ACTION_ROUTE, EVENTS_ROUTE, STATE_ROUTE } from '../../ui/transport';
 import { DEFAULT_TOOL_CALL_WAIT_MS, rememberHeaders, ToolCallParking } from './host';
 
 /** The most a completion body may hold; a bigger one is refused rather than read into memory. */
@@ -57,19 +63,78 @@ export interface HttpServerOptions {
 	readonly token?: string;
 	/** How long a client may take to return a tool call's result; {@link DEFAULT_TOOL_CALL_WAIT_MS} otherwise. */
 	readonly toolCallWaitMs?: number;
+	/** The control page; without it the server offers the chat surface alone. */
+	readonly page?: ControlPageOptions;
+}
+
+/** Where the page's files are, and what it may ask this host to do. */
+export interface ControlPageOptions {
+	/** The operations the page drives: the same surface the VS Code sidebar drives. */
+	readonly control: ControlSurface;
+	/** Opens a URL the page shows as a link; the server logs it by default. */
+	readonly openExternal?: (url: string) => Promise<void>;
+	/** Copies text for the page; a server has no clipboard, so it logs it by default. */
+	readonly copyToClipboard?: (text: string) => Promise<void>;
+	/** The built page bundle; `dist/sidebar.js` beside `server-dist/` by default. */
+	readonly bundle?: string;
+	/** The page's stylesheet; `media/sidebar.css` next to the bundles by default. */
+	readonly style?: string;
+}
+
+/** The page as the server runs it: the operations, and the two files it is made of. */
+interface OpenPage {
+	readonly control: ControlPage;
+	readonly bundle: string;
+	readonly style: string;
+}
+
+/**
+ * The page's files: the bundle `server-dist/` sits beside in `dist/`, and the
+ * stylesheet in `media/`. A source checkout resolves them from the working
+ * folder, which is where both builds put them too.
+ */
+function pageBundlePath(): string {
+	return firstExisting([
+		path.join(__dirname, '..', 'dist', 'sidebar.js'),
+		path.join(__dirname, '..', '..', 'dist', 'sidebar.js'),
+		path.join(process.cwd(), 'dist', 'sidebar.js'),
+	]);
+}
+
+function pageStylePath(): string {
+	return firstExisting([
+		path.join(__dirname, '..', 'media', 'sidebar.css'),
+		path.join(__dirname, '..', '..', '..', 'media', 'sidebar.css'),
+		path.join(process.cwd(), 'media', 'sidebar.css'),
+	]);
+}
+
+function firstExisting(candidates: readonly string[]): string {
+	return candidates.find(candidate => fs.existsSync(candidate)) ?? candidates[0];
+}
+
+/** One control page over the operations it drives, with the host parts a server can offer. */
+function openPage(options: ControlPageOptions, log: Log): OpenPage {
+	const control = new ControlPage(options.control, {
+		openExternal: options.openExternal ?? (async url => { log(`The page shows this sign-in URL: ${url}`); }),
+		copyToClipboard: options.copyToClipboard ?? (async text => { log(`The page asked to copy: ${text}`); }),
+	});
+	return { control, bundle: options.bundle ?? pageBundlePath(), style: options.style ?? pageStylePath() };
 }
 
 /**
  * The engine behind an OpenAI-compatible surface: chat completions over SSE or
- * one JSON body, the model list, and a health probe. The client of a request
- * runs the tools the agent calls, so the endpoint returns `tool_calls` and the
- * next request brings their results back.
+ * one JSON body, the model list, a health probe, and the control page the
+ * sidebar is built from. The client of a request runs the tools the agent calls,
+ * so the endpoint returns `tool_calls` and the next request brings their results
+ * back.
  */
 export function createServer(options: HttpServerOptions): http.Server {
 	const { composition, token } = options;
 	const parking = new ToolCallParking(options.toolCallWaitMs ?? DEFAULT_TOOL_CALL_WAIT_MS, composition.host.log);
+	const page = options.page ? openPage(options.page, composition.host.log) : undefined;
 	const server = http.createServer((request, response) => {
-		void handle(composition, token, parking, request, response);
+		void handle(composition, token, parking, page, request, response);
 	});
 	// A stopped server has no client left to answer a parked call, so its timers
 	// must not re-drive an agent on the way out.
@@ -77,7 +142,7 @@ export function createServer(options: HttpServerOptions): http.Server {
 	return server;
 }
 
-async function handle(composition: HeadlessComposition, token: string | undefined, parking: ToolCallParking, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+async function handle(composition: HeadlessComposition, token: string | undefined, parking: ToolCallParking, page: OpenPage | undefined, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
 	try {
 		const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
 		// The health probe is what a process manager reads, before it has any token.
@@ -88,6 +153,38 @@ async function handle(composition: HeadlessComposition, token: string | undefine
 		if (token !== undefined && !carriesToken(request, token)) {
 			response.setHeader('WWW-Authenticate', 'Bearer');
 			sendError(response, 401, 'A bearer token is required; send it as "Authorization: Bearer <token>".', 'invalid_request_error', 'invalid_api_key');
+			return;
+		}
+		if (page && request.method === 'GET' && pathname === '/') {
+			sendPage(response);
+			return;
+		}
+		if (page && request.method === 'GET' && pathname === '/sidebar.js') {
+			await sendFile(response, page.bundle, 'text/javascript; charset=utf-8');
+			return;
+		}
+		if (page && request.method === 'GET' && pathname === '/sidebar.css') {
+			await sendFile(response, page.style, 'text/css; charset=utf-8');
+			return;
+		}
+		if (pathname === STATE_ROUTE && request.method === 'GET') {
+			sendJson(response, 200, page ? await page.control.state() : { agents: [] });
+			return;
+		}
+		if (pathname === EVENTS_ROUTE && request.method === 'GET') {
+			if (page) {
+				streamState(page.control, response);
+			} else {
+				sendError(response, 404, 'This server has no control page.', 'invalid_request_error', 'not_found');
+			}
+			return;
+		}
+		if (pathname === ACTION_ROUTE && request.method === 'POST') {
+			if (!page) {
+				sendError(response, 404, 'This server has no control page.', 'invalid_request_error', 'not_found');
+				return;
+			}
+			await runAction(page.control, request, response);
 			return;
 		}
 		if (pathname === '/v1/models' && request.method === 'GET') {
@@ -103,6 +200,78 @@ async function handle(composition: HeadlessComposition, token: string | undefine
 		composition.host.log(`An HTTP request failed: ${messageOf(error)}`, 'error');
 		sendError(response, 500, messageOf(error), 'server_error', 'internal_error');
 	}
+}
+
+/** `GET /`: the shell the page's bundle and stylesheet load into. */
+function sendPage(response: http.ServerResponse): void {
+	const body = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="/sidebar.css">
+<title>ACP Hub</title>
+</head>
+<body>
+<div id="root"></div>
+<script src="/sidebar.js"></script>
+</body>
+</html>`;
+	response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
+	response.end(body);
+}
+
+/** One file the page loads, or a message that names the build it is missing from. */
+async function sendFile(response: http.ServerResponse, file: string, contentType: string): Promise<void> {
+	let body: Buffer;
+	try {
+		body = await fs.promises.readFile(file);
+	} catch {
+		sendError(response, 404, `The page file ${file} is not there; run "npm run compile" first.`, 'invalid_request_error', 'not_found');
+		return;
+	}
+	response.writeHead(200, { 'Content-Type': contentType, 'Content-Length': body.byteLength });
+	response.end(body);
+}
+
+/** `POST /api/action`: one action the page sent, run against the same operations the sidebar uses. */
+async function runAction(page: ControlPage, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+	let body: Record<string, unknown>;
+	try {
+		body = await readBody(request);
+	} catch (error) {
+		sendError(response, 400, messageOf(error), 'invalid_request_error', 'invalid_body');
+		return;
+	}
+	if (typeof body.type !== 'string') {
+		sendError(response, 400, 'The action has no "type".', 'invalid_request_error', 'invalid_body');
+		return;
+	}
+	await page.handle(body as unknown as ControlAction);
+	sendJson(response, 200, { ok: true });
+}
+
+/** `GET /api/events`: the state now, then every change, as server-sent events. */
+function streamState(page: ControlPage, response: http.ServerResponse): void {
+	response.writeHead(200, {
+		'Content-Type': 'text/event-stream; charset=utf-8',
+		'Cache-Control': 'no-cache',
+		'Connection': 'keep-alive',
+	});
+	const send = (state: ControlState): void => {
+		if (!response.writableEnded && !response.destroyed) {
+			response.write(`data: ${JSON.stringify(state)}\n\n`);
+		}
+	};
+	// Subscribed before the first snapshot is read, so a change that lands while
+	// it is built still reaches this client.
+	const unsubscribe = page.onState(send);
+	response.on('close', unsubscribe);
+	void page.state().then(send, () => {
+		unsubscribe();
+		send({ agents: [] });
+		response.end();
+	});
 }
 
 /** `GET /health`: the agents, whether each is installed, and how many chat sessions are open. */

@@ -4,8 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import type { AgentCardState } from '../../src/sidebar/messages';
-import { renderCards } from '../../src/sidebar/render';
+import type { AgentCardState } from '../../src/ui/messages';
+import { renderCards } from '../../src/ui/render';
 
 function card(overrides: Partial<AgentCardState> = {}): AgentCardState {
 	return {

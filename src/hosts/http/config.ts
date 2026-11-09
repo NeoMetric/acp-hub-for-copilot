@@ -63,6 +63,23 @@ export class FileConfig implements ConfigReader {
 		return current as T | undefined;
 	}
 
+	/** Writes one `acpHub.<section>` value, leaving the rest of the document as it was. */
+	async set(section: string, value: unknown): Promise<void> {
+		this.refresh();
+		const document: Record<string, unknown> = isObject(this.document) ? this.document : {};
+		const keys = `${SECTION}.${section}`.split('.');
+		let container = document;
+		for (const key of keys.slice(0, -1)) {
+			if (!isObject(container[key])) {
+				container[key] = {};
+			}
+			container = container[key] as Record<string, unknown>;
+		}
+		container[keys[keys.length - 1]] = value;
+		await writeAtomic(this.file, `${JSON.stringify(document, null, '\t')}\n`);
+		this.reload();
+	}
+
 	/** Reloads when the file changed since it was last read. */
 	private refresh(): void {
 		let stamp: number;
@@ -90,4 +107,16 @@ export function defaultWorkspaceOf(config: ConfigReader): string | undefined {
 
 function messageOf(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Replaces the file in one step, so a reader never sees half a document. */
+async function writeAtomic(file: string, text: string): Promise<void> {
+	await fs.promises.mkdir(path.dirname(file), { recursive: true });
+	const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+	await fs.promises.writeFile(temporary, text, 'utf8');
+	await fs.promises.rename(temporary, file);
 }

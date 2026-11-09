@@ -20,7 +20,7 @@ function tsFilesUnder(dir: string): string[] {
 }
 
 describe('core stays agent-neutral', () => {
-	for (const dir of ['src/core', 'src/sidebar']) {
+	for (const dir of ['src/core', 'src/sidebar', 'src/ui']) {
 		it(`${dir} never names an agent`, () => {
 			if (!existsSync(dir)) {
 				return;

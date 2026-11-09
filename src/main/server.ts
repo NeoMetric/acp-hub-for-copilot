@@ -79,7 +79,7 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 	const bridge = new McpBridge(stderrLog);
 	// The same root the extension uses, so an agent installed in one gateway is installed in both.
 	const composition = createHeadlessComposition({ root: storageRoot(env), bridge: toolBridgeOf(bridge), log: stderrLog });
-	const server = createServer({ composition, token });
+	const server = createServer({ composition, token, page: { control: composition.control } });
 
 	server.listen(port, '127.0.0.1', () => {
 		const address = server.address();
