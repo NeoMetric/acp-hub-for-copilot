@@ -12,7 +12,8 @@ import type { ChatService } from '../../engine/chat/ChatService';
 import { ChatError } from '../../engine/chat/ChatError';
 import type { ChatMessage, ChatRequest, ChatRole, Part, ToolDef } from '../../engine/model/chat';
 import type { StreamEvent } from '../../engine/model/stream';
-import { rememberHeaders } from './host';
+import type { Log } from '../../engine/ports/host';
+import { DEFAULT_TOOL_CALL_WAIT_MS, rememberHeaders, ToolCallParking } from './host';
 
 /** The most a completion body may hold; a bigger one is refused rather than read into memory. */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -54,21 +55,29 @@ export interface HttpServerOptions {
 	readonly composition: HeadlessComposition;
 	/** When set, every route but `GET /health` requires `Authorization: Bearer <token>`. */
 	readonly token?: string;
+	/** How long a client may take to return a tool call's result; {@link DEFAULT_TOOL_CALL_WAIT_MS} otherwise. */
+	readonly toolCallWaitMs?: number;
 }
 
 /**
  * The engine behind an OpenAI-compatible surface: chat completions over SSE or
- * one JSON body, the model list, and a health probe. The host runs the tools
- * the agent calls, so the endpoint only returns `tool_calls`.
+ * one JSON body, the model list, and a health probe. The client of a request
+ * runs the tools the agent calls, so the endpoint returns `tool_calls` and the
+ * next request brings their results back.
  */
 export function createServer(options: HttpServerOptions): http.Server {
 	const { composition, token } = options;
-	return http.createServer((request, response) => {
-		void handle(composition, token, request, response);
+	const parking = new ToolCallParking(options.toolCallWaitMs ?? DEFAULT_TOOL_CALL_WAIT_MS, composition.host.log);
+	const server = http.createServer((request, response) => {
+		void handle(composition, token, parking, request, response);
 	});
+	// A stopped server has no client left to answer a parked call, so its timers
+	// must not re-drive an agent on the way out.
+	server.on('close', () => parking.dispose());
+	return server;
 }
 
-async function handle(composition: HeadlessComposition, token: string | undefined, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+async function handle(composition: HeadlessComposition, token: string | undefined, parking: ToolCallParking, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
 	try {
 		const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
 		// The health probe is what a process manager reads, before it has any token.
@@ -86,7 +95,7 @@ async function handle(composition: HeadlessComposition, token: string | undefine
 			return;
 		}
 		if (pathname === '/v1/chat/completions' && request.method === 'POST') {
-			await complete(composition, request, response);
+			await complete(composition, parking, request, response);
 			return;
 		}
 		sendError(response, 404, `No route for ${request.method ?? 'GET'} ${pathname}.`, 'invalid_request_error', 'not_found');
@@ -169,7 +178,7 @@ async function isInstalled(service: ChatService, composition: HeadlessCompositio
 }
 
 /** `POST /v1/chat/completions`, streaming or not, over the agent the model id names. */
-async function complete(composition: HeadlessComposition, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+async function complete(composition: HeadlessComposition, parking: ToolCallParking, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
 	let body: Record<string, unknown>;
 	try {
 		body = await readBody(request);
@@ -193,6 +202,15 @@ async function complete(composition: HeadlessComposition, request: http.Incoming
 		return;
 	}
 	const messages = messagesOf(body.messages);
+	const chatRequest = chatRequestOf(composition, request, messages, toolsOf(body), target.model);
+	// A turn the client continues after a tool call carries that call's result;
+	// only a call this chat still holds may be settled, so a stale or foreign
+	// call id is refused instead of resuming the wrong turn.
+	const unpaid = takeToolResults(parking, chatRequest.chatId, messages);
+	if (unpaid !== undefined) {
+		sendError(response, 400, `No tool call "${unpaid}" is waiting for a result in this chat; it may have ended, or belong to another chat.`, 'invalid_request_error', 'tool_call_not_found');
+		return;
+	}
 	// A turn the client continues after a tool call may arrive without its user
 	// message again; anything else has to say something to the agent.
 	const continuesATurn = messages.some(message => message.role === 'user' || message.parts.some(part => part.type === 'tool-result'));
@@ -200,12 +218,23 @@ async function complete(composition: HeadlessComposition, request: http.Incoming
 		sendError(response, 400, 'The request has no user message.', 'invalid_request_error', 'invalid_messages');
 		return;
 	}
-	const chatRequest = chatRequestOf(composition, request, messages, toolsOf(body), target.model);
+	const client: TurnClient = {
+		toolCall: event => parkTurnToolCall(parking, service, chatRequest, event, composition.host.log),
+		disconnected: () => parking.clear(chatRequest.chatId),
+	};
 	if (body.stream === true) {
-		await stream(service, chatRequest, model, response);
+		await stream(service, chatRequest, model, response, client);
 		return;
 	}
-	await collect(service, chatRequest, model, response);
+	await collect(service, chatRequest, model, response, client);
+}
+
+/** What a response does when its turn hands it a call, or its client goes away. */
+interface TurnClient {
+	/** Keeps a call the response handed to the client, so a later request can settle it. */
+	readonly toolCall: (event: Extract<StreamEvent, { type: 'tool-call' }>) => void;
+	/** The client left while the turn ran, so no result for the calls of this response can come. */
+	readonly disconnected: () => void;
 }
 
 /** Builds the engine's request, naming the chat the way the host does when the client names none. */
@@ -219,14 +248,39 @@ function chatRequestOf(composition: HeadlessComposition, request: http.IncomingM
 	return { chatId: identity.id, cwd: identity.cwd, messages, tools, model: draft.model };
 }
 
+/**
+ * Takes the calls whose results this request returns, so their timers cannot
+ * fail them afterwards, and names the first one the chat is not holding.
+ */
+function takeToolResults(parking: ToolCallParking, chatId: string, messages: readonly ChatMessage[]): string | undefined {
+	const results = messages.flatMap(message => message.parts.filter((part): part is Extract<Part, { type: 'tool-result' }> => part.type === 'tool-result'));
+	for (const result of results) {
+		if (!parking.has(chatId, result.callId)) {
+			return result.callId;
+		}
+	}
+	for (const result of results) {
+		parking.take(chatId, result.callId);
+	}
+	return undefined;
+}
+
 /** One JSON body: the turn is followed to its end, or to the tool calls the client has to run. */
-async function collect(service: ChatService, request: ChatRequest, model: string, response: http.ServerResponse): Promise<void> {
+async function collect(service: ChatService, request: ChatRequest, model: string, response: http.ServerResponse, client: TurnClient): Promise<void> {
 	const turn = emptyTurn();
 	const controller = new AbortController();
-	const disconnected = (): void => controller.abort();
+	const disconnected = (): void => {
+		client.disconnected();
+		controller.abort();
+	};
 	response.on('close', disconnected);
 	try {
-		await service.respond(request, event => gather(turn, event), controller.signal);
+		await service.respond(request, event => {
+			gather(turn, event);
+			if (event.type === 'tool-call') {
+				client.toolCall(event);
+			}
+		}, controller.signal);
 	} catch (error) {
 		sendFailure(response, error);
 		return;
@@ -239,7 +293,7 @@ async function collect(service: ChatService, request: ChatRequest, model: string
 }
 
 /** SSE: a role chunk, the deltas of the turn, a chunk that ends the choice, and `[DONE]`. */
-async function stream(service: ChatService, request: ChatRequest, model: string, response: http.ServerResponse): Promise<void> {
+async function stream(service: ChatService, request: ChatRequest, model: string, response: http.ServerResponse, client: TurnClient): Promise<void> {
 	response.writeHead(200, {
 		'Content-Type': 'text/event-stream; charset=utf-8',
 		'Cache-Control': 'no-cache',
@@ -255,7 +309,10 @@ async function stream(service: ChatService, request: ChatRequest, model: string,
 	write(chunkOf(id, created, model, { role: 'assistant' }, null));
 	const turn = emptyTurn();
 	const controller = new AbortController();
-	const disconnected = (): void => controller.abort();
+	const disconnected = (): void => {
+		client.disconnected();
+		controller.abort();
+	};
 	response.on('close', disconnected);
 	try {
 		await service.respond(request, event => {
@@ -263,6 +320,7 @@ async function stream(service: ChatService, request: ChatRequest, model: string,
 			if (event.type === 'text') {
 				write(chunkOf(id, created, model, { content: event.text }, null));
 			} else if (event.type === 'tool-call') {
+				client.toolCall(event);
 				write(chunkOf(id, created, model, { tool_calls: [toolCallDelta(turn.toolCalls.length - 1, event)] }, null));
 			}
 		}, controller.signal);
@@ -275,6 +333,39 @@ async function stream(service: ChatService, request: ChatRequest, model: string,
 	if (!response.writableEnded && !response.destroyed) {
 		response.write('data: [DONE]\n\n');
 		response.end();
+	}
+}
+
+/** Keeps a call the response just handed to the client, so its result can be matched. */
+function parkTurnToolCall(parking: ToolCallParking, service: ChatService, request: ChatRequest, event: Extract<StreamEvent, { type: 'tool-call' }>, log: Log): void {
+	parking.park(request.chatId, event, () => {
+		void failParkedToolCall(parking, service, request, event, log);
+	});
+}
+
+/**
+ * The client never returned a result. The agent is told the call failed, the
+ * way the workbench tells it a tool did, so the engine settles the call instead
+ * of holding it; what the agent says next has no response to stream into.
+ */
+async function failParkedToolCall(parking: ToolCallParking, service: ChatService, request: ChatRequest, call: Extract<StreamEvent, { type: 'tool-call' }>, log: Log): Promise<void> {
+	// The conversation the client would have sent had it answered: the call, then its result.
+	const continued: ChatRequest = {
+		...request,
+		messages: [
+			...request.messages,
+			{ role: 'assistant', parts: [{ type: 'tool-call', callId: call.callId, name: call.name, input: call.input }] },
+			{ role: 'user', parts: [{ type: 'tool-result', callId: call.callId, content: [{ type: 'text', text: 'The client did not return a result for this tool call in time.' }], isError: true }] },
+		],
+	};
+	try {
+		await service.respond(continued, event => {
+			if (event.type === 'tool-call') {
+				parkTurnToolCall(parking, service, continued, event, log);
+			}
+		}, new AbortController().signal);
+	} catch (error) {
+		log(`Could not fail the expired tool call ${call.callId} of chat ${request.chatId}: ${messageOf(error)}`, 'warn');
 	}
 }
 
@@ -381,7 +472,10 @@ function messagesOf(value: unknown): ChatMessage[] {
 			continue;
 		}
 		const name = typeof entry.name === 'string' && entry.name.length > 0 ? entry.name : undefined;
-		messages.push({ role, parts, ...(name ? { name } : {}) });
+		// The engine carries a tool's output in a user message, as the workbench
+		// sends it, so a `tool` message becomes one the turn can settle its call
+		// from; the engine's own turn reads no tool role.
+		messages.push({ role: role === 'tool' ? 'user' : role, parts, ...(name ? { name } : {}) });
 	}
 	return messages;
 }
@@ -395,14 +489,18 @@ function roleOf(value: unknown): ChatRole | undefined {
 
 function partsOf(message: Record<string, unknown>, role: ChatRole): Part[] {
 	const parts: Part[] = [];
-	if (typeof message.content === 'string') {
-		if (message.content.length > 0) {
-			parts.push({ type: 'text', text: message.content });
-		}
-	} else if (Array.isArray(message.content)) {
-		for (const item of message.content) {
-			if (isObject(item) && item.type === 'text' && typeof item.text === 'string') {
-				parts.push({ type: 'text', text: item.text });
+	// A `tool` message's content is the tool's output, which belongs inside its
+	// result part, not beside it as text the user said.
+	if (role !== 'tool') {
+		if (typeof message.content === 'string') {
+			if (message.content.length > 0) {
+				parts.push({ type: 'text', text: message.content });
+			}
+		} else if (Array.isArray(message.content)) {
+			for (const item of message.content) {
+				if (isObject(item) && item.type === 'text' && typeof item.text === 'string') {
+					parts.push({ type: 'text', text: item.text });
+				}
 			}
 		}
 	}
@@ -415,9 +513,15 @@ function partsOf(message: Record<string, unknown>, role: ChatRole): Part[] {
 		}
 	}
 	if (role === 'tool') {
-		parts.push({ type: 'tool-result', callId: typeof message.tool_call_id === 'string' ? message.tool_call_id : '', content: [{ type: 'text', text: contentTextOf(message.content) }] });
+		const text = contentTextOf(message.content);
+		parts.push({ type: 'tool-result', callId: typeof message.tool_call_id === 'string' ? message.tool_call_id : '', content: [{ type: 'text', text }], ...(isErrorText(text) ? { isError: true } : {}) });
 	}
 	return parts;
+}
+
+/** A client that ran a tool and failed it says so in the text: `error: …`, as MCP results do. */
+function isErrorText(text: string): boolean {
+	return /^\s*error\s*:/i.test(text);
 }
 
 function contentTextOf(value: unknown): string {

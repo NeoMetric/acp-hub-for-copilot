@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+/* global fetch */
+
 // A tiny ACP agent for tests: newline-delimited JSON-RPC on stdio.
 // MOCK_ACP_MODE picks how it behaves:
 //   normal             initialize, session/new, session/prompt streams "hello" and ends the turn
@@ -20,6 +22,7 @@
 //   env:<NAME>   replies with the value of that environment variable
 //   count        replies with the number of session/new requests received
 //   permission   asks the client for permission first, then replies with the outcome
+//   tool         calls the MCP tool "do_a_thing", then replies with what it returned
 //   forget       fails as if the session no longer existed
 // MOCK_ACP_FAIL_FILE: while that file exists the process exits at start.
 
@@ -36,9 +39,11 @@ let authenticated = false;
 let sessions = 0;
 let newRequests = 0;
 let permissionRequests = 0;
+let toolRequests = 0;
 const awaitingPermission = new Map();
 const knownSessions = new Set();
 const slowPrompts = new Map();
+const sessionMcpServers = new Map();
 const deletedSessions = [];
 let lastForkMeta;
 
@@ -63,6 +68,34 @@ function text(sessionId, value) {
 		method: 'session/update',
 		params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } } },
 	});
+}
+
+/**
+ * Calls the MCP tool the host listed for the session, the way an agent does.
+ * The call waits until the client that owns it returns its result.
+ */
+async function callTool(sessionId) {
+	const servers = sessionMcpServers.get(sessionId) || [];
+	const endpoint = servers[0];
+	if (!endpoint) {
+		throw new Error('The session was offered no MCP server');
+	}
+	const headers = { 'content-type': 'application/json' };
+	for (const header of endpoint.headers || []) {
+		headers[header.name.toLowerCase()] = header.value;
+	}
+	const response = await fetch(endpoint.url, {
+		method: 'POST',
+		headers,
+		body: JSON.stringify({ jsonrpc: '2.0', id: ++toolRequests, method: 'tools/call', params: { name: 'do_a_thing', arguments: { answer: 42 } } }),
+	});
+	const body = await response.json();
+	if (body.error) {
+		throw new Error(body.error.message);
+	}
+	const result = body.result || {};
+	const content = Array.isArray(result.content) ? result.content : [];
+	return { text: content.map(item => item.text || '').join(''), isError: result.isError === true };
 }
 
 const configOptions = [
@@ -110,6 +143,21 @@ function handlePrompt(message) {
 		});
 		return;
 	}
+	if (prompt === 'tool') {
+		send({
+			jsonrpc: '2.0',
+			method: 'session/update',
+			params: { sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Run do_a_thing', kind: 'other', status: 'pending' } },
+		});
+		callTool(sessionId).then(result => {
+			text(sessionId, `tool:${result.isError ? 'error:' : ''}${result.text}`);
+			reply(message.id, { stopReason: 'end_turn', _meta: { quota: { token_count: { inputTokens: 3, outputTokens: 2 } } } });
+		}, error => {
+			text(sessionId, `tool failed: ${error.message}`);
+			reply(message.id, { stopReason: 'end_turn' });
+		});
+		return;
+	}
 	if (prompt.startsWith('env:')) {
 		text(sessionId, process.env[prompt.slice(4)] ?? 'unset');
 	} else if (prompt === 'count') {
@@ -148,6 +196,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 		}
 		const sessionId = `s${++sessions}`;
 		knownSessions.add(sessionId);
+		sessionMcpServers.set(sessionId, message.params.mcpServers || []);
 		reply(message.id, { sessionId, configOptions });
 	} else if (message.method === 'session/resume') {
 		knownSessions.add(message.params.sessionId);

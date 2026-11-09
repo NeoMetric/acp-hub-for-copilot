@@ -10,8 +10,11 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { HeadlessComposition } from '../../src/composition/headless';
 import type { AgentAdapter } from '../../src/core/adapter';
+import type { CancellationToken } from '../../src/engine/acp/emitter';
 import { ChatService } from '../../src/engine/chat/ChatService';
 import type { ToolBridge } from '../../src/engine/chat/types';
+import { McpBridge } from '../../src/engine/mcp/bridge';
+import type { Part } from '../../src/engine/model/chat';
 import { createHeadlessHost } from '../../src/hosts/http/host';
 import { createServer } from '../../src/hosts/http/server';
 
@@ -31,23 +34,45 @@ const adapter: AgentAdapter = {
 	systemPrompt: { toolAccess: '', listRequiredArguments: false },
 };
 
-/** A bridge that hands out an endpoint and runs nothing; the HTTP client runs the tools. */
-const noTools: ToolBridge = {
-	registerSession: () => Promise.resolve({ url: 'http://127.0.0.1:1/mcp', token: 'token' }),
-	updateTools: () => undefined,
-	unregisterSession: () => undefined,
-};
+/** The engine's loopback bridge as the host sees it: a call reaches the request that owns it. */
+function toolsOver(loopback: McpBridge): ToolBridge {
+	return {
+		registerSession: (tools, execute, options) => loopback.registerSession(tools, async (name, input, token) => {
+			const result = await execute(name, input, signalOf(token));
+			return result && { content: result.content.map(toBridgePart), isError: result.isError };
+		}, options),
+		updateTools: (token, tools) => loopback.updateTools(token, tools),
+		unregisterSession: token => loopback.unregisterSession(token),
+	};
+}
+
+/** A neutral part as the bridge hands it to the agent: its text, or an image's bytes. */
+function toBridgePart(part: Part): unknown {
+	return part.type === 'text' ? part.text : part;
+}
+
+/** A cancellation the engine reports as the plain signal the rest of the engine watches. */
+function signalOf(token: CancellationToken): AbortSignal {
+	const controller = new AbortController();
+	if (token.isCancellationRequested) {
+		controller.abort();
+	} else {
+		token.onCancellationRequested(() => controller.abort());
+	}
+	return controller.signal;
+}
 
 const cleanups: Array<() => Promise<void>> = [];
 
 /** Starts the server on a free port over the mock agent, with a store root of its own. */
-async function start(token?: string): Promise<string> {
+async function start(options: { token?: string; toolCallWaitMs?: number } = {}): Promise<string> {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-server-'));
 	const host = createHeadlessHost({ root, log: NO_LOG });
+	const loopback = new McpBridge(NO_LOG);
 	const service = new ChatService({
 		adapter,
 		host,
-		bridge: noTools,
+		bridge: toolsOver(loopback),
 		resolveLaunch: () => Promise.resolve({ entryPath: MOCK_AGENT, installDir: '', storageDir: path.join(root, 'agent'), workspaceFolder: root, settings: {} }),
 	});
 	const composition: HeadlessComposition = {
@@ -56,7 +81,7 @@ async function start(token?: string): Promise<string> {
 		serviceOf: id => id === adapter.id ? service : undefined,
 		close: () => service.close(),
 	};
-	const server = createServer({ composition, token });
+	const server = createServer({ composition, token: options.token, toolCallWaitMs: options.toolCallWaitMs });
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
 	const address = server.address() as AddressInfo;
 	cleanups.push(async () => {
@@ -64,6 +89,7 @@ async function start(token?: string): Promise<string> {
 		server.closeAllConnections();
 		await closed;
 		await composition.close();
+		loopback.dispose();
 		fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 	});
 	return `http://127.0.0.1:${address.port}`;
@@ -85,6 +111,23 @@ async function firstModel(url: string): Promise<string> {
 	const model = body.data.find(entry => entry.id.startsWith(`${adapter.id}/`));
 	expect(model, 'the mock agent offers a model').toBeDefined();
 	return model!.id;
+}
+
+/** The tool the mock agent asks for and the HTTP client has to run. */
+const TOOL = {
+	type: 'function',
+	function: { name: 'do_a_thing', description: 'Answers a question.', parameters: { type: 'object', properties: { answer: { type: 'number' } } } },
+};
+
+/** A chat whose agent calls {@link TOOL}, so the client is the one that has to run it. */
+function toolChat(model: string): Record<string, unknown> {
+	return { model, tools: [TOOL], messages: [{ role: 'user', content: 'tool' }] };
+}
+
+/** The first request of a tool turn, or the body of any completion the test reads. */
+async function bodyOf(response: Response): Promise<any> {
+	expect(response.status).toBe(200);
+	return response.json() as Promise<any>;
 }
 
 /** The `data:` payloads of an SSE response, in order. */
@@ -174,8 +217,112 @@ describe('the HTTP server', () => {
 		expect(body.openSessions).toBe(0);
 	});
 
+	it('ends the response on the tool call the client has to run', async () => {
+		const url = await start();
+		const model = await firstModel(url);
+
+		const body = await bodyOf(await post(`${url}/v1/chat/completions`, toolChat(model)));
+
+		expect(body.choices[0].finish_reason).toBe('tool_calls');
+		const calls = body.choices[0].message.tool_calls;
+		expect(calls).toHaveLength(1);
+		expect(calls[0].type).toBe('function');
+		expect(calls[0].function.name).toBe('do_a_thing');
+		expect(typeof calls[0].id).toBe('string');
+	});
+
+	it('continues the same turn when the client re-posts the tool result', async () => {
+		const url = await start();
+		const model = await firstModel(url);
+		const first = await bodyOf(await post(`${url}/v1/chat/completions`, toolChat(model)));
+		const toolCall = first.choices[0].message.tool_calls[0];
+
+		const body = await bodyOf(await post(`${url}/v1/chat/completions`, {
+			model,
+			tools: [TOOL],
+			messages: [
+				{ role: 'user', content: 'tool' },
+				{ role: 'assistant', content: null, tool_calls: [toolCall] },
+				{ role: 'tool', tool_call_id: toolCall.id, content: 'the answer is 42' },
+			],
+		}));
+
+		expect(body.choices[0].finish_reason).toBe('stop');
+		expect(body.choices[0].message.content).toBe('tool:the answer is 42');
+	});
+
+	it('refuses a tool result whose call no chat is waiting for', async () => {
+		const url = await start();
+		const model = await firstModel(url);
+
+		const response = await post(`${url}/v1/chat/completions`, {
+			model,
+			messages: [
+				{ role: 'user', content: 'hi' },
+				{ role: 'tool', tool_call_id: 'call-that-never-was', content: 'x' },
+			],
+		});
+
+		expect(response.status).toBe(400);
+		const body = await response.json() as any;
+		expect(body.error.code).toBe('tool_call_not_found');
+		expect(body.error.message).toContain('call-that-never-was');
+	});
+
+	it('keeps the parked calls of two chats apart', async () => {
+		const url = await start();
+		const model = await firstModel(url);
+		const park = async (chatId: string): Promise<any> => {
+			const body = await bodyOf(await post(`${url}/v1/chat/completions`, toolChat(model), { 'x-chat-id': chatId }));
+			expect(body.choices[0].finish_reason).toBe('tool_calls');
+			return body.choices[0].message.tool_calls[0];
+		};
+		const answer = (chatId: string, call: any, text: string): Promise<Response> => post(`${url}/v1/chat/completions`, {
+			model,
+			tools: [TOOL],
+			messages: [
+				{ role: 'user', content: 'tool' },
+				{ role: 'assistant', content: null, tool_calls: [call] },
+				{ role: 'tool', tool_call_id: call.id, content: text },
+			],
+		}, { 'x-chat-id': chatId });
+
+		const callA = await park('chat-a');
+		const callB = await park('chat-b');
+		expect(callA.id).not.toBe(callB.id);
+
+		// One chat cannot settle the other's call, and the refused request takes nothing with it.
+		expect((await answer('chat-b', callA, 'wrong chat')).status).toBe(400);
+
+		const answeredA = await bodyOf(await answer('chat-a', callA, 'a 42'));
+		const answeredB = await bodyOf(await answer('chat-b', callB, 'b 42'));
+		expect(answeredA.choices[0].message.content).toBe('tool:a 42');
+		expect(answeredB.choices[0].message.content).toBe('tool:b 42');
+	});
+
+	it('fails a call the client does not answer in time, so a later result is refused', async () => {
+		const url = await start({ toolCallWaitMs: 300 });
+		const model = await firstModel(url);
+		const first = await bodyOf(await post(`${url}/v1/chat/completions`, toolChat(model)));
+		const toolCall = first.choices[0].message.tool_calls[0];
+
+		await new Promise(resolve => setTimeout(resolve, 700));
+		const response = await post(`${url}/v1/chat/completions`, {
+			model,
+			tools: [TOOL],
+			messages: [
+				{ role: 'user', content: 'tool' },
+				{ role: 'assistant', content: null, tool_calls: [toolCall] },
+				{ role: 'tool', tool_call_id: toolCall.id, content: 'too late' },
+			],
+		});
+
+		expect(response.status).toBe(400);
+		expect((await response.json() as any).error.code).toBe('tool_call_not_found');
+	});
+
 	it('guards every route but the health probe when a token is configured', async () => {
-		const url = await start('secret');
+		const url = await start({ token: 'secret' });
 
 		expect((await fetch(`${url}/health`)).status).toBe(200);
 		expect((await fetch(`${url}/v1/models`)).status).toBe(401);

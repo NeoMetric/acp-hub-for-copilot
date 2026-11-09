@@ -20,6 +20,14 @@ export const CWD_HEADER = 'x-acp-cwd';
 
 const STATE_FILE = 'state.json';
 const SECRETS_FILE = 'secrets.json';
+
+/**
+ * How long a chat's client has to return the result of a tool call. An agent
+ * whose adapter names no wait leaves the engine's own wait unbounded, so a
+ * client that never comes back would park the call for as long as the process
+ * lives.
+ */
+export const DEFAULT_TOOL_CALL_WAIT_MS = 120_000;
 /** How the extension names an agent's key in its own secret storage; the file keeps the same name. */
 const SECRET_PREFIX = 'acpHub.apiKey.';
 
@@ -74,10 +82,12 @@ export function createHeadlessHost(options: HeadlessHostOptions): HostPort {
 		// The host writes no sections of its own into the text the engine forwards.
 		stripHostSections: text => text,
 		chatWideContextOf: () => undefined,
-		// The HTTP client runs the tools, and a later step parks the call until it
-		// re-posts the result; nothing reaches the host's own tool running.
+		// The engine never asks this: it hands a tool call to the response that is
+		// open, and this host keeps that call in `ToolCallParking` until the client
+		// re-posts its result. A call with no response to carry it is refused by
+		// the bridge, so nothing can reach a host-side tool runner.
 		executeTool: () => {
-			throw new Error('executeTool is not used by this host.');
+			throw new Error('executeTool is not used by this host: the HTTP client runs tool calls and re-posts their results.');
 		},
 		ui: {
 			requestSignIn: agentId => log(`${agentId} needs credentials; sign in through the control page.`, 'warn'),
@@ -138,6 +148,90 @@ function fingerprintOf(cwd: string, opening: string): string {
 function trimmed(value: string | undefined): string | undefined {
 	const text = value?.trim();
 	return text ? text : undefined;
+}
+
+/** A tool call a chat's client is running, as the response that carried it named it. */
+export interface ParkedToolCall {
+	readonly callId: string;
+	readonly name: string;
+}
+
+/**
+ * The tool calls the clients of each chat are running.
+ *
+ * The engine hands a call to the response that is open and holds it until a
+ * later request brings the result back. This host cannot run the tool itself,
+ * so it remembers each call to answer two questions: may this chat settle that
+ * call, and has the client waited too long? A call is filed under its chat as
+ * well as its id, so two chats cannot settle each other's calls, and one the
+ * client never answers is failed instead of staying parked in the engine.
+ */
+export class ToolCallParking {
+
+	/** The timers of each chat's calls, by call id. */
+	private readonly chats = new Map<string, Map<string, NodeJS.Timeout>>();
+
+	constructor(private readonly waitMs: number, private readonly log: Log) { }
+
+	/** Keeps `call` until the client returns its result; `fail` runs if it does not in time. */
+	park(chatId: string, call: ParkedToolCall, fail: () => void): void {
+		this.forget(chatId, call.callId);
+		const calls = this.chats.get(chatId) ?? new Map<string, NodeJS.Timeout>();
+		this.chats.set(chatId, calls);
+		const timer = setTimeout(() => {
+			this.forget(chatId, call.callId);
+			this.log(`Chat ${chatId} did not answer tool ${call.name} (${call.callId}) within ${Math.round(this.waitMs / 1000)}s; failing the call.`, 'warn');
+			fail();
+		}, this.waitMs);
+		timer.unref();
+		calls.set(call.callId, timer);
+	}
+
+	/** Whether the chat still holds the call, so a result for it may be taken. */
+	has(chatId: string, callId: string): boolean {
+		return this.chats.get(chatId)?.has(callId) === true;
+	}
+
+	/** Takes the call a request answers, so its timer cannot fail a call already settled. */
+	take(chatId: string, callId: string): boolean {
+		return this.forget(chatId, callId);
+	}
+
+	/** Forgets every call of one chat, e.g. when its client disconnects and no result can come. */
+	clear(chatId: string): void {
+		const calls = this.chats.get(chatId);
+		if (!calls) {
+			return;
+		}
+		for (const timer of calls.values()) {
+			clearTimeout(timer);
+		}
+		this.chats.delete(chatId);
+	}
+
+	/** Forgets every call, e.g. when the server stops and no client can answer any more. */
+	dispose(): void {
+		for (const calls of this.chats.values()) {
+			for (const timer of calls.values()) {
+				clearTimeout(timer);
+			}
+		}
+		this.chats.clear();
+	}
+
+	private forget(chatId: string, callId: string): boolean {
+		const calls = this.chats.get(chatId);
+		const timer = calls?.get(callId);
+		if (!calls || timer === undefined) {
+			return false;
+		}
+		clearTimeout(timer);
+		calls.delete(callId);
+		if (calls.size === 0) {
+			this.chats.delete(chatId);
+		}
+		return true;
+	}
 }
 
 /** Every write replaces a whole JSON document, through a temp file in the same folder. */
