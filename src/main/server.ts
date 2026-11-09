@@ -11,12 +11,17 @@ import type { Part } from '../engine/model/chat';
 import { storageRoot } from '../engine/store/paths';
 import { ownerOfToken, stderrLog } from '../hosts/http/host';
 import { createServer } from '../hosts/http/server';
+import { exitWithParent } from './parent';
+import { readToken } from './token';
 
 /** The port the server listens on when the operator names none. */
 const DEFAULT_PORT = 8791;
 
 /** How long a closing server waits for requests that never end, such as a stream no client reads. */
 const SHUTDOWN_GRACE_MS = 5_000;
+
+/** The flag a window adds when the server must not outlive it. */
+const EXIT_WITH_PARENT_FLAG = '--exit-with-parent';
 
 /**
  * The loopback bridge as the engine sees it. The tools and the results are
@@ -74,13 +79,15 @@ function portOf(value: string | undefined): number {
  */
 export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<typeof createServer> {
 	const port = portOf(env.ACP_HUB_PORT);
-	const token = env.ACP_HUB_TOKEN?.trim() || undefined;
+	// The same root the extension uses, so an agent installed in one gateway is installed in both.
+	const root = storageRoot(env);
+	// The token both the extension and any other client send: the operator's, or the stored one.
+	const token = readToken(root, env);
 	// The client runs the tools a turn asks for, so the loopback bridge only
 	// relays the calls; a chat's session keeps the call parked for the re-post.
 	const bridge = new McpBridge(stderrLog);
-	// The same root the extension uses, so an agent installed in one gateway is installed in both.
 	const composition = createHeadlessComposition({
-		root: storageRoot(env),
+		root,
 		bridge: toolBridgeOf(bridge),
 		log: stderrLog,
 		owner: ownerOfToken(token),
@@ -122,6 +129,11 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 	};
 	process.on('SIGINT', stop);
 	process.on('SIGTERM', stop);
+	// A window keeps this server's stdin open; when it closes, the window is gone.
+	if (process.argv.includes(EXIT_WITH_PARENT_FLAG)) {
+		process.stdin.resume();
+		exitWithParent(process.stdin, () => stop('SIGTERM'));
+	}
 
 	return server;
 }
