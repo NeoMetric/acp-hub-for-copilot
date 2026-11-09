@@ -1,5 +1,6 @@
 import type { AcpAuthMethod, AcpTokenUsage, ForkPoint } from './agentClient';
 import type { Log } from './logging';
+import type { SessionPolicy } from './sessionPolicy';
 
 /** Values of an agent's settings, after defaults are applied. */
 export type AgentSettings = Record<string, string | number | boolean | string[]>;
@@ -215,6 +216,8 @@ export interface AgentAdapter {
 	/** Whether the token counts the agent reports tell what the prompt cache served; `false` for one whose cache counts are always 0, so no hit rate is claimed. */
 	reportsCache?: boolean;
 	rebuildExpiredSessions?: boolean;
+	/** How this agent continues a stored conversation, what its chats do when their tools change, and how long a tool call may wait; absent, the native default applies. */
+	sessionPolicy?: SessionPolicy;
 	/** Whether a chat copied from another chat, or edited above its last message, can continue the stored conversation with `session/fork`; the agent must also advertise it. */
 	forkChats?: boolean;
 	/** Forks chats by other means than `session/fork`, for an agent that lacks it; used only where the program is installed. */
