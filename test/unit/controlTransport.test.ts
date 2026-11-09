@@ -142,6 +142,7 @@ function fakeControl(overrides: Partial<ControlSurface> = {}) {
 		setEnabled: async () => { },
 		usage: () => ({ status: 'idle', extraWindows: [] }),
 		refreshUsage: async () => { },
+		refresh: () => { },
 		onUsageChange: () => ({ dispose() { } }),
 		...overrides,
 	};

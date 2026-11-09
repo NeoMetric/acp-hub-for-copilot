@@ -74,6 +74,11 @@ export interface ControlSurface {
 	setEnabled(agentId: string, enabled: boolean): Promise<void>;
 	usage(agentId: string): UsageState;
 	refreshUsage(agentId: string, force?: boolean): Promise<void>;
+	/**
+	 * Tells the page to draw an agent again after a change it could not observe
+	 * itself, such as a sign-in that expired mid-turn.
+	 */
+	refresh(agentId: string): void;
 	onUsageChange(listener: (agentId: string) => void): { dispose(): void };
 	/** Tells a listener the page an agent asks the user to open to sign in; `undefined` clears it. */
 	onSignInUrl?(listener: (agentId: string, prompt: SignInUrlPrompt | undefined) => void): { dispose(): void };
@@ -108,6 +113,8 @@ export interface ControlServiceOptions {
  */
 export class ControlService implements ControlSurface {
 	private readonly signInUrlListeners = new Set<(agentId: string, prompt: SignInUrlPrompt | undefined) => void>();
+	/** What the page draws from: a usage read, and a change of an agent the host learns of on its own. */
+	private readonly changeListeners = new Set<(agentId: string) => void>();
 
 	constructor(private readonly options: ControlServiceOptions) {
 		// A usage read is the best proof of the account: limits came back, or the agent asked for credentials.
@@ -116,6 +123,7 @@ export class ControlService implements ControlSurface {
 			if (signedIn !== undefined && options.state.get<boolean>(`signedIn.${agentId}`) !== signedIn) {
 				void options.state.update(`signedIn.${agentId}`, signedIn);
 			}
+			this.changed(agentId);
 		});
 	}
 
@@ -240,7 +248,18 @@ export class ControlService implements ControlSurface {
 	}
 
 	onUsageChange(listener: (agentId: string) => void): { dispose(): void } {
-		return { dispose: this.options.usage.onDidChange(listener) };
+		this.changeListeners.add(listener);
+		return { dispose: () => { this.changeListeners.delete(listener); } };
+	}
+
+	refresh(agentId: string): void {
+		this.changed(agentId);
+	}
+
+	private changed(agentId: string): void {
+		for (const listener of [...this.changeListeners]) {
+			listener(agentId);
+		}
 	}
 
 	private adapter(agentId: string): AgentAdapter {

@@ -26,6 +26,7 @@ function fake(signIn: ControlSurface['signIn']) {
 		setEnabled: async () => { },
 		usage: () => usage,
 		refreshUsage: async () => { },
+		refresh: () => { },
 		onUsageChange: listener => { listeners.push(listener); return { dispose() { } }; },
 	};
 	const read = (next: UsageState) => {

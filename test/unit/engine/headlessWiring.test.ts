@@ -10,11 +10,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHeadlessComposition, type HeadlessGateways } from '../../../src/composition/headless';
 import type { AgentAdapter } from '../../../src/core/adapter';
 import type { ChatRequest } from '../../../src/engine/model/chat';
+import type { ControlState } from '../../../src/ui/messages';
+import { ControlPage } from '../../../src/ui/controlPage';
 
 const MOCK_AGENT = path.resolve(__dirname, '..', '..', 'fixtures', 'mock-acp-agent.cjs');
 
 /** The mock ACP agent, which streams "hello" and ends its turn with the token counts of a model call. */
-function mockAdapter(mode = 'normal'): AgentAdapter {
+function mockAdapter(mode = 'normal', usage?: AgentAdapter['usage']): AgentAdapter {
 	return {
 		id: 'mock',
 		displayName: 'Mock',
@@ -26,18 +28,19 @@ function mockAdapter(mode = 'normal'): AgentAdapter {
 		settings: [],
 		modelPolicy: {} as AgentAdapter['modelPolicy'],
 		systemPrompt: { toolAccess: '', listRequiredArguments: false },
+		usage,
 	};
 }
 
 const cleanups: Array<() => Promise<void>> = [];
 
 /** The gateway as the server builds it, over the mock agent and a store of its own. */
-function gateway(mode = 'normal'): HeadlessGateways {
+function gateway(mode = 'normal', usage?: AgentAdapter['usage']): HeadlessGateways {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-wiring-'));
 	const composition = createHeadlessComposition({
 		root,
 		log: () => undefined,
-		adapters: [mockAdapter(mode)],
+		adapters: [mockAdapter(mode, usage)],
 		bridge: {
 			registerSession: () => Promise.resolve({ url: 'http://127.0.0.1:1/mcp', token: 'token' }),
 			updateTools: () => undefined,
@@ -88,5 +91,30 @@ describe('headless composition wiring', () => {
 		await composition.serviceOf('mock')!.respond(request('chat-auth'), () => undefined, new AbortController().signal).catch(() => undefined);
 
 		await vi.waitFor(() => expect(composition.host.state.get('signedIn.mock')).toBe(false), { timeout: 10_000 });
+	});
+
+	it('redraws the page as signed out when an agent with a usage source refuses for lack of credentials', async () => {
+		let reads = 0;
+		const composition = gateway('auth-required', {
+			read: async () => {
+				reads++;
+				return { windows: [{ label: '5h', usedPercent: 10 }] };
+			},
+		});
+		// A fresh reading proves the account, so nothing about the usage would tell the page the sign-in expired.
+		await composition.usage.refresh(composition.adapters[0], { launch: {} as never, askAgent: async () => undefined }, true);
+		expect(composition.control.usage('mock').signedIn).toBe(true);
+
+		const states: ControlState[] = [];
+		const page = new ControlPage(composition.control, { openExternal: async () => { }, copyToClipboard: async () => { } });
+		page.onState(state => { states.push(state); });
+		await page.handle({ type: 'ready' });
+		expect(states.at(-1)?.agents[0].signedIn).toBe('yes');
+
+		await composition.serviceOf('mock')!.respond(request('chat-expired'), () => undefined, new AbortController().signal).catch(() => undefined);
+
+		await vi.waitFor(() => expect(states.at(-1)?.agents[0].signedIn).toBe('no'), { timeout: 10_000 });
+		expect(composition.host.state.get('signedIn.mock')).toBe(false);
+		expect(reads).toBe(1);
 	});
 });

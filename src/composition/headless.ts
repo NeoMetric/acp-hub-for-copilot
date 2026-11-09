@@ -153,14 +153,19 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 			finished: turn => {
 				usage.recordTurn(adapter.id, adapter.reportsCache === false ? undefined : turn.usage, turn.background);
 				if (!turn.background && adapter.usage && !adapter.usage.onDemandOnly) {
-					void control.refreshUsage(adapter.id, false);
+					void control.refreshUsage(adapter.id, false).catch(error => {
+						log(`Could not read the usage of ${adapter.id}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+					});
 				}
 			},
 			measured: measurement => usage.recordRequest(adapter.id, measurement),
 			signInRequired: () => {
-				void host.state.update(`signedIn.${adapter.id}`, false);
-				// The page draws the sign-in state from the usage it watches, so it is told to read it again.
-				void control.refreshUsage(adapter.id, false);
+				// The page draws the sign-in state from the store, so it is redrawn once the store says signed out.
+				void host.state.update(`signedIn.${adapter.id}`, false)
+					.then(() => control.refresh(adapter.id))
+					.catch(error => {
+						log(`Could not record the expired sign-in of ${adapter.id}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+					});
 			},
 			agentChanged: change => {
 				if (change === 'restarted') {
