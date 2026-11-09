@@ -6,6 +6,7 @@
 import * as path from 'node:path';
 import type { AgentAdapter, AgentSettings, LaunchContext } from '../core/adapter';
 import { ADAPTERS } from '../core/agents';
+import { signIn } from '../core/auth';
 import { findInstalled } from '../core/installers';
 import { readAgentSettings, settingKey } from '../core/settings';
 import { ChatService } from '../engine/chat/ChatService';
@@ -103,6 +104,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 			bridge: options.bridge,
 			resolveLaunch: () => resolveLaunch(adapter),
 			isEnabled: () => host.settings.get<boolean>(settingKey(adapter.id, 'enabled')) !== false,
+			client: { onSignInUrl: prompt => control.reportSignInUrl(adapter.id, prompt) },
 		}));
 	}
 
@@ -124,9 +126,31 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 			}
 		},
 		host: {
-			// A headless host has no window to sign in through: the page shows the
-			// URL the agent asked for, and the agent's own flow finishes there.
-			signIn: async agentId => ({ ok: false, message: `${agentId} needs a sign-in this server cannot do itself; the page shows the URL the agent asks for.` }),
+			signIn: async agentId => {
+				const adapter = ADAPTERS.find(item => item.id === agentId);
+				const service = services.get(agentId);
+				const launch = adapter ? await resolveLaunch(adapter) : undefined;
+				if (!adapter || !service || !launch) {
+					return { ok: false, message: 'Install the agent first.' };
+				}
+				// A browser flow runs inside the agent: the page shows the URL it asks for and this waits for the result.
+				const browser = adapter.auth.find(method => method.kind === 'oauth-browser' && !method.terminalCommand);
+				if (browser) {
+					return signIn(adapter, { kind: 'browser', method: browser }, {
+						store: host.secrets,
+						ctx: launch,
+						runTerminal: async () => { },
+						startAgent: methodId => service.startForSignIn(methodId),
+					});
+				}
+				// A server has no terminal to open, so the page hands over the command to run in one.
+				const terminal = adapter.auth.find(method => method.kind === 'oauth-browser' && method.terminalCommand);
+				if (terminal?.kind === 'oauth-browser' && terminal.terminalCommand) {
+					const command = ['node', `"${launch.entryPath}"`, ...terminal.terminalCommand].join(' ');
+					return { ok: false, message: `This server has no terminal to sign in with. Run this in one, then choose Refresh usage: ${command}` };
+				}
+				return { ok: false, message: `${adapter.displayName} signs in with an API key; save one on this page.` };
+			},
 			launchOf: adapter => resolveLaunch(adapter),
 			confirmUninstall: async () => true,
 			closeSessions: async agentId => { await services.get(agentId)?.closeAllSessions(); },

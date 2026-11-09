@@ -68,9 +68,14 @@ export class ControlPage {
 	private stateVersion = 0;
 
 	constructor(private readonly control: ControlSurface, private readonly host: ControlPageHost) {
-		control.onUsageChange(() => {
+		control.onUsageChange(agentId => {
+			// A read that proves the account makes an earlier sign-in complaint stale.
+			if (control.usage(agentId).signedIn === true) {
+				this.errors.delete(agentId);
+			}
 			void this.publish();
 		});
+		control.onSignInUrl?.((agentId, prompt) => this.showSignInUrl(agentId, prompt));
 	}
 
 	/** Registers where the snapshots go; the returned function unregisters. */

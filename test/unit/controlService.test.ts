@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, InstallContext } from '../../src/core/adapter';
+import { RpcError } from '../../src/engine/acp/protocol';
 import { UsageStore } from '../../src/engine/chat/usage';
 import { ControlService, type ControlHost, type ControlServiceOptions, type SettingValue } from '../../src/engine/control/ControlService';
 import type { ConfigReader, SecretStore, StateStore } from '../../src/engine/ports/state';
@@ -180,6 +181,41 @@ describe('ControlService', () => {
 		await state.update('signedIn.a', false);
 		expect(await service.isSignedIn('a')).toBe(true);
 		expect(await service.hasSavedKey('a')).toBe(true);
+	});
+
+	it('remembers what a usage read proved about the account', async () => {
+		const read = vi.fn()
+			.mockResolvedValueOnce({ windows: [{ label: '5h', usedPercent: 1 }] })
+			.mockRejectedValueOnce(new RpcError('Authentication required', -32000));
+		const { service, state } = setup({ adapters: [adapter('u', { usage: { read } })] });
+
+		await service.refreshUsage('u');
+		expect(state.get('signedIn.u')).toBe(true);
+		expect(await service.isSignedIn('u')).toBe(true);
+
+		await service.refreshUsage('u');
+		expect(state.get('signedIn.u')).toBe(false);
+	});
+
+	it('marks the agent signed in and reads its usage after a sign-in succeeds', async () => {
+		const read = vi.fn(async () => ({ windows: [] }));
+		const { service, state } = setup({ adapters: [adapter('u', { usage: { read } })] });
+		expect(await service.signIn('u')).toEqual({ ok: true });
+		expect(state.get('signedIn.u')).toBe(true);
+		await vi.waitFor(() => expect(read).toHaveBeenCalled());
+	});
+
+	it('leaves the state alone when the sign-in fails, and passes on the URL an agent asks for', async () => {
+		const { service, state } = setup({ host: hostCallbacks({ signIn: async () => ({ ok: false, message: 'no' }) }) });
+		expect(await service.signIn('a')).toEqual({ ok: false, message: 'no' });
+		expect(state.get('signedIn.a')).toBeUndefined();
+
+		const seen: Array<[string, unknown]> = [];
+		const subscription = service.onSignInUrl((id, prompt) => seen.push([id, prompt]));
+		service.reportSignInUrl('a', { url: 'https://example.test', message: 'Open it' });
+		subscription.dispose();
+		service.reportSignInUrl('a', undefined);
+		expect(seen).toEqual([['a', { url: 'https://example.test', message: 'Open it' }]]);
 	});
 
 	it('reads the settings of an agent, with the adapter defaults', () => {

@@ -8,6 +8,16 @@
 			"args": ["--extensionDevelopmentPath=${workspaceFolder}"],
 			"outFiles": ["${workspaceFolder}/dist/**/*.js"],
 			"preLaunchTask": "npm: compile"
+		},
+		{
+			"name": "Run Server",
+			"type": "node",
+			"request": "launch",
+			"program": "${workspaceFolder}/server-dist/server.js",
+			"env": { "ACP_HUB_PORT": "8791" },
+			"outFiles": ["${workspaceFolder}/server-dist/**/*.js"],
+			"console": "integratedTerminal",
+			"preLaunchTask": "npm: compile"
 		}
 	]
 }

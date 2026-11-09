@@ -506,7 +506,9 @@ function chatRequestOf(composition: HeadlessComposition, request: http.IncomingM
  * fail them afterwards, and names the first one the chat is not holding.
  */
 function takeToolResults(parking: ToolCallParking, chatId: string, messages: readonly ChatMessage[]): string | undefined {
-	const results = messages.flatMap(message => message.parts.filter((part): part is Extract<Part, { type: 'tool-result' }> => part.type === 'tool-result'));
+	// Results before the last assistant message answered earlier requests of the same turn; their calls are settled.
+	const lastAssistant = messages.map(message => message.role).lastIndexOf('assistant');
+	const results = messages.slice(lastAssistant + 1).flatMap(message => message.parts.filter((part): part is Extract<Part, { type: 'tool-result' }> => part.type === 'tool-result'));
 	for (const result of results) {
 		if (!parking.has(chatId, result.callId)) {
 			return result.callId;

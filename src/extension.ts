@@ -161,15 +161,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		);
 		void provider.publishModels();
 	}
-	// A usage read is the best proof of the account: limits came back, or the agent asked for credentials.
-	context.subscriptions.push({
-		dispose: usage.onDidChange(id => {
-			const signedIn = usage.get(id).signedIn;
-			if (signedIn !== undefined && state.get<boolean>(`signedIn.${id}`) !== signedIn) {
-				void state.update(`signedIn.${id}`, signedIn);
-			}
-		}),
-	});
 	const sidebar = new SidebarHost(control, {
 		openExternal: async url => { await vscode.env.openExternal(vscode.Uri.parse(url)); },
 		copyToClipboard: async text => { await vscode.env.clipboard.writeText(text); },

@@ -23,6 +23,7 @@
 //   count        replies with the number of session/new requests received
 //   permission   asks the client for permission first, then replies with the outcome
 //   tool         calls the MCP tool "do_a_thing", then replies with what it returned
+//   tool2        calls it twice in a row, then replies with what the second call returned
 //   forget       fails as if the session no longer existed
 // MOCK_ACP_FAIL_FILE: while that file exists the process exits at start.
 
@@ -143,13 +144,15 @@ function handlePrompt(message) {
 		});
 		return;
 	}
-	if (prompt === 'tool') {
+	if (prompt === 'tool' || prompt === 'tool2') {
 		send({
 			jsonrpc: '2.0',
 			method: 'session/update',
 			params: { sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Run do_a_thing', kind: 'other', status: 'pending' } },
 		});
-		callTool(sessionId).then(result => {
+		callTool(sessionId).then(async first => {
+			// `tool2` calls the tool a second time, so one turn has two calls in a row.
+			const result = prompt === 'tool2' ? await callTool(sessionId) : first;
 			text(sessionId, `tool:${result.isError ? 'error:' : ''}${result.text}`);
 			reply(message.id, { stopReason: 'end_turn', _meta: { quota: { token_count: { inputTokens: 3, outputTokens: 2 } } } });
 		}, error => {

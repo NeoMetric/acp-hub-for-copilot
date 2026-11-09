@@ -75,6 +75,13 @@ export interface ControlSurface {
 	usage(agentId: string): UsageState;
 	refreshUsage(agentId: string, force?: boolean): Promise<void>;
 	onUsageChange(listener: (agentId: string) => void): { dispose(): void };
+	/** Tells a listener the page an agent asks the user to open to sign in; `undefined` clears it. */
+	onSignInUrl?(listener: (agentId: string, prompt: SignInUrlPrompt | undefined) => void): { dispose(): void };
+}
+
+export interface SignInUrlPrompt {
+	url: string;
+	message: string;
 }
 
 /** What the service reads and writes, and what it asks the host to do. */
@@ -100,7 +107,17 @@ export interface ControlServiceOptions {
  * in a browser drive the same installs, settings, credentials and usage.
  */
 export class ControlService implements ControlSurface {
-	constructor(private readonly options: ControlServiceOptions) { }
+	private readonly signInUrlListeners = new Set<(agentId: string, prompt: SignInUrlPrompt | undefined) => void>();
+
+	constructor(private readonly options: ControlServiceOptions) {
+		// A usage read is the best proof of the account: limits came back, or the agent asked for credentials.
+		options.usage.onDidChange(agentId => {
+			const signedIn = options.usage.get(agentId).signedIn;
+			if (signedIn !== undefined && options.state.get<boolean>(`signedIn.${agentId}`) !== signedIn) {
+				void options.state.update(`signedIn.${agentId}`, signedIn);
+			}
+		});
+	}
 
 	agents(): readonly AgentAdapter[] {
 		return this.options.adapters;
@@ -151,8 +168,25 @@ export class ControlService implements ControlSurface {
 		return Boolean(await this.options.secrets.get(agentId));
 	}
 
-	signIn(agentId: string): Promise<SignInOutcome> {
-		return this.options.host.signIn(agentId);
+	async signIn(agentId: string): Promise<SignInOutcome> {
+		const outcome = await this.options.host.signIn(agentId);
+		if (outcome.ok) {
+			await this.options.state.update(`signedIn.${agentId}`, true);
+			void this.refreshUsage(agentId);
+		}
+		return outcome;
+	}
+
+	/** Passes on the page an agent asks the user to open to sign in. */
+	reportSignInUrl(agentId: string, prompt: SignInUrlPrompt | undefined): void {
+		for (const listener of [...this.signInUrlListeners]) {
+			listener(agentId, prompt);
+		}
+	}
+
+	onSignInUrl(listener: (agentId: string, prompt: SignInUrlPrompt | undefined) => void): { dispose(): void } {
+		this.signInUrlListeners.add(listener);
+		return { dispose: () => { this.signInUrlListeners.delete(listener); } };
 	}
 
 	async signOut(agentId: string): Promise<void> {

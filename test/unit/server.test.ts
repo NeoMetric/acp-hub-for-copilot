@@ -251,6 +251,22 @@ describe('the HTTP server', () => {
 		expect(body.choices[0].message.content).toBe('tool:the answer is 42');
 	});
 
+	it('continues a turn that calls tools one after another, whose history keeps the settled results', async () => {
+		const url = await start();
+		const model = await firstModel(url);
+		const ask = (messages: unknown[]): Promise<Response> => post(`${url}/v1/chat/completions`, { model, tools: [TOOL], messages });
+		const user = { role: 'user', content: 'tool2' };
+		const first = (await bodyOf(await ask([user]))).choices[0].message.tool_calls[0];
+		const afterFirst = [user, { role: 'assistant', content: null, tool_calls: [first] }, { role: 'tool', tool_call_id: first.id, content: 'one' }];
+
+		const second = (await bodyOf(await ask(afterFirst))).choices[0].message.tool_calls[0];
+		const history = [...afterFirst, { role: 'assistant', content: null, tool_calls: [second] }, { role: 'tool', tool_call_id: second.id, content: 'two' }];
+		const done = await bodyOf(await ask(history));
+
+		expect(done.choices[0].finish_reason).toBe('stop');
+		expect(done.choices[0].message.content).toBe('tool:two');
+	});
+
 	it('refuses a tool result whose call no chat is waiting for', async () => {
 		const url = await start();
 		const model = await firstModel(url);
