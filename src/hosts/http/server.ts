@@ -20,6 +20,13 @@ import { ControlPage } from '../../ui/controlPage';
 import type { ControlAction, ControlState } from '../../ui/messages';
 import { ACTION_ROUTE, EVENTS_ROUTE, STATE_ROUTE } from '../../ui/transport';
 import { DEFAULT_TOOL_CALL_WAIT_MS, rememberHeaders, ToolCallParking } from './host';
+import { API_VERSION, SERVER_NAME, type HealthWire } from './wire';
+
+/** The package version esbuild bakes into the bundle; it is undefined when the sources run unbundled. */
+declare const __ACP_HUB_VERSION__: string | undefined;
+
+/** The version `/health` names: the package's own, or 'dev' for a build that was never made. */
+const VERSION = typeof __ACP_HUB_VERSION__ === 'undefined' ? 'dev' : __ACP_HUB_VERSION__;
 
 /** The most a completion body may hold; a bigger one is refused rather than read into memory. */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -358,9 +365,9 @@ function streamState(page: ControlPage, response: http.ServerResponse): void {
 	});
 }
 
-/** `GET /health`: the agents, whether each is installed, and how many chat sessions are open. */
+/** `GET /health`: who the server is, the agents, whether each is installed, and how many chat sessions are open. */
 async function sendHealth(composition: HeadlessComposition, response: http.ServerResponse): Promise<void> {
-	const agents: Array<{ id: string; installed: boolean; openSessions: number }> = [];
+	const agents: HealthWire['agents'] = [];
 	let openSessions = 0;
 	for (const adapter of composition.adapters) {
 		const service = composition.serviceOf(adapter.id);
@@ -368,7 +375,8 @@ async function sendHealth(composition: HeadlessComposition, response: http.Serve
 		openSessions += sessions;
 		agents.push({ id: adapter.id, installed: service !== undefined && await isInstalled(service, composition), openSessions: sessions });
 	}
-	sendJson(response, 200, { status: 'ok', openSessions, agents });
+	const health: HealthWire = { status: 'ok', name: SERVER_NAME, version: VERSION, apiVersion: API_VERSION, openSessions, agents };
+	sendJson(response, 200, health);
 }
 
 /** `GET /v1/models`: one entry per agent and model, so two agents' models cannot collide. */

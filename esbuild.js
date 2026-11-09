@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 const esbuild = require("esbuild");
+const { version } = require("./package.json");
 
 const watch = process.argv.includes("--watch");
 const tests = process.argv.includes("--tests");
@@ -16,7 +17,9 @@ const shared = {
 	target: "node20",
 	external: ["vscode"],
 	sourcemap: true,
-	logLevel: "info"
+	logLevel: "info",
+	// The bundle names the version it was built from, so `/health` can report it.
+	define: { __ACP_HUB_VERSION__: JSON.stringify(version) }
 };
 
 /** @type {import('esbuild').BuildOptions[]} */

@@ -1,0 +1,71 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) NeoMetric. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/**
+ * The shapes the HTTP server and its clients agree on. Both the extension and
+ * the server bundle this file, so it holds types and constants alone: no Node
+ * or VS Code import may appear here.
+ */
+
+/** The name a client checks before it trusts a `/health` answer. */
+export const SERVER_NAME = 'acp-hub';
+
+/**
+ * The version of this contract. A server that does not name a version is older
+ * than this one and cannot be talked to.
+ */
+export const API_VERSION = 1;
+
+/** `GET /health`: who the server is, and what it can drive right now. */
+export interface HealthWire {
+	status: 'ok';
+	name: typeof SERVER_NAME;
+	version: string;
+	apiVersion: number;
+	openSessions: number;
+	agents: Array<{ id: string; installed: boolean; openSessions: number }>;
+}
+
+/** One reasoning effort a model offers, as the picker shows it. */
+export interface EffortWire {
+	value: string;
+	label: string;
+	description: string;
+}
+
+/** Everything the picker needs about one model, beside its wire id. */
+export interface ModelInfoWire {
+	name: string;
+	family: string;
+	version: string;
+	detail?: string;
+	tooltip?: string;
+	maxInputTokens: number;
+	maxOutputTokens: number;
+	toolCalling: boolean;
+	imageInput: boolean;
+	efforts: EffortWire[];
+	defaultEffort?: string;
+	effortTitle?: string;
+	effortDescription?: string;
+}
+
+/** One entry of `GET /v1/models`, as a stock OpenAI client reads it. */
+export interface ModelWire {
+	id: string;
+	object: 'model';
+	owned_by: string;
+	acp?: ModelInfoWire;
+}
+
+/** The request context the extension sends in the `acp` field of a chat body. */
+export interface AcpRequestExtras {
+	chatId?: string;
+	label?: string;
+	cwd?: string;
+	workspaceFolders?: string[];
+	systemGuidance?: string;
+	chatContext?: string;
+}
