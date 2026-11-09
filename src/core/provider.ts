@@ -14,6 +14,7 @@ import { effortOf } from './models';
 import { createRequestDump } from './requestDump';
 import { resolveCwd, systemGuidanceOf, workspaceFoldersOf } from './requestContext';
 import { createSessionPrompt } from './systemPrompt';
+import { createVsCodeHost, rememberSent, sentOf } from '../hosts/vscode/host';
 import { ChatError } from '../engine/chat/ChatError';
 import { ChatService } from '../engine/chat/ChatService';
 import type { FinishedTurn, ToolBridge } from '../engine/chat/types';
@@ -22,8 +23,7 @@ import type { StreamEvent } from '../engine/model/stream';
 import type { HostPort } from '../engine/ports/host';
 import type { ProviderDeps } from './provider/types';
 import { ModelList } from './provider/modelList';
-import { chatIdOf, chatLabelOf, sessionKey } from './provider/keys';
-import { stateStoreOf } from './stateStore';
+import { sessionKey } from './provider/keys';
 import { CHARS_PER_TOKEN } from '../engine/chat/usageReport';
 
 export { chatIdOf, chatLabelOf, guidanceChangeOf, guidanceDiffers, guidanceLineHashes, keepsSessionAfterFailure, sessionKey, toolsDiffer } from './provider/keys';
@@ -56,9 +56,8 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	private readonly service: ChatService;
 	private readonly log: Log;
 	private readonly models: ModelList;
+	private readonly host: HostPort;
 	private dumpRequest: ReturnType<typeof createRequestDump> | undefined;
-	/** What the workbench sent with each request, for the parts of it only it can read. */
-	private readonly sent = new WeakMap<ChatRequest, { messages: readonly vscode.LanguageModelChatRequestMessage[]; options: vscode.ProvideLanguageModelChatResponseOptions }>();
 	private signInWarningShown = false;
 	private disposed = false;
 
@@ -67,9 +66,18 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		private readonly deps: ProviderDeps,
 	) {
 		this.log = deps.log;
+		this.host = deps.host ?? createVsCodeHost({
+			log: deps.log,
+			state: deps.state,
+			storageRoot: '',
+			windowFolder: () => this.service.workspaceFolder,
+			agentName: () => adapter.displayName,
+			signIn: id => deps.signIn(id),
+			showOutput: () => deps.showOutput(),
+		});
 		this.service = new ChatService({
 			adapter,
-			host: this.host(),
+			host: this.host,
 			bridge: this.bridge(),
 			resolveLaunch: () => deps.resolveLaunch(),
 			createClient: deps.createClient && ((adapter, ctx, clientDeps) => deps.createClient!(adapter, ctx, clientDeps)),
@@ -246,7 +254,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			effort: effortOf(options),
 			systemGuidance: systemGuidanceOf(messages),
 		};
-		this.sent.set(request, { messages, options });
+		rememberSent(request, { messages, options });
 		return request;
 	}
 
@@ -281,7 +289,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		if (settings?.dumpRequests !== true || !this.deps.requestDumpDir) {
 			return;
 		}
-		const sent = this.sent.get(request);
+		const sent = sentOf(request);
 		if (!sent) {
 			return;
 		}
@@ -296,47 +304,6 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	}
 
 	private sessionPrompt: ReturnType<typeof createSessionPrompt> | undefined;
-
-	private windowFolder(): string {
-		return this.service.workspaceFolder;
-	}
-
-	/** Everything the engine may ask of this host. */
-	private host(): HostPort {
-		return {
-			log: this.deps.log,
-			state: stateStoreOf(this.deps.state) ?? emptyState,
-			secrets: emptySecrets,
-			settings: { get: <T>(section: string) => vscode.workspace.getConfiguration('acpHub').get<T>(section) },
-			storageRoot: '',
-			chatIdentity: request => {
-				const sent = this.sent.get(request);
-				const folders = sent ? workspaceFoldersOf(sent.messages) : undefined;
-				return {
-					id: sent ? chatIdOf(sent.messages, sent.options) : request.chatId,
-					// A chat that names no folder this machine has is rooted in the window's
-					// folder, the one the agent was launched in.
-					cwd: request.cwd || this.windowFolder(),
-					workspaceFolders: folders ?? [],
-					label: sent ? chatLabelOf(sent.messages) : undefined,
-				};
-			},
-			guidanceOf: request => request.systemGuidance,
-			executeTool: async () => {
-				throw new Error('This host runs tool calls through the workbench, not the engine.');
-			},
-			ui: {
-				requestSignIn: agentId => this.deps.signIn(agentId),
-				notify: async (message, actions) => {
-					const choice = await vscode.window.showInformationMessage(message, ...(actions ?? []));
-					return choice;
-				},
-				openExternal: async url => {
-					await vscode.env.openExternal(vscode.Uri.parse(url));
-				},
-			},
-		};
-	}
 
 	/** The tool bridge as the engine sees it: neutral tools in, neutral results out. */
 	private bridge(): ToolBridge {
@@ -361,38 +328,13 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			return;
 		}
 		this.signInWarningShown = true;
-
-		void vscode.window.showWarningMessage(
-			`${this.adapter.displayName} needs credentials: sign in or use an API key.`,
-			"Sign In",
-			"Show Output",
-		).then(choice => {
-			if (choice === "Sign In") {
-				this.deps.signIn(this.adapter.id);
-			} else if (choice === "Show Output") {
-				this.deps.showOutput();
-			}
-		});
+		this.host.ui.requestSignIn(this.adapter.id);
 	}
 
 	private describe(error: unknown): string {
 		return error instanceof Error ? error.message : String(error);
 	}
 }
-
-/** An empty store for a provider started without extension state. */
-const emptyState = {
-	get: <T>(_key: string): T | undefined => undefined,
-	update: (_key: string, _value: unknown): Promise<void> => Promise.resolve(),
-	keys: (): readonly string[] => [],
-};
-
-/** The engine never reads a secret, so this host has nothing to hand it. */
-const emptySecrets = {
-	get: (_id: string): Promise<string | undefined> => Promise.resolve(undefined),
-	set: (_id: string, _value: string): Promise<void> => Promise.resolve(),
-	delete: (_id: string): Promise<void> => Promise.resolve(),
-};
 
 /** Reports a thinking chunk when the running VS Code exposes thinking parts. */
 function reportThinking(progress: vscode.Progress<vscode.LanguageModelResponsePart>, text: string): void {

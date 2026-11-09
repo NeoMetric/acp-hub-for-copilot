@@ -38,6 +38,19 @@ describe('engine boundaries', () => {
 		assertEngineIsHostFree();
 	});
 
+	/**
+	 * How Copilot marks up a chat is the VS Code host's business: the engine sees
+	 * neutral messages, and the host that scraped the prompt hands it the chat's
+	 * identity and guidance.
+	 */
+	it('knows nothing of Copilot\'s prompt format, which lives in the VS Code host', () => {
+		expect(existsSync('src/hosts/vscode/identity.ts'), 'the scrapers live in the VS Code host').toBe(true);
+		for (const file of sourceFiles(ENGINE_ROOT)) {
+			expect(readFileSync(file, 'utf8'), `${file} names a block only Copilot's prompt has`).not.toMatch(/<workspace_info>|<environment_context>|_conversationId/);
+		}
+		expect(readFileSync('src/core/provider.ts', 'utf8'), 'the provider no longer reads the conversation id').not.toContain('_conversationId');
+	});
+
 	/** The chat modules that live in the engine; each keeps a shim at its old path. */
 	for (const name of ['cache', 'sessionStore', 'sessionFingerprint', 'usage', 'systemPrompt']) {
 		it(`holds ${name}.ts without reaching for a host`, () => {

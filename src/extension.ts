@@ -13,6 +13,7 @@ import { AgentSecretStore } from './core/secrets';
 import { readAgentSettings, settingKey } from './core/settings';
 import { recordStoragePath } from './core/storageCleanup';
 import { UsageStore } from './core/usage';
+import { createVsCodeHost } from './hosts/vscode/host';
 import { SidebarHost } from './sidebar/host';
 import type { SettingValue } from './sidebar/messages';
 
@@ -26,6 +27,19 @@ export function activate(context: vscode.ExtensionContext): void {
 	const storageDir = context.globalStorageUri.fsPath;
 	const installEnv = { storageDir, extensionDir: context.extensionUri.fsPath, log, progress: (message: string) => log(message) };
 	recordStoragePath(installEnv.extensionDir, storageDir);
+	// Everything the engine may ask of this host — the extension state, the credentials,
+	// the settings and the window's folder — for the providers of every agent.
+	const host = createVsCodeHost({
+		log,
+		state: context.globalState,
+		secrets,
+		storageRoot: storageDir,
+		settings: { get: <T>(section: string) => vscode.workspace.getConfiguration('acpHub').get<T>(section) },
+		windowFolder: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? storageDir,
+		agentName: id => findAdapter(id)?.displayName ?? id,
+		signIn: id => { void chooseSignIn(id); },
+		showOutput: () => output.show(),
+	});
 	for (const adapter of ADAPTERS) { killStrayAgents(path.join(storageDir, adapter.id, 'agents')); }
 
 	function adapterFor(id: string): AgentAdapter {
@@ -70,7 +84,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	}
 	for (const adapter of ADAPTERS) {
 		const provider = new AcpProvider(adapter, {
-			log: scopedLog(output, adapter.id), bridge, state: context.globalState,
+			log: scopedLog(output, adapter.id), bridge, state: context.globalState, host,
 			resolveLaunch: () => resolveLaunch(adapter),
 			isEnabled: () => vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(adapter.id, 'enabled'), true),
 			client: {
