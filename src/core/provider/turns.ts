@@ -4,12 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { AgentAdapter } from '../adapter';
+import type { AgentAdapter, AgentSettings } from '../adapter';
 import type { AcpSessionUpdate, AcpTokenUsage } from '../agentClient';
 import type { RequestMeasurement } from '../cache';
 import type { AcpContentBlock } from '../convert';
 import type { Log } from '../logging';
 import { RpcConnectionClosedError } from '../rpc';
+import { effectiveToolWaitMs, type SessionPolicy } from '../sessionPolicy';
 import type { SavedSessionStore } from '../sessionStore';
 import { checkpointOf, noteAgentUpdate } from './checkpoints';
 import { CANCELLED_TOOL_CALL, clearToolDeadline, disposeCancellations, failPendingToolCalls, releaseHeldToolCalls, sleepUntilActivity, trackCancellation, wakeTurn, watchToolCalls } from './heldCalls';
@@ -34,6 +35,9 @@ export interface TurnHost {
 	log: Log;
 	models: ModelList;
 	saved: SavedSessionStore;
+	/** The session policy to ask, and the settings it reads: a tool call's wait comes from them. */
+	policy(): SessionPolicy;
+	settings(): AgentSettings | undefined;
 	agent(): AgentApi;
 	finished(turn: FinishedTurn): void;
 	measured(measurement: RequestMeasurement): void;
@@ -303,10 +307,10 @@ export class TurnRunner {
 		throw new vscode.LanguageModelError(`${name} failed: ${describe(turn.error)}`);
 	}
 
-	/** After the response handed tools over, fails them if Copilot never comes back before the agent's own timeout. */
+	/** After the response handed tools over, fails them if Copilot never comes back before the policy's wait. */
 	private watchTools(key: string, session: ChatSession, turn: ActiveTurn): void {
-		const timeoutMs = this.host.adapter.toolWaitTimeoutMs;
-		if (timeoutMs === undefined) {
+		const timeoutMs = effectiveToolWaitMs(this.host.policy(), this.host.settings() ?? {});
+		if (!Number.isFinite(timeoutMs)) {
 			return;
 		}
 		watchToolCalls(turn, timeoutMs, () => {

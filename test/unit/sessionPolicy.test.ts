@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { claudeAdapter } from '../../src/adapters/claude';
 import type { ConversationForker } from '../../src/core/adapter';
 import { nativeSessionPolicy } from '../../src/core/nativeSessionPolicy';
+import { flagSessionPolicy } from '../../src/core/provider/flagSessionPolicy';
 import { effectiveToolWaitMs, policyOf, type ContinuationInput, type SessionPolicy } from '../../src/core/sessionPolicy';
 import type { SavedSession } from '../../src/core/sessionStore';
 
@@ -49,6 +50,18 @@ describe('nativeSessionPolicy', () => {
 		expect(nativeSessionPolicy.planContinuation(input({ agentSupportsFork: false }))).toEqual({ how: 'rebuild' });
 	});
 
+	it('still forks externally when two chats share the stored session and one of them is mid-turn', () => {
+		const plan = nativeSessionPolicy.planContinuation(input({
+			live: [
+				{ chatKey: 'a', sessionId: saved.sessionId, hasTurn: true },
+				{ chatKey: 'b', sessionId: saved.sessionId, hasTurn: false },
+			],
+			editedOwnChat: true,
+			externalForker: fakeForker,
+		}));
+		expect(plan).toEqual({ how: 'fork-external', keepSourceId: false, restartFirst: false });
+	});
+
 	it('opens the session with the rebuilt prompt', () => {
 		expect(nativeSessionPolicy.promptForOpen({ savedPrompt: undefined, rebuilt: 'rebuilt' })).toBe('rebuilt');
 		expect(nativeSessionPolicy.promptForOpen({ savedPrompt: undefined, rebuilt: undefined })).toBeUndefined();
@@ -56,6 +69,10 @@ describe('nativeSessionPolicy', () => {
 
 	it('ignores the saved prompt and still opens with the rebuilt one', () => {
 		expect(nativeSessionPolicy.promptForOpen({ savedPrompt: 'saved', rebuilt: 'rebuilt' })).toBe('rebuilt');
+	});
+
+	it('never keeps the saved prompt', () => {
+		expect(nativeSessionPolicy.keepsSavedPrompt).toBe(false);
 	});
 
 	it('reopens the session when its tools change', () => {
@@ -82,6 +99,12 @@ describe('effectiveToolWaitMs', () => {
 		expect(effectiveToolWaitMs(policyReturning(5000), {})).toBe(5000);
 		expect(effectiveToolWaitMs(nativeSessionPolicy, {})).toBe(Number.POSITIVE_INFINITY);
 		expect(effectiveToolWaitMs(nativeSessionPolicy, { toolWaitTimeoutMs: 2500 })).toBe(2500);
+	});
+});
+
+describe('flagSessionPolicy', () => {
+	it('keeps the saved prompt for a Google-like flag set', () => {
+		expect(flagSessionPolicy({ ...claudeAdapter, keepsSessionPrompt: true }).keepsSavedPrompt).toBe(true);
 	});
 });
 

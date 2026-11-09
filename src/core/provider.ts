@@ -13,11 +13,14 @@ import type { RequestMeasurement } from './cache';
 import { carriesToolResults, characterCountOf, diverged, lastUserMessageIndex, persistentFingerprints, skillContextAfterReply, userWordsAfterReply } from './convert';
 import type { Log } from './logging';
 import { acpModelValue, effortOf } from './models';
+import { nativeSessionPolicy } from './nativeSessionPolicy';
 import { createRequestDump, summarizeRequest } from './requestDump';
 import { isAuthRequiredError } from './rpc';
+import { policyOf, type SessionPolicy } from './sessionPolicy';
 import { SavedSessionStore, toolsHashOf } from './sessionStore';
 import { createSessionPrompt } from './systemPrompt';
 import { buildPromptBlocks } from './provider/assemble';
+import { flagSessionPolicy } from './provider/flagSessionPolicy';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './provider/heldCalls';
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESSION_IDLE_MS } from './provider/idle';
 import { chatContextOf, chatIdOf, chatLabelOf, describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, sessionKey, toolChangeOf, toolsDiffer } from './provider/keys';
@@ -116,6 +119,8 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			log: deps.log,
 			models: this.models,
 			saved: this.saved,
+			policy: () => this.policy,
+			settings: () => this.settings,
 			agent: () => this.agent,
 			finished: turn => this.turnEmitter.fire(turn),
 			measured: measurement => this.requestEmitter.fire(measurement),
@@ -132,6 +137,15 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 
 	private get settings(): AgentSettings | undefined {
 		return this.launch?.settings;
+	}
+
+	/**
+	 * The session policy the provider asks: the adapter's own, or the one its flags still describe while
+	 * it declares none. The second half goes once every adapter names a policy.
+	 */
+	private get policy(): SessionPolicy {
+		const policy = policyOf(this.adapter);
+		return policy === nativeSessionPolicy ? flagSessionPolicy(this.adapter) : policy;
 	}
 
 	/** Whether the agent reports the usage of each model call, not only of the turn. */
@@ -275,9 +289,9 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			await this.turns.abort(session);
 		}
 
-		// An agent that refreshes its tool list on `tools/list_changed` takes a changed tool set
-		// from `applyTools` below; any other reads its tools only when its session opens.
-		const toolsChanged = this.adapter.refreshesTools !== true && session !== undefined && toolsDiffer(session.openedTools, tools);
+		// An agent that takes a changed tool set in place gets it from `applyTools` below; any other reads
+		// its tools only when its session opens.
+		const toolsChanged = this.policy.toolsChangedAction() === 'reopen' && session !== undefined && toolsDiffer(session.openedTools, tools);
 		if (session && tools.length > 0 && (!session.hasPrompt || toolsChanged)) {
 			// The chat was opened by a request that offered no tools, such as a title,
 			// and so got no workspace prompt; or Copilot now offers other tools than the
@@ -549,16 +563,20 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 				? undefined
 				: await this.buildSessionPrompt(tools, context.folders, context.guidance);
 			lap?.(`session prompt built (${systemPromptAppend?.length ?? 0} character(s))`);
-			// The prompt leads the conversation, so a reworded one misses the cache for all of it. The
-			// saved conversation keeps the prompt it began with; what changed in the guidance is sent as a message.
-			if (this.adapter.keepsSessionPrompt && reuse && systemPromptAppend && reuse.saved.promptHash !== promptHashOf(systemPromptAppend)) {
-				const kept = await this.promptArchive().recall(reuse.saved.promptHash);
-				if (kept) {
-					this.log(`[reuse] Sending the session prompt the saved session began with (${reuse.saved.promptHash}) instead of the rebuilt one (${promptHashOf(systemPromptAppend)}), so the cache can serve the conversation.`, 'debug');
-					systemPromptAppend = kept;
+			// The prompt leads the conversation, so a reworded one misses the cache for all of it. A policy
+			// that opens a stored conversation with the prompt it began with is sent that one; what changed
+			// in the guidance is sent as a message.
+			const policy = this.policy;
+			if (policy.keepsSavedPrompt) {
+				const savedHash = reuse?.saved.promptHash;
+				const savedPrompt = savedHash && systemPromptAppend && savedHash !== promptHashOf(systemPromptAppend)
+					? await this.promptArchive().recall(savedHash)
+					: undefined;
+				const chosen = policy.promptForOpen({ savedPrompt, rebuilt: systemPromptAppend });
+				if (savedPrompt !== undefined && chosen === savedPrompt) {
+					this.log(`[reuse] Sending the session prompt the saved session began with (${savedHash}) instead of the rebuilt one (${promptHashOf(systemPromptAppend)}), so the cache can serve the conversation.`, 'debug');
 				}
-			}
-			if (this.adapter.keepsSessionPrompt) {
+				systemPromptAppend = chosen;
 				void this.promptArchive().remember(systemPromptAppend);
 			}
 			const options: CreateSessionOptions = {
@@ -647,12 +665,21 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 	}
 
 	/**
-	 * Opens a copy of the stored conversation, or returns `undefined` when it cannot be copied now:
-	 * the program that forks for this agent is missing.
+	 * Continues the stored conversation as the policy says: by resuming it, by copying it with the agent's own
+	 * fork or the adapter's forker, or not at all. Returns `undefined` when it cannot be continued now: the
+	 * policy says to start over, or the program that forks for this agent is missing.
 	 * Whatever fails throws, and the caller falls back to a new session.
 	 */
 	private async fork(reuse: Reuse, options: CreateSessionOptions, point: ForkPoint | undefined, editedOwnChat: boolean): Promise<AgentSession | undefined> {
 		const source = reuse.saved.sessionId;
+		const live = [...this.sessions].map(([chatKey, session]) => ({ chatKey, sessionId: session.acp.sessionId, hasTurn: session.turn !== undefined }));
+		const plan = this.policy.planContinuation({ saved: reuse.saved, live, editedOwnChat, agentSupportsFork: this.agent.supportsFork, externalForker: this.adapter.forker });
+		if (plan.how === 'rebuild') {
+			return undefined;
+		}
+		if (plan.how === 'resume') {
+			return this.agent.resumeSession(source, options);
+		}
 		const running = [...this.sessions.values()].find(session => session.acp.sessionId === source && session.turn);
 		if (running) {
 			// A chat the user stopped, or left, to branch off may still be winding down. The fork point is a
@@ -660,9 +687,12 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			this.log(`[reuse] Saved session ${source} is in the middle of a turn; cancelling it before the fork.`, 'warn');
 			await this.turns.abort(running);
 		}
+		if (plan.how === 'fork-native') {
+			return this.agent.forkSession(source, options, point);
+		}
 		const forker = this.adapter.forker;
 		if (!forker) {
-			return this.agent.forkSession(source, options, point);
+			return undefined;
 		}
 		// Without a fork point there is no step to cut at.
 		if (!point || this.forkNoticeState() === 'declined') {
@@ -673,14 +703,11 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 			this.noteMissingForker(forker);
 			return undefined;
 		}
-		// Rewinding the source only helps if the agent reads it again, which needs a restart; a restart
-		// would end the turn of another chat, so then the fork takes an id of its own instead.
-		const busyChats = [...this.sessions].filter(([, session]) => session.turn !== undefined && session.acp.sessionId !== source).map(([chatKey]) => chatKey);
-		// Keeping the source's id moves the chat that had the source onto a copy, which misses the cache. That is
-		// right for an edit, whose chat is leaving the old turns behind, but a copy of another chat leaves that chat in place.
-		const keepSourceId = editedOwnChat && busyChats.length === 0;
-		if (editedOwnChat && !keepSourceId) {
-			this.log(`[reuse] The fork takes a new session id, which misses the cache once, because ${busyChats.length} other chat(s) are in the middle of a turn: ${busyChats.join(', ')}.`, 'warn');
+		if (editedOwnChat && !plan.keepSourceId) {
+			const busy = live.filter(session => session.hasTurn && session.sessionId !== source).map(session => session.chatKey);
+			if (busy.length > 0) {
+				this.log(`[reuse] The fork takes a new session id, which misses the cache once, because ${busy.length} other chat(s) are in the middle of a turn: ${busy.join(', ')}.`, 'warn');
+			}
 		}
 		// An edited chat leaves its old session, and a rewind needs it let go of. A copy leaves the source open, so its
 		// chat goes on in the live session: closing and resuming a conversation makes the agent send all of it uncached.
@@ -694,7 +721,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		// The restart runs beside the fork, which uses a language server of its own, and is waited on
 		// before the copy is opened. Should it fail, the rewound conversation is not read again, so the
 		// chat is rebuilt from its transcript rather than continued on the wrong one.
-		const restarting = keepSourceId && this.adapter.restartAfterFork
+		const restarting = plan.restartFirst
 			? this.client?.restart().then(() => {
 				// Starting it again takes a few seconds; do that while the fork runs, and let the resume
 				// report a start that fails.
@@ -705,7 +732,7 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 				return false;
 			})
 			: undefined;
-		const forked = await forker.fork(program, { sessionId: source, point, cwd: options.cwd, keepSourceId }, this.log);
+		const forked = await forker.fork(program, { sessionId: source, point, cwd: options.cwd, keepSourceId: plan.keepSourceId }, this.log);
 		if (forked.sourceMovedTo) {
 			if (restarting && !await restarting) {
 				return undefined;
@@ -841,9 +868,9 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		}
 		this.deps.bridge.updateTools(session.endpoint.token, tools);
 		session.toolCount = tools.length;
-		// Only an agent that refreshes its list has the new tools now; any other keeps
+		// Only an agent that takes the list again has the new tools now; any other keeps
 		// what it opened with, so the next request still sees the difference.
-		if (this.adapter.refreshesTools === true && toolsDiffer(session.openedTools, tools)) {
+		if (this.policy.toolsChangedAction() === 'list-changed' && toolsDiffer(session.openedTools, tools)) {
 			const names = tools.map(tool => tool.name);
 			this.log(`Tools of the chat session changed: ${describeToolChange(toolChangeOf(session.openedTools, names))}.`, 'debug');
 			session.openedTools = new Set(names);

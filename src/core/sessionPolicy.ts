@@ -55,6 +55,8 @@ export interface SessionPolicy {
 	planContinuation(input: ContinuationInput): ContinuationPlan;
 	/** The session prompt to open with, chosen from the saved prompt and the one the core rebuilt. */
 	promptForOpen(input: OpenPromptInput): string | undefined;
+	/** Whether opening a store-backed session must be given the prompt it was saved with. */
+	readonly keepsSavedPrompt: boolean;
 	/** What a chat whose offered tools changed needs: `list-changed` for an agent that fetches the list again, `reopen` for one that reads it only on opening. */
 	toolsChangedAction(): 'reopen' | 'list-changed';
 	/** How long (ms) a tool call may wait for Copilot to pick it up. */

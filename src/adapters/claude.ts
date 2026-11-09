@@ -4,7 +4,9 @@ import * as path from 'node:path';
 import type { AcpTokenUsage } from '../core/agentClient';
 import type { AgentAdapter, AgentSettings, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
 import { HOST_IDENTITY } from '../core/hostIdentity';
+import { nativeSessionPolicy } from '../core/nativeSessionPolicy';
 import { REGISTRY, registryAgent } from '../core/registry';
+import type { SessionPolicy } from '../core/sessionPolicy';
 import { vendorOf } from '../core/vendors';
 import { claudeModelPolicy } from './claudeModels';
 import { claudeUsage } from './claudeUsage';
@@ -155,6 +157,16 @@ function signInCompleted(startedAt: number): boolean {
 
 const registry = registryAgent(ID);
 
+/**
+ * Claude reuses a stored conversation by forking it whenever a chat is copied or edited, and it takes
+ * a changed tool list in place instead of needing a new session.
+ */
+const sessionPolicy: SessionPolicy = {
+	...nativeSessionPolicy,
+	planContinuation: () => ({ how: 'fork-native' }),
+	toolsChangedAction: () => 'list-changed',
+};
+
 export const claudeAdapter: AgentAdapter = {
 	id: ID,
 	displayName: registry.displayName,
@@ -174,6 +186,7 @@ export const claudeAdapter: AgentAdapter = {
 		listRequiredArguments: false,
 	},
 	usage: claudeUsage,
+	sessionPolicy,
 	refreshesTools: true,
 	forkChats: true,
 	signInCompleted,
