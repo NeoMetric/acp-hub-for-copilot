@@ -270,7 +270,7 @@ the server: the server never runs a shell or edits a file on a caller's behalf
    cache, sign-in flags, the visible-agent list and the global settings — see
    "One store, two gateways" below. There is no per-host namespace.
 4. **Tool waits always bounded.** The bridge sets `requestTimeout = 0`
-   (`src/core/bridge.ts:178`); replace with a finite per-turn wait from
+   (`src/engine/mcp/bridge.ts:214`); replace with a finite per-turn wait from
    `SessionPolicy.toolWaitMs`, and clean up a request whose client disappears.
 5. **Launch resolution cached.** `resolveLaunch` does a filesystem probe and a
    secret read on every model-list refresh (`src/core/provider.ts:147-151`);

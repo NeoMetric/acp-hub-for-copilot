@@ -5,13 +5,13 @@
 
 import * as http from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type * as vscode from 'vscode';
+import type { ToolDef } from '../../src/engine/model/chat';
 import { McpBridge, limitTextContent, toMcpContent, type McpServerEndpoint, type McpToolExecutor } from '../../src/core/bridge';
 import { LanguageModelDataPart, LanguageModelTextPart } from './vscode-mock';
 
 const tools = [
 	{ name: 'read_file', description: 'Reads a file', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } },
-] as unknown as vscode.LanguageModelChatTool[];
+] as unknown as ToolDef[];
 
 describe('McpBridge', () => {
 	let bridge: McpBridge;
@@ -91,7 +91,7 @@ describe('McpBridge', () => {
 	});
 
 	it('lists the same tools in the same order however Copilot orders them', async () => {
-		const two = [{ name: 'b', description: '' }, { name: 'a', description: '' }] as unknown as vscode.LanguageModelChatTool[];
+		const two = [{ name: 'b', description: '' }, { name: 'a', description: '' }] as unknown as ToolDef[];
 		bridge.updateTools(endpoint.token, two);
 		const first = JSON.stringify((await rpc('tools/list')).result);
 		bridge.updateTools(endpoint.token, [...two].reverse());
@@ -134,7 +134,7 @@ describe('McpBridge', () => {
 		};
 
 		await readUntil('waiting for notifications');
-		bridge.updateTools(endpoint.token, [{ name: 'write_file', description: '' }] as unknown as vscode.LanguageModelChatTool[]);
+		bridge.updateTools(endpoint.token, [{ name: 'write_file', description: '' }] as unknown as ToolDef[]);
 		expect(await readUntil('notifications/tools/list_changed')).toContain('notifications/tools/list_changed');
 
 		await reader.cancel();
@@ -179,7 +179,7 @@ describe('McpBridge', () => {
 	});
 
 	it('stays quiet when the same tools arrive again in another order', () => {
-		const two = [{ name: 'a', description: '' }, { name: 'b', description: '' }] as unknown as vscode.LanguageModelChatTool[];
+		const two = [{ name: 'a', description: '' }, { name: 'b', description: '' }] as unknown as ToolDef[];
 		bridge.updateTools(endpoint.token, two);
 		bridge.updateTools(endpoint.token, [...two].reverse());
 

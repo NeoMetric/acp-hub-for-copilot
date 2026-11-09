@@ -20,8 +20,8 @@ export interface HeadlessCompositionOptions {
 	readonly root: string;
 	/**
 	 * The loopback MCP bridge the request's tools reach the HTTP client through.
-	 * The extension's `McpBridge` speaks in VS Code's message parts and cannot be
-	 * built outside it, so the server supplies this one.
+	 * The engine's `McpBridge` is host-neutral, so a headless host passes one of
+	 * those; the server may supply its own.
 	 */
 	readonly bridge: ToolBridge;
 	/** Where the host tells what it does; the server's stderr by default. */

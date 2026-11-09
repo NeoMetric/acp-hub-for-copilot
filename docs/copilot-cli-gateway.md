@@ -57,7 +57,7 @@ Works for any terminal and any folder because the extension host lives as long a
 This already works in the extension and carries over:
 
 1. Client sends a chat request with its tool definitions.
-2. The gateway opens an ACP session and registers those tools with a loopback MCP server (one bearer token per session). `src/core/bridge.ts`.
+2. The gateway opens an ACP session and registers those tools with a loopback MCP server (one bearer token per session). `src/engine/mcp/bridge.ts`.
 3. The agent calls an MCP tool; the gateway does not run it. It writes the call into the response (`tool_calls` delta for OpenAI, `tool_use` for Anthropic) and ends the response with `finish_reason: tool_calls`. The agent's turn stays suspended. `src/core/provider/heldCalls.ts`.
 4. The client runs the tool (keeping its own permission prompts) and sends a new request with the result.
 5. The gateway matches the result by call id, completes the waiting MCP call, and streams the agent's continuation.

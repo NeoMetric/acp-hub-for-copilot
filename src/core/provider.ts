@@ -6,6 +6,7 @@
 import * as vscode from 'vscode';
 import type { AgentAdapter, AgentSettings } from './adapter';
 import { AdapterNotInstalledError } from '../engine/acp/agentClient';
+import type { CancellationToken } from '../engine/acp/emitter';
 import type { McpToolResult } from './bridge';
 import type { RequestMeasurement } from './cache';
 import { characterCountOf, readTranscriptOptions } from './convert';
@@ -310,14 +311,14 @@ export class AcpProvider implements vscode.LanguageModelChatProvider<vscode.Lang
 		const bridge = this.deps.bridge;
 		return {
 			registerSession: (tools, execute, options) => bridge.registerSession(
-				tools as unknown as readonly vscode.LanguageModelChatTool[],
+				tools,
 				async (name, input, token): Promise<McpToolResult | undefined> => {
 					const result = await execute(name, input, toAbortSignal(token));
 					return result && { content: result.content.map(toWorkbenchPart), isError: result.isError };
 				},
 				options,
 			),
-			updateTools: (token, tools) => bridge.updateTools(token, tools as unknown as readonly vscode.LanguageModelChatTool[]),
+			updateTools: (token, tools) => bridge.updateTools(token, tools),
 			unregisterSession: token => bridge.unregisterSession(token),
 		};
 	}
@@ -391,8 +392,8 @@ function toWorkbenchPart(part: Part): unknown {
 	}
 }
 
-/** A workbench cancellation as the plain signal the engine watches. */
-function toAbortSignal(token: vscode.CancellationToken): AbortSignal {
+/** A cancellation the engine reports as the plain signal the rest of the engine watches. */
+function toAbortSignal(token: CancellationToken): AbortSignal {
 	const controller = new AbortController();
 	if (token.isCancellationRequested) {
 		controller.abort();
