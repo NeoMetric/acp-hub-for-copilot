@@ -56,7 +56,17 @@ vi.mock('../../src/core/secrets', () => ({
   AgentSecretStore: class { get() { return Promise.resolve(undefined); } onDidChange() { return { dispose() {} }; } dispose() {} },
 }));
 vi.mock('../../src/sidebar/host', () => ({
-  SidebarHost: class { constructor(deps: typeof mocks.sidebarControl[number]) { mocks.sidebarControl.push(deps); } },
+  SidebarHost: class { },
+}));
+// The window drives the page's control surface until Task 9 wires the relay in; these tests read it from there.
+vi.mock('../../src/ui/controlPage', () => ({
+  ControlPage: class {
+    constructor(control: typeof mocks.sidebarControl[number]) { mocks.sidebarControl.push(control); }
+    handle() { return Promise.resolve(); }
+    onState() { return () => undefined; }
+    refresh() { }
+    showSignInUrl() { }
+  },
 }));
 vi.mock('../../src/core/processes', () => ({ killStrayAgents() {}, killAllChildren() {} }));
 // Google reads its quota from the Antigravity CLI's language server rather than through the chat.

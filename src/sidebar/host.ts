@@ -5,12 +5,10 @@
 
 import { randomBytes } from 'crypto';
 import type * as vscode from 'vscode';
-import type { ControlSurface } from '../engine/control/ControlService';
-import { ControlPage } from '../ui/controlPage';
-import type { ControlAction, ControlState } from '../ui/messages';
+import type { ControlAction } from '../ui/messages';
 import type { ControlTransport } from '../ui/transport';
 
-/** What the sidebar needs from the VS Code window around it; everything else it asks the control service. */
+/** What the sidebar needs from the VS Code window around it; everything else it asks the server. */
 export interface SidebarPageDeps {
 	openExternal(url: string): Promise<void>;
 	copyToClipboard(text: string): Promise<void>;
@@ -20,27 +18,14 @@ export interface SidebarPageDeps {
 
 /**
  * The page as VS Code hosts it: the view that loads the bundle, and the
- * `postMessage` channel the page and the host speak over. The state the page
- * draws and the actions it sends are the shared {@link ControlPage}'s, so the
- * browser tab shows exactly what this view shows.
+ * `postMessage` channel the page and the host speak over. The transport it
+ * draws from is the relay to the server, so the browser tab shows exactly what
+ * this view shows.
  */
-export class SidebarHost implements vscode.WebviewViewProvider, ControlTransport {
-	private readonly page: ControlPage;
+export class SidebarHost implements vscode.WebviewViewProvider {
 	private unsubscribe: (() => void) | undefined;
 
-	constructor(control: ControlSurface, private readonly deps: SidebarPageDeps) {
-		this.page = new ControlPage(control, { openExternal: deps.openExternal, copyToClipboard: deps.copyToClipboard });
-	}
-
-	/** An action the page sent over `postMessage`. */
-	send(action: ControlAction): void {
-		void this.handleMessage(action);
-	}
-
-	/** Where the page's snapshots go; the view posts them over `postMessage`. */
-	onState(listener: (state: ControlState) => void): () => void {
-		return this.page.onState(listener);
-	}
+	constructor(private readonly transport: ControlTransport, private readonly deps: SidebarPageDeps) { }
 
 	resolveWebviewView(view: vscode.WebviewView): void {
 		view.webview.options = {
@@ -49,31 +34,17 @@ export class SidebarHost implements vscode.WebviewViewProvider, ControlTransport
 		};
 		view.webview.html = this.buildHtml(view.webview);
 		this.unsubscribe?.();
-		const unsubscribe = this.onState(state => {
+		const unsubscribe = this.transport.onState(state => {
 			void view.webview.postMessage({ type: 'state', ...state });
 		});
 		this.unsubscribe = unsubscribe;
-		view.webview.onDidReceiveMessage((action: ControlAction) => { this.send(action); });
+		view.webview.onDidReceiveMessage((action: ControlAction) => { this.transport.send(action); });
 		view.onDidDispose(() => {
 			unsubscribe();
 			if (this.unsubscribe === unsubscribe) {
 				this.unsubscribe = undefined;
 			}
 		});
-	}
-
-	/** Redraws the cards, for a change the host learned of outside the sidebar, such as an expired sign-in. */
-	refresh(): void {
-		this.page.refresh();
-	}
-
-	/** Shows the page an agent wants the user to open to sign in, opening it too; `undefined` clears it. */
-	showSignInUrl(adapterId: string, prompt: { url: string; message: string } | undefined): void {
-		this.page.showSignInUrl(adapterId, prompt);
-	}
-
-	async handleMessage(action: ControlAction): Promise<void> {
-		await this.page.handle(action);
 	}
 
 	private buildHtml(webview: vscode.Webview): string {

@@ -20,6 +20,7 @@ import type { ConfigReader } from './engine/ports/state';
 import { agentsRoot, storageRoot } from './engine/store/paths';
 import { createVsCodeHost } from './hosts/vscode/host';
 import { SidebarHost } from './sidebar/host';
+import { ControlPage } from './ui/controlPage';
 
 export function activate(context: vscode.ExtensionContext): void {
 	const output = vscode.window.createOutputChannel('ACP Hub', { log: true });
@@ -138,7 +139,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				log: scopedLog(output, adapter.id),
 				storageDir: path.join(storageDir, adapter.id),
 				clientVersion: String(context.extension.packageJSON.version),
-				onSignInUrl: prompt => sidebar.showSignInUrl(adapter.id, prompt),
+				onSignInUrl: prompt => page.showSignInUrl(adapter.id, prompt),
 			},
 			requestDumpDir: context.globalStorageUri,
 			profilePromptsDir: path.join(path.dirname(path.dirname(extensionStorageDir)), 'prompts'),
@@ -150,7 +151,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			provider,
 			provider.onDidRequireSignIn(() => {
 				void state.update(`signedIn.${adapter.id}`, false);
-				sidebar.refresh();
+				page.refresh();
 			}),
 			provider.onDidMeasureRequest(measurement => usage.recordRequest(adapter.id, measurement)),
 			provider.onDidFinishTurn(turn => {
@@ -161,7 +162,13 @@ export function activate(context: vscode.ExtensionContext): void {
 		);
 		void provider.publishModels();
 	}
-	const sidebar = new SidebarHost(control, {
+	// Task 9 wires the sidebar to the server's relay; until then the window drives
+	// the control service in process, and the sidebar draws what that page publishes.
+	const page = new ControlPage(control, {
+		openExternal: async url => { await vscode.env.openExternal(vscode.Uri.parse(url)); },
+		copyToClipboard: async text => { await vscode.env.clipboard.writeText(text); },
+	});
+	const sidebar = new SidebarHost({ send: action => { void page.handle(action); }, onState: listener => page.onState(listener) }, {
 		openExternal: async url => { await vscode.env.openExternal(vscode.Uri.parse(url)); },
 		copyToClipboard: async text => { await vscode.env.clipboard.writeText(text); },
 		assetUri: relative => vscode.Uri.joinPath(context.extensionUri, relative),
