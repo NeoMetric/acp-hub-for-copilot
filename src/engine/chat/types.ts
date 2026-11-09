@@ -125,6 +125,8 @@ export interface Reuse {
 }
 
 export interface ChatSession {
+	/** The agent process the session lives in; a chat rooted in another workspace has another one. */
+	readonly agent: AgentApi;
 	readonly acp: AgentSession;
 	readonly endpoint: BridgeEndpoint;
 	/** The guidance in it is what the agent has been told, so it follows the guidance changes sent to the session. */

@@ -36,6 +36,7 @@ export class WarmSession {
 
 	private session: AgentSession | undefined;
 	private creation: Promise<AgentSession> | undefined;
+	private agentClient: AgentApi | undefined;
 	private usedAtMs = 0;
 	/** The bridge registration behind the session, released with it. */
 	private endpoint: BridgeEndpoint | undefined;
@@ -45,6 +46,11 @@ export class WarmSession {
 	/** The open session, if there is one. */
 	get current(): AgentSession | undefined {
 		return this.session;
+	}
+
+	/** The agent process the warm session lives in, once it has opened. */
+	get client(): AgentApi | undefined {
+		return this.agentClient;
 	}
 
 	get isOpening(): boolean {
@@ -88,12 +94,15 @@ export class WarmSession {
 		const agent = await this.host.agentClient();
 		const cwd = this.host.cwd();
 		if (!this.host.adapter.declaresBridgeOnModelLookup) {
-			return agent.createSession({ cwd, mcpServers: [], ephemeral: true });
+			const session = await agent.createSession({ cwd, mcpServers: [], ephemeral: true });
+			this.agentClient = agent;
+			return session;
 		}
 		const endpoint = await this.host.bridge.registerSession([], async () => undefined);
 		try {
 			const session = await agent.createSession({ cwd, mcpServers: [bridgeServer(endpoint)], ephemeral: true });
 			this.endpoint = endpoint;
+			this.agentClient = agent;
 			return session;
 		} catch (error) {
 			this.host.bridge.unregisterSession(endpoint.token);
@@ -109,5 +118,6 @@ export class WarmSession {
 		}
 		this.session = undefined;
 		this.creation = undefined;
+		this.agentClient = undefined;
 	}
 }

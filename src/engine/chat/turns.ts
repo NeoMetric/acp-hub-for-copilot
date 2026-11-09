@@ -37,7 +37,8 @@ export interface TurnHost {
 	/** The session policy to ask, and the settings it reads: a tool call's wait comes from them. */
 	policy(): SessionPolicy;
 	settings(): AgentSettings | undefined;
-	agent(): AgentApi;
+	/** The agent process of a session; each workspace has its own. */
+	agentOf(session: ChatSession): AgentApi;
 	/** Shares a context window the agent reported with whoever lists the models. */
 	refineWindow?(model: string, size: number): void;
 	finished(turn: FinishedTurn): void;
@@ -58,10 +59,6 @@ export class TurnRunner {
 		return this.host.log;
 	}
 
-	private get agent(): AgentApi {
-		return this.host.agent();
-	}
-
 	/** Whether the agent reports the usage of each model call, not only of the turn. */
 	private get reportsEachModelCall(): boolean {
 		return this.host.adapter.modelCallUsage !== undefined;
@@ -80,7 +77,7 @@ export class TurnRunner {
 			}
 		};
 
-		const prompt = this.agent.prompt(session.acp.sessionId, blocks, {
+		const prompt = this.host.agentOf(session).prompt(session.acp.sessionId, blocks, {
 			onText: text => {
 				firstOutput('text');
 				turn.characters += text.length;
@@ -213,7 +210,7 @@ export class TurnRunner {
 		turn.streaming = true;
 		clearToolDeadline(turn);
 		releaseHeldToolCalls(turn, this.log);
-		trackCancellation(turn, signal, () => this.agent.cancel(session.acp.sessionId), this.log);
+		trackCancellation(turn, signal, () => this.host.agentOf(session).cancel(session.acp.sessionId), this.log);
 
 		try {
 			while (!turn.finished) {
@@ -325,7 +322,7 @@ export class TurnRunner {
 		watchToolCalls(turn, timeoutMs, () => {
 			this.log(`The host did not pick up the tool call(s) of ${key} within ${Math.round(timeoutMs / 1000)}s; ending the turn.`, 'warn');
 			failPendingToolCalls(turn, new Error("The chat stopped waiting for this tool call."));
-			this.agent.cancel(session.acp.sessionId);
+			this.host.agentOf(session).cancel(session.acp.sessionId);
 			if (session.turn === turn) {
 				session.turn = undefined;
 			}
@@ -343,7 +340,7 @@ export class TurnRunner {
 		clearToolDeadline(turn);
 		disposeCancellations(turn);
 		failPendingToolCalls(turn, new Error(CANCELLED_TOOL_CALL));
-		this.agent.cancel(session.acp.sessionId);
+		this.host.agentOf(session).cancel(session.acp.sessionId);
 		await Promise.race([turn.prompt.then(() => undefined, () => undefined), delay(ABANDONED_TURN_WAIT_MS)]);
 	}
 }

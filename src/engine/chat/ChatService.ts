@@ -29,6 +29,7 @@ import { startLaps, type Lap } from './timing';
 import { TurnRunner } from './turns';
 import type { AgentApi, ChatContext, ChatSession, FinishedTurn, Reuse, ToolBridge } from './types';
 import { bridgeServer, WarmSession } from './warmSession';
+import { normalizeRoot, WorkspaceProcesses, workspaceRootOf, type WorkspaceProcess } from './workspaceProcesses';
 
 /** Per-process nonce, so call ids from an earlier run in a chat's history never match a new call. */
 const TOOL_CALL_ID_PREFIX = `acp-hub-${randomBytes(4).toString('hex')}-`;
@@ -65,6 +66,8 @@ export interface ChatServiceDeps {
 	agentChanged?(change: AgentChange): void;
 	/** Whether the host wants the agent running at all. */
 	isEnabled?(): boolean;
+	/** How many workspace processes one agent keeps; four when absent. */
+	readonly maxWorkspaceProcesses?: number;
 }
 
 /**
@@ -78,15 +81,14 @@ export class ChatService {
 	private readonly sessions = new Map<string, ChatSession>();
 	private readonly saved: SavedSessionStore;
 	private readonly log: Log;
-	private agentInstance: AgentApi | undefined;
-	private clientListener: { dispose(): void } | undefined;
+	/** The agent processes, one per workspace root a chat asked for. */
+	private readonly processes: WorkspaceProcesses;
 	/** What the agent was last launched with; the settings are read from it. */
 	private launch: LaunchContext | undefined;
 	private readonly warmSession: WarmSession;
 	private readonly turns: TurnRunner;
 	private toolCallSeq = 0;
-	/** When the agent was last asked for anything or let go of a session; the idle shutdown counts from here. */
-	private lastAgentUse = Date.now();
+
 	/** Sessions being closed, so a request for the same chat waits until the agent has let go of the session. */
 	private readonly closing = new Map<string, Promise<void>>();
 	private sweepTimer: NodeJS.Timeout | undefined;
@@ -102,10 +104,18 @@ export class ChatService {
 		const { adapter, host } = deps;
 		this.log = host.log;
 		this.saved = new SavedSessionStore(host.state, `acpHub.savedSessions.${adapter.id}`);
+		this.processes = new WorkspaceProcesses({
+			agentId: adapter.id,
+			capacity: deps.maxWorkspaceProcesses,
+			log: host.log,
+			create: root => this.createClientIn(root),
+			close: entry => this.closeProcess(entry),
+			changed: (entry, change) => this.handleAgentChange(entry, change),
+		});
 		this.warmSession = new WarmSession({
 			adapter,
 			bridge: deps.bridge,
-			agentClient: () => this.agentClient(),
+			agentClient: () => this.defaultClient(),
 			cwd: () => this.workspaceFolder,
 			opened: () => this.scheduleIdleSweep(),
 		});
@@ -115,7 +125,7 @@ export class ChatService {
 			saved: this.saved,
 			policy: () => this.policy,
 			settings: () => this.settings,
-			agent: () => this.agent,
+			agentOf: session => session.agent,
 			refineWindow: (model, size) => this.deps.refineWindow?.(model, size),
 			finished: turn => {
 				this.deps.finished?.(turn);
@@ -167,34 +177,57 @@ export class ChatService {
 	}
 
 	/**
-	 * The agent client, created on first use from the launch context. An agent
-	 * that is not installed has no launch context, which says so right away
-	 * instead of waiting for a process that will never come.
+	 * The agent process of a workspace root, started on its first chat. A chat in
+	 * another repository gets a process of its own, rooted there; chats of one
+	 * repository share one, and the host's own requests run in the window's folder.
+	 * An agent that is not installed has no launch context, which says so right
+	 * away instead of waiting for a process that will never come.
 	 */
-	private async agentClient(): Promise<AgentApi> {
+	private async processAt(root: string, ctx?: LaunchContext): Promise<WorkspaceProcess> {
+		const launch = ctx ?? await this.resolveLaunch();
+		const entry = await this.processes.acquire(root === '' ? normalizeRoot(launch.workspaceFolder) : root);
+		await entry.client.updateContext(this.launchedFor(entry.root));
+		entry.lastUsed = Date.now();
+		return entry;
+	}
+
+	/** The launch context of the installed agent, or the error that says it is not installed. */
+	private async resolveLaunch(): Promise<LaunchContext> {
 		const ctx = await this.deps.resolveLaunch();
 		if (!ctx) {
 			throw new AdapterNotInstalledError(this.deps.adapter.displayName);
 		}
 		this.launch = ctx;
-		if (this.agentInstance) {
-			await this.agentInstance.updateContext(ctx);
-			return this.agentInstance;
-		}
-		const client = this.deps.createClient
-			? this.deps.createClient(this.deps.adapter, ctx, { log: this.log, storageDir: ctx.storageDir, clientVersion: this.deps.client?.clientVersion ?? '', onSignInUrl: this.deps.client?.onSignInUrl })
-			: new AgentClient(this.deps.adapter, ctx, { log: this.log, storageDir: ctx.storageDir, clientVersion: this.deps.client?.clientVersion ?? '', onSignInUrl: this.deps.client?.onSignInUrl });
-		this.agentInstance = client;
-		this.clientListener = client.onDidChange(change => this.handleAgentChange(change));
-		return client;
+		return ctx;
 	}
 
-	/** The client of a session that exists; only called once {@link agentClient} has run. */
-	private get agent(): AgentApi {
-		if (!this.agentInstance) {
+	/** The process the host's own requests run in: the window's first folder. */
+	private async defaultProcess(): Promise<WorkspaceProcess> {
+		const ctx = await this.resolveLaunch();
+		return this.processAt(normalizeRoot(ctx.workspaceFolder), ctx);
+	}
+
+	/** The client of the process the host's own requests run in, such as the one that lists the models. */
+	private async defaultClient(): Promise<AgentApi> {
+		return (await this.defaultProcess()).client;
+	}
+
+	/** Opens the client of a new process, rooted in the workspace it will serve. */
+	private createClientIn(root: string): AgentApi {
+		const launched = this.launchedFor(root);
+		const deps: AgentClientDeps = { log: this.log, storageDir: launched.storageDir, clientVersion: this.deps.client?.clientVersion ?? '', onSignInUrl: this.deps.client?.onSignInUrl };
+		return this.deps.createClient
+			? this.deps.createClient(this.deps.adapter, launched, deps)
+			: new AgentClient(this.deps.adapter, launched, deps);
+	}
+
+	/** The launch context of one process: the agent's, rooted in the process's workspace. */
+	private launchedFor(root: string): LaunchContext {
+		const launch = this.launch;
+		if (!launch) {
 			throw new AdapterNotInstalledError(this.deps.adapter.displayName);
 		}
-		return this.agentInstance;
+		return { ...launch, workspaceFolder: root };
 	}
 
 	/** Runs one request to completion or to a tool call that the host must execute. */
@@ -204,12 +237,15 @@ export class ChatService {
 		}
 		const key = request.chatId;
 		const lap = startLaps(this.log, key);
-		await this.agentClient();
+		// The launch is resolved first, as it always was: the host reads the window's
+		// folder off the launched agent when the request names no folder of its own.
+		const launch = await this.resolveLaunch();
+		const identity = this.deps.host.chatIdentity(request);
+		const entry = await this.processAt(workspaceRootOf(identity), launch);
+		const client = entry.client;
 		lap('agent client ready');
 
-		this.lastAgentUse = Date.now();
 		const tools = request.tools;
-		const identity = this.deps.host.chatIdentity(request);
 		const context: ChatContext = { folders: identity.workspaceFolders.length > 0 ? identity.workspaceFolders : undefined, cwd: identity.cwd, guidance: this.deps.host.guidanceOf(request) };
 		this.deps.dumpRequest?.(request, this.settings);
 		const effort = request.effort;
@@ -219,10 +255,18 @@ export class ChatService {
 		await this.closing.get(key);
 		lap(`previous session settled, ${this.sessions.has(key) ? 'chat has a live session' : 'new chat'}`);
 		let session = this.sessions.get(key);
+		if (session && session.agent !== client) {
+			// The chat came back in another workspace, so its session lives in a process
+			// it no longer belongs to: the next request opens one rooted where it is now.
+			this.log(`Chat ${key} asks for another workspace; closing the session it held in ${session.context.cwd}.`, 'debug');
+			await this.destroySession(key);
+			session = undefined;
+		}
 		if (session) {
 			// Re-insert so the map stays ordered by recency of use.
 			this.sessions.delete(key);
 			this.sessions.set(key, session);
+			this.processes.own(session.agent, key);
 			session.lastActive = Date.now();
 		}
 
@@ -252,7 +296,7 @@ export class ChatService {
 		if (session && session.turn && userWords.length === 0 && resolved) {
 			this.markSeen(session, fingerprints);
 			this.applyTools(session, tools);
-			await applyEffort(this.agent, this.deps.adapter.modelPolicy, session, effort, this.log);
+			await applyEffort(client, this.deps.adapter.modelPolicy, session, effort, this.log);
 			await this.turns.drive(key, session, sink, signal, fingerprints, lastUser);
 			return;
 		}
@@ -266,7 +310,7 @@ export class ChatService {
 			this.log(`Late tool results for ${key}; the turn is still running, so this response continues it.`);
 			this.markSeen(session, fingerprints);
 			this.applyTools(session, tools);
-			await applyEffort(this.agent, this.deps.adapter.modelPolicy, session, effort, this.log);
+			await applyEffort(client, this.deps.adapter.modelPolicy, session, effort, this.log);
 			await this.turns.drive(key, session, sink, signal, fingerprints, lastUser);
 			return;
 		}
@@ -290,14 +334,14 @@ export class ChatService {
 			session = undefined;
 		}
 		if (!session) {
-			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, await this.canFork(), this.log) : undefined;
-			session = await this.createChatSession(key, modelId, tools, context, reuse, effort, lap);
+			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, await this.canFork(client), this.log) : undefined;
+			session = await this.createChatSession(key, client, modelId, tools, context, reuse, effort, lap);
 			lap('chat session created');
 		} else if (tools.length > 0 && guidanceDiffers(session.context.guidance, context.guidance)) {
 			this.sendGuidanceChange(key, session, context.guidance);
 		}
 		this.applyTools(session, tools);
-		await applyEffort(this.agent, this.deps.adapter.modelPolicy, session, effort, this.log);
+		await applyEffort(client, this.deps.adapter.modelPolicy, session, effort, this.log);
 		lap('effort applied');
 
 		// A session that has seen nothing yet only gets the current turn, plus a
@@ -315,12 +359,12 @@ export class ChatService {
 			}
 			// The session is left for a fork of the turn the edit still agrees with; with none, or
 			// when the fork fails, the chat gets a new session and its messages restored.
-			const reuse = tools.length > 0 && await this.canFork() ? findEditFork(this.saved, key, fingerprints, lastUser, context, this.log) : undefined;
+			const reuse = tools.length > 0 && await this.canFork(client) ? findEditFork(this.saved, key, fingerprints, lastUser, context, this.log) : undefined;
 			this.log(reuse ? `[reuse] Chat ${key} was edited; forking from the checkpoint after ${reuse.checkpoint?.messages} message(s).` : `[reuse] Chat ${key} was edited and has no checkpoint to fork from; starting a fresh ACP session.`, 'debug');
 			await this.destroySession(key);
-			session = await this.createChatSession(key, modelId, tools, context, reuse, effort);
+			session = await this.createChatSession(key, client, modelId, tools, context, reuse, effort);
 			this.applyTools(session, tools);
-			await applyEffort(this.agent, this.deps.adapter.modelPolicy, session, effort, this.log);
+			await applyEffort(client, this.deps.adapter.modelPolicy, session, effort, this.log);
 			restoreContext = session.history.length === 0;
 			startIndex = restoreContext ? lastUser : session.history.length;
 		}
@@ -351,9 +395,9 @@ export class ChatService {
 		session.history.push(...fingerprints);
 	}
 
-	/** The agent client, created on first use; the model list asks the agent for its models through it. */
+	/** The agent client of the window's folder; the model list asks the agent for its models through it. */
 	async client(): Promise<AgentApi> {
-		return this.agentClient();
+		return this.defaultClient();
 	}
 
 	/** The warm session, opened or reused: the one that reads the model list. */
@@ -363,7 +407,11 @@ export class ChatService {
 
 	/** Notes that the agent answered something of the host's own, for the idle watch. */
 	touch(): void {
-		this.lastAgentUse = Date.now();
+		const client = this.warmSession.client;
+		const entry = client === undefined ? undefined : this.processes.entryOf(client);
+		if (entry) {
+			this.processes.touch(entry);
+		}
 		this.scheduleIdleSweep();
 	}
 
@@ -379,13 +427,13 @@ export class ChatService {
 
 	/** Opens the warm session (the one that reads the model list). */
 	async warm(): Promise<void> {
-		await this.agentClient();
+		await this.defaultClient();
 		await this.ensureWarmSession();
 	}
 
 	/** Starts the agent to let its own browser sign-in flow run. */
 	async startForSignIn(methodId?: string): Promise<boolean> {
-		const agent = await this.agentClient();
+		const agent = await this.defaultClient();
 		await agent.restart();
 		if (methodId) {
 			await agent.signInWithMethod(methodId);
@@ -395,9 +443,11 @@ export class ChatService {
 		return !agent.requiresSignIn;
 	}
 
-	/** Restarts the agent process; what the host caches about it is reset with it. */
+	/** Restarts every agent process; what the host caches about them is reset with it. */
 	async restart(): Promise<void> {
-		await this.agentInstance?.restart();
+		for (const entry of this.processes.list()) {
+			await entry.client.restart();
+		}
 	}
 
 	/**
@@ -410,7 +460,7 @@ export class ChatService {
 			return;
 		}
 		this.stoppedForIdle = false;
-		if (this.agentInstance?.isRunning || this.deps.isEnabled?.() === false) {
+		if (this.processes.anyRunning() || this.deps.isEnabled?.() === false) {
 			return;
 		}
 		this.log(`The window is in use again; starting the ${this.deps.adapter.displayName} agent it stopped for being idle.`);
@@ -432,8 +482,12 @@ export class ChatService {
 			throw error;
 		}
 		const warm = await this.ensureWarmSession();
+		const agent = this.warmSession.client;
+		if (!agent) {
+			throw new Error('The agent session that reads the model list has no client.');
+		}
 		let reply = '';
-		await this.agent.prompt(warm.sessionId, [{ type: 'text', text: prompt }], {
+		await agent.prompt(warm.sessionId, [{ type: 'text', text: prompt }], {
 			onText: text => {
 				reply += text;
 			},
@@ -460,8 +514,7 @@ export class ChatService {
 	private stopAgent(): void {
 		this.stopping = true;
 		this.warmSession.release();
-		this.agentInstance?.dispose();
-		this.agentInstance = undefined;
+		this.processes.disposeAll();
 	}
 
 	/** Per-agent usage and cache figures, counted since the service started. */
@@ -477,7 +530,6 @@ export class ChatService {
 		}
 		this.closed = true;
 		clearTimeout(this.sweepTimer);
-		this.clientListener?.dispose();
 		this.stopAgent();
 		void this.closeAllSessions().catch(error => this.log(`Could not close the chat sessions: ${describe(error)}`, 'debug'));
 	}
@@ -491,7 +543,11 @@ export class ChatService {
 	}
 
 	private ensureWarmSession(): Promise<AgentSession> {
-		this.lastAgentUse = Date.now();
+		const client = this.warmSession.client;
+		const entry = client === undefined ? undefined : this.processes.entryOf(client);
+		if (entry) {
+			this.processes.touch(entry);
+		}
 		return this.warmSession.ensure();
 	}
 
@@ -504,7 +560,7 @@ export class ChatService {
 			this.sweepTimer = undefined;
 			this.releaseIdleSessions();
 			this.stopIdleAgent();
-			if (this.sessions.size > 0 || this.warmSession.current || (this.agentInstance?.isRunning && agentIdleMs(this.settings) > 0)) {
+			if (this.sessions.size > 0 || this.warmSession.current || (this.processes.anyRunning() && agentIdleMs(this.settings) > 0)) {
 				this.scheduleIdleSweep();
 			}
 		}, IDLE_SWEEP_MS);
@@ -521,7 +577,7 @@ export class ChatService {
 		const idleMs = idleTimeoutMs(this.settings);
 		if (idleMs > 0) {
 			for (const [key, session] of [...this.sessions]) {
-				if (!session.turn && this.agentInstance?.hasBackgroundTasks(session.acp.sessionId)) {
+				if (!session.turn && session.agent.hasBackgroundTasks(session.acp.sessionId)) {
 					session.lastActive = now;
 					continue;
 				}
@@ -534,29 +590,36 @@ export class ChatService {
 		const warm = this.warmSession.current;
 		if (warm && now - this.warmSession.usedAt >= WARM_SESSION_IDLE_MS) {
 			this.log(`Releasing the session that reads the models (${warm.sessionId}).`, 'debug');
+			const client = this.warmSession.client;
 			this.warmSession.release();
-			this.lastAgentUse = now;
-			void this.agentInstance?.closeSession(warm.sessionId);
+			void client?.closeSession(warm.sessionId);
 		}
 	}
 
-	/** Stops the agent process when no chat, release or lookup has needed it for the configured time. */
+	/** Stops a process when no chat, release or lookup has needed it for the configured time. */
 	private stopIdleAgent(): void {
 		const idleMs = agentIdleMs(this.settings);
-		if (idleMs <= 0 || !this.agentInstance?.isRunning) {
+		if (idleMs <= 0) {
 			return;
 		}
-		if (this.sessions.size > 0 || this.closing.size > 0 || this.warmSession.current || this.warmSession.isOpening) {
-			return;
+		for (const entry of this.processes.list()) {
+			if (!entry.client.isRunning) {
+				continue;
+			}
+			if (entry.sessions.size > 0 || this.closing.size > 0) {
+				continue;
+			}
+			if (this.warmSession.current && this.warmSession.client === entry.client) {
+				continue;
+			}
+			if (Date.now() - entry.lastUsed < idleMs) {
+				continue;
+			}
+			void entry.client.stopWhenIdle();
 		}
-		if (Date.now() - this.lastAgentUse < idleMs) {
-			return;
-		}
-		void this.agentInstance.stopWhenIdle();
 	}
 
-	private async createChatSession(key: string, modelId: string, tools: readonly ToolDef[], context: ChatContext, reuse?: Reuse, effort?: string, lap?: Lap): Promise<ChatSession> {
-		const agent = this.agent;
+	private async createChatSession(key: string, agent: AgentApi, modelId: string, tools: readonly ToolDef[], context: ChatContext, reuse?: Reuse, effort?: string, lap?: Lap): Promise<ChatSession> {
 		const endpoint = await this.deps.bridge.registerSession(tools, (name, input, signal) => this.executeTool(key, name, input, signal), { maxResultChars: this.deps.adapter.maxToolResultChars });
 		lap?.(`tool bridge registered (${tools.length} tool(s))`);
 		try {
@@ -603,7 +666,7 @@ export class ChatService {
 					// A fork that cannot be made (the source is mid-turn, or the tool that forks is missing) leaves `opened` empty: the chat gets a new session.
 					const opened = reuse.kind === 'resume'
 						? await agent.resumeSession(reuse.saved.sessionId, options)
-						: await this.fork(reuse, options, point, reuse.saved.key === key);
+						: await this.fork(reuse, agent, options, point, reuse.saved.key === key);
 					if (opened) {
 						acp = opened;
 						reused = { how: reuse.kind === 'resume' ? 'resumed' : 'forked', from: reuse.saved.sessionId, logged: false };
@@ -628,7 +691,7 @@ export class ChatService {
 			const inherited = !reused || !reuse ? [] : reuse.kind === 'resume' ? reuse.saved.checkpoints ?? [] : (reuse.saved.checkpoints ?? []).filter(checkpoint => checkpoint.messages <= (reuse.checkpoint?.messages ?? 0));
 			const toolNames = tools.map(tool => tool.name);
 			const session: ChatSession = {
-				acp, endpoint, context, history,
+				agent, acp, endpoint, context, history,
 				checkpoints: [...inherited],
 				messageCounts: countsOf(inherited),
 				forked: reused?.how === 'forked' && !this.deps.adapter.forker ? true : reused && reuse ? reuse.saved.forked : undefined,
@@ -645,6 +708,7 @@ export class ChatService {
 				guidanceChange: reused ? reuse?.guidanceChange : undefined,
 			};
 			this.sessions.set(key, session);
+			this.processes.own(agent, key);
 			// The agent ignores the model it was asked for when it opens or reopens a
 			// session, so the picker's choice is applied here, together with the effort:
 			// the effort option only exists once a model has been resolved.
@@ -654,7 +718,7 @@ export class ChatService {
 			this.log(`Created chat session for ${key} in ${context.cwd}${context.folders ? '' : ' (the window\'s folder; the request named none)'}`, 'debug');
 			this.evictIdleSessions(key);
 			this.scheduleIdleSweep();
-			void this.deleteOrphanedForks().catch(error => this.log(`Could not delete expired forked sessions: ${describe(error)}`, 'debug'));
+			void this.deleteOrphanedForks(agent).catch(error => this.log(`Could not delete expired forked sessions: ${describe(error)}`, 'debug'));
 			return session;
 		} catch (error) {
 			this.deps.bridge.unregisterSession(endpoint.token);
@@ -674,7 +738,7 @@ export class ChatService {
 	 * policy says to start over, or the program that forks for this agent is missing.
 	 * Whatever fails throws, and the caller falls back to a new session.
 	 */
-	private async fork(reuse: Reuse, options: CreateSessionOptions, point: ForkPoint | undefined, editedOwnChat: boolean): Promise<AgentSession | undefined> {
+	private async fork(reuse: Reuse, agent: AgentApi, options: CreateSessionOptions, point: ForkPoint | undefined, editedOwnChat: boolean): Promise<AgentSession | undefined> {
 		const source = reuse.saved.sessionId;
 		const running = [...this.sessions.values()].find(session => session.acp.sessionId === source && session.turn);
 		if (running) {
@@ -697,15 +761,15 @@ export class ChatService {
 			return undefined;
 		}
 		const live = [...this.sessions].map(([chatKey, session]) => ({ chatKey, sessionId: session.acp.sessionId, hasTurn: session.turn !== undefined }));
-		const plan = this.policy.planContinuation({ saved: reuse.saved, live, editedOwnChat, agentSupportsFork: this.agent.supportsFork, externalForker: forker });
+		const plan = this.policy.planContinuation({ saved: reuse.saved, live, editedOwnChat, agentSupportsFork: agent.supportsFork, externalForker: forker });
 		if (plan.how === 'rebuild') {
 			return undefined;
 		}
 		if (plan.how === 'resume') {
-			return this.agent.resumeSession(source, options);
+			return agent.resumeSession(source, options);
 		}
 		if (plan.how === 'fork-native') {
-			return this.agent.forkSession(source, options, point);
+			return agent.forkSession(source, options, point);
 		}
 		if (!forker || !program || !point) {
 			return undefined;
@@ -729,10 +793,10 @@ export class ChatService {
 		// before the copy is opened. Should it fail, the rewound conversation is not read again, so the
 		// chat is rebuilt from its transcript rather than continued on the wrong one.
 		const restarting = plan.restartFirst
-			? this.agentInstance?.restart().then(() => {
+			? agent.restart().then(() => {
 				// Starting it again takes a few seconds; do that while the fork runs, and let the resume
 				// report a start that fails.
-				void this.agent.ensureStarted().catch(() => undefined);
+				void agent.ensureStarted().catch(() => undefined);
 				return true;
 			}, error => {
 				this.log(`[reuse] Could not restart the agent for the fork (${describe(error)}); the chat is rebuilt from its transcript.`, 'warn');
@@ -747,7 +811,7 @@ export class ChatService {
 			this.saved.moveSession(source, forked.sourceMovedTo);
 			this.log(`[reuse] The fork goes on in ${source}; the chats that had it continue in the copy ${forked.sourceMovedTo}.`, 'debug');
 		}
-		return this.agent.resumeSession(forked.sessionId, options);
+		return agent.resumeSession(forked.sessionId, options);
 	}
 
 	private prompts: PromptArchive | undefined;
@@ -785,16 +849,16 @@ export class ChatService {
 	}
 
 	/** Deletes the sessions the extension forked whose saved entry expired, for an agent that can; each is tried once. */
-	private async deleteOrphanedForks(): Promise<void> {
+	private async deleteOrphanedForks(agent: AgentApi): Promise<void> {
 		const pending = this.saved.pendingDeletions();
-		if (pending.length === 0 || !this.agent.supportsDelete) {
+		if (pending.length === 0 || !agent.supportsDelete) {
 			return;
 		}
 		const inUse = new Set([...this.sessions.values()].map(session => session.acp.sessionId));
 		const saved = new Set(this.saved.all().map(entry => entry.sessionId));
 		const attempted = pending.filter(id => !inUse.has(id));
 		for (const id of attempted.filter(id => !saved.has(id))) {
-			if (await this.agent.deleteSession(id)) {
+			if (await agent.deleteSession(id)) {
 				this.log(`Deleted the expired forked session ${id}.`, 'debug');
 			}
 		}
@@ -805,17 +869,17 @@ export class ChatService {
 	 * Whether a chat may continue from a stored conversation by forking: the adapter's policy says so,
 	 * which may turn on what the running agent said in `initialize`. Starts the agent to find out.
 	 */
-	private async canFork(): Promise<boolean> {
+	private async canFork(agent: AgentApi): Promise<boolean> {
 		if (this.deps.adapter.forker) {
 			return true;
 		}
 		try {
-			await this.agent.ensureStarted();
+			await agent.ensureStarted();
 		} catch {
 			// Opening the session starts the agent again and reports why it cannot.
 			return false;
 		}
-		if (!this.policy.canFork({ agentSupportsFork: this.agent.supportsFork })) {
+		if (!this.policy.canFork({ agentSupportsFork: agent.supportsFork })) {
 			this.log(`[reuse] ${this.deps.adapter.displayName} did not advertise session forking; chats are not forked.`, 'debug');
 			return false;
 		}
@@ -894,11 +958,11 @@ export class ChatService {
 	}
 
 	private async switchModel(key: string, session: ChatSession, modelId: string, tools: readonly ToolDef[], context: ChatContext): Promise<ChatSession> {
-		if (await switchModelInPlace(this.agent, session, modelId, key, this.log)) {
+		if (await switchModelInPlace(session.agent, session, modelId, key, this.log)) {
 			return session;
 		}
 		await this.destroySession(key);
-		return this.createChatSession(key, modelId, tools, context);
+		return this.createChatSession(key, session.agent, modelId, tools, context);
 	}
 
 	private async destroySession(key: string): Promise<void> {
@@ -907,40 +971,49 @@ export class ChatService {
 			return;
 		}
 		this.sessions.delete(key);
+		this.processes.release(key);
 		if (session.turn) {
 			clearToolDeadline(session.turn);
 			disposeCancellations(session.turn);
 			failPendingToolCalls(session.turn, new Error("The chat session was closed."));
-			this.agentInstance?.cancel(session.acp.sessionId);
+			session.agent.cancel(session.acp.sessionId);
 			session.turn = undefined;
 		}
 		this.deps.bridge.unregisterSession(session.endpoint.token);
-		const closing = this.agentInstance?.closeSession(session.acp.sessionId) ?? Promise.resolve();
+		const closing = session.agent.closeSession(session.acp.sessionId);
 		this.closing.set(key, closing);
 		await closing;
 		if (this.closing.get(key) === closing) {
 			this.closing.delete(key);
 		}
-		this.lastAgentUse = Date.now();
 		this.log(`Closed the chat session for ${key} (${session.acp.sessionId}).`);
 	}
 
-	private handleAgentChange(change: AgentChange): void {
+	private handleAgentChange(entry: WorkspaceProcess, change: AgentChange): void {
 		// The sessions lived in the old process in every case. The next request opens
 		// new ones (resuming the stored conversation when it can) and restores the
 		// conversation from the host's history otherwise.
 		const what = change === 'restarted' ? 'was restarted' : change === 'idle' ? 'was stopped for being idle' : 'exited';
-		this.log(`The agent ${what}; dropping its sessions.`);
+		this.log(`The agent in ${entry.root} ${what}; dropping its sessions.`);
 		this.stoppedForIdle = change === 'idle';
-		for (const key of [...this.sessions.keys()]) {
+		for (const key of [...entry.sessions]) {
 			void this.destroySession(key);
 		}
-		this.warmSession.release();
+		if (this.warmSession.client === entry.client) {
+			this.warmSession.release();
+		}
 		this.deps.agentChanged?.(change);
 	}
 
+	/** Lets go of the chats of a process that is being stopped to stay within the bound. */
+	private async closeProcess(entry: WorkspaceProcess): Promise<void> {
+		for (const key of [...entry.sessions]) {
+			await this.destroySession(key);
+		}
+	}
+
 	private isSignInRequired(error: unknown): boolean {
-		return isAuthRequiredError(error) || (this.agentInstance?.requiresSignIn ?? false);
+		return isAuthRequiredError(error) || this.processes.anySignInRequired();
 	}
 
 	/** What a chat is told when the agent needs credentials, both on a turn and when a session cannot open. */
