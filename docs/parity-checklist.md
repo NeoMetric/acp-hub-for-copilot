@@ -15,3 +15,5 @@ Run for each of Claude, Codex, and Google, comparing against the old extension o
 - [ ] Windows path with spaces/non-ASCII as workspace folder.
 - [ ] Old and new extensions installed together: no setting or vendor collisions.
 - [ ] Reload window: no orphan agent processes left (Task Manager).
+
+The adapter contract is machine-checked: `test/unit/adapters/conformance.test.ts` runs every adapter in `ADAPTERS` against it, so a new adapter must declare a session policy or inherit `nativeSessionPolicy`.

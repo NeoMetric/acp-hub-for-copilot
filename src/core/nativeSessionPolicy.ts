@@ -7,9 +7,10 @@ import type { SessionPolicy } from './sessionPolicy';
 
 /**
  * The default way a stored conversation continues: the agent's own fork when it advertises one, else
- * the forker the adapter names, else a rebuild from the transcript. A fork is offered only when the
- * agent advertises one, always takes an id of its own and never restarts the agent; every open gets the
- * rebuilt prompt, a changed tool set needs a new session, and a tool call waits for as long as the agent does.
+ * the forker the adapter names, else a rebuild from the transcript. `canFork` offers a fork only when
+ * the agent advertises one; a planned external fork always takes an id of its own and never restarts
+ * the agent; every open gets the rebuilt prompt, a changed tool set needs a new session, and a tool
+ * call waits for as long as the agent does.
  */
 export const nativeSessionPolicy: SessionPolicy = {
 	planContinuation: ({ agentSupportsFork, externalForker }) => {
