@@ -6,7 +6,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../../src/core/adapter';
 import type { InstallState } from '../../src/core/installers';
-import { SidebarHost, type SidebarDeps } from '../../src/sidebar/host';
+import type { ControlSurface } from '../../src/engine/control/ControlService';
+import { SidebarHost, type SidebarPageDeps } from '../../src/sidebar/host';
 import type { AgentCardState, ToWebview } from '../../src/sidebar/messages';
 
 function fakeAdapter(id: string): AgentAdapter {
@@ -18,13 +19,13 @@ function fakeAdapter(id: string): AgentAdapter {
 	} as unknown as AgentAdapter;
 }
 
-function setup(overrides: Partial<SidebarDeps> = {}) {
+function setup(overrides: Partial<ControlSurface> = {}) {
 	const installed = new Map<string, InstallState>([['a', 'not-installed'], ['b', 'not-installed']]);
-	const deps: SidebarDeps = {
-		listAdapters: () => [fakeAdapter('a'), fakeAdapter('b')],
-		getVisibleAgents: () => ['a', 'b'],
+	const control: ControlSurface = {
+		agents: () => [fakeAdapter('a'), fakeAdapter('b')],
+		visibleAgents: () => ['a', 'b'],
 		saveVisibleAgents: async () => { },
-		getInstallState: async id => installed.get(id) ?? 'not-installed',
+		installState: async id => installed.get(id) ?? 'not-installed',
 		install: vi.fn(async (id: string) => { installed.set(id, 'installed'); }),
 		uninstall: vi.fn(async (id: string) => { installed.set(id, 'not-installed'); return true; }),
 		isSignedIn: async () => undefined,
@@ -37,17 +38,19 @@ function setup(overrides: Partial<SidebarDeps> = {}) {
 		writeGlobalSetting: vi.fn(async () => { }),
 		isEnabled: () => true,
 		setEnabled: async () => { },
-		getUsage: () => ({ status: 'idle', extraWindows: [] }),
+		usage: () => ({ status: 'idle', extraWindows: [] }),
 		refreshUsage: async () => { },
 		onUsageChange: () => ({ dispose() { } }),
+		...overrides,
+	};
+	const page: SidebarPageDeps = {
 		openExternal: vi.fn(async () => { }),
 		copyToClipboard: vi.fn(async () => { }),
 		assetUri: path => ({ path }) as never,
-		...overrides,
 	};
 
 	const posted: AgentCardState[][] = [];
-	const host = new SidebarHost(deps);
+	const host = new SidebarHost(control, page);
 	const webview = {
 		options: {},
 		html: '',
@@ -60,7 +63,7 @@ function setup(overrides: Partial<SidebarDeps> = {}) {
 
 	const last = () => posted[posted.length - 1];
 	const card = (id: string) => last().find(item => item.id === id)!;
-	return { host, deps, posted, webview, last, card };
+	return { host, control, page, posted, webview, last, card };
 }
 
 describe('SidebarHost', () => {
@@ -78,16 +81,16 @@ describe('SidebarHost', () => {
 	});
 
 	it('shows a sign-in page, opens it, and copies or reopens only the stored URL', async () => {
-		const { host, deps, card } = setup();
+		const { host, page, card } = setup();
 		host.showSignInUrl('a', { url: 'https://example.com/device', message: 'Enter code ABCD' });
 		await host.handleMessage({ type: 'ready' });
-		expect(deps.openExternal).toHaveBeenCalledWith('https://example.com/device');
+		expect(page.openExternal).toHaveBeenCalledWith('https://example.com/device');
 		expect(card('a').signInUrl).toEqual({ url: 'https://example.com/device', message: 'Enter code ABCD' });
 
 		await host.handleMessage({ type: 'copySignInUrl', agentId: 'a' });
-		expect(deps.copyToClipboard).toHaveBeenCalledWith('https://example.com/device');
+		expect(page.copyToClipboard).toHaveBeenCalledWith('https://example.com/device');
 		await host.handleMessage({ type: 'copySignInUrl', agentId: 'b' });
-		expect(deps.copyToClipboard).toHaveBeenCalledTimes(1);
+		expect(page.copyToClipboard).toHaveBeenCalledTimes(1);
 
 		host.showSignInUrl('a', undefined);
 		await host.handleMessage({ type: 'ready' });
@@ -95,19 +98,19 @@ describe('SidebarHost', () => {
 	});
 
 	it('writes a known global setting and ignores an unknown one', async () => {
-		const { host, deps } = setup();
+		const { host, control } = setup();
 		await host.handleMessage({ type: 'setGlobalSetting', key: 'resume.transcriptDetail', value: 'full' });
 		await host.handleMessage({ type: 'setGlobalSetting', key: 'somethingElse', value: 'x' });
-		expect(deps.writeGlobalSetting).toHaveBeenCalledTimes(1);
-		expect(deps.writeGlobalSetting).toHaveBeenCalledWith('resume.transcriptDetail', 'full');
+		expect(control.writeGlobalSetting).toHaveBeenCalledTimes(1);
+		expect(control.writeGlobalSetting).toHaveBeenCalledWith('resume.transcriptDetail', 'full');
 	});
 
 	it('initially shows installed agents and persists additions and removals', async () => {
 		const save = vi.fn(async (_ids: string[]) => { });
 		const { host, last } = setup({
-			getVisibleAgents: () => undefined,
+			visibleAgents: () => undefined,
 			saveVisibleAgents: save,
-			getInstallState: async id => id === 'a' ? 'installed' : 'not-installed',
+			installState: async id => id === 'a' ? 'installed' : 'not-installed',
 		});
 		await host.handleMessage({ type: 'ready' });
 		expect(last().filter(item => item.visible).map(item => item.id)).toEqual(['a']);
@@ -119,9 +122,9 @@ describe('SidebarHost', () => {
 	});
 
 	it('installs once and posts busy then installed', async () => {
-		const { host, deps, posted, card } = setup();
+		const { host, control, posted, card } = setup();
 		await host.handleMessage({ type: 'install', agentId: 'a' });
-		expect(deps.install).toHaveBeenCalledTimes(1);
+		expect(control.install).toHaveBeenCalledTimes(1);
 		expect(posted.length).toBe(2);
 		expect(posted[0].find(item => item.id === 'a')!.install).toBe('installing');
 		expect(posted[0].find(item => item.id === 'a')!.busy).toBeTruthy();
@@ -130,11 +133,11 @@ describe('SidebarHost', () => {
 	});
 
 	it('uninstalls an agent and shows it as not installed', async () => {
-		const { host, deps, card } = setup();
+		const { host, control, card } = setup();
 		await host.handleMessage({ type: 'install', agentId: 'a' });
 		expect(card('a').removable).toBe(true);
 		await host.handleMessage({ type: 'uninstall', agentId: 'a' });
-		expect(deps.uninstall).toHaveBeenCalledWith('a');
+		expect(control.uninstall).toHaveBeenCalledWith('a');
 		expect(card('a').install).toBe('not-installed');
 		expect(card('a').busy).toBeUndefined();
 	});
@@ -201,17 +204,17 @@ describe('SidebarHost', () => {
 	});
 
 	it('writes a changed setting through', async () => {
-		const { host, deps } = setup();
+		const { host, control } = setup();
 		await host.handleMessage({ type: 'setSetting', agentId: 'a', key: 'level', value: 'high' });
-		expect(deps.writeSetting).toHaveBeenCalledWith('a', 'level', 'high');
+		expect(control.writeSetting).toHaveBeenCalledWith('a', 'level', 'high');
 	});
 
 	it('ignores an unknown agent id', async () => {
-		const { host, deps, posted } = setup();
+		const { host, control, posted } = setup();
 		await host.handleMessage({ type: 'install', agentId: 'nope' });
 		await host.handleMessage({ type: 'setSetting', agentId: 'nope', key: 'level', value: 'x' });
-		expect(deps.install).not.toHaveBeenCalled();
-		expect(deps.writeSetting).not.toHaveBeenCalled();
+		expect(control.install).not.toHaveBeenCalled();
+		expect(control.writeSetting).not.toHaveBeenCalled();
 		expect(posted.length).toBe(0);
 	});
 

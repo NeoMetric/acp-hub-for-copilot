@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   enabled: true,
   disabledIds: new Set<string>(),
   installedIds: new Set<string>(),
-  sidebarDeps: [] as Array<{ getUsage: (id: string) => { status: string; reading?: { windows: Array<{ usedPercent: number }> } } }>,
+  sidebarControl: [] as Array<{ usage: (id: string) => { status: string; reading?: { windows: Array<{ usedPercent: number }> } } }>,
   providerDeps: [] as Array<{ isEnabled: () => boolean }>,
   configurationChanged: undefined as ((event: { affectsConfiguration: (key: string) => boolean }) => void) | undefined,
   windowStateChanged: undefined as ((state: { focused: boolean; active: boolean }) => void) | undefined,
@@ -56,7 +56,7 @@ vi.mock('../../src/core/secrets', () => ({
   AgentSecretStore: class { get() { return Promise.resolve(undefined); } onDidChange() { return { dispose() {} }; } dispose() {} },
 }));
 vi.mock('../../src/sidebar/host', () => ({
-  SidebarHost: class { constructor(deps: typeof mocks.sidebarDeps[number]) { mocks.sidebarDeps.push(deps); } },
+  SidebarHost: class { constructor(deps: typeof mocks.sidebarControl[number]) { mocks.sidebarControl.push(deps); } },
 }));
 vi.mock('../../src/core/processes', () => ({ killStrayAgents() {}, killAllChildren() {} }));
 // Google reads its quota from the Antigravity CLI's language server rather than through the chat.
@@ -83,7 +83,7 @@ beforeEach(() => {
   mocks.disabledIds.clear();
   mocks.installedIds.clear();
   mocks.providerDeps.length = 0;
-  mocks.sidebarDeps.length = 0;
+  mocks.sidebarControl.length = 0;
   mocks.register.mockClear();
   mocks.registerView.mockClear();
   mocks.woken.length = 0;
@@ -150,15 +150,15 @@ it('loads the usage of installed, enabled agents into the sidebar at startup', a
   // On Windows the Google quota is read on demand: the language server it needs opens a console window.
   const googleAtStartup = process.platform !== 'win32';
   await vi.waitFor(() => {
-    const sidebar = mocks.sidebarDeps[0];
-    expect(sidebar.getUsage('claude').reading?.windows[0].usedPercent).toBe(42);
-    expect(sidebar.getUsage('codex').reading?.windows[0].usedPercent).toBe(42);
+    const sidebar = mocks.sidebarControl[0];
+    expect(sidebar.usage('claude').reading?.windows[0].usedPercent).toBe(42);
+    expect(sidebar.usage('codex').reading?.windows[0].usedPercent).toBe(42);
     if (googleAtStartup) {
-      expect(sidebar.getUsage('google').reading?.windows[0].usedPercent).toBe(25);
+      expect(sidebar.usage('google').reading?.windows[0].usedPercent).toBe(25);
     }
   });
   if (!googleAtStartup) {
-    expect(mocks.sidebarDeps[0].getUsage('google').status).toBe('idle');
+    expect(mocks.sidebarControl[0].usage('google').status).toBe('idle');
   }
 });
 
@@ -175,7 +175,7 @@ it('does not start a usage read for disabled or uninstalled agents', async () =>
     secrets: {},
   } as never);
 
-  await vi.waitFor(() => expect(mocks.sidebarDeps[0].getUsage('claude').status).toBe('ok'));
-  expect(mocks.sidebarDeps[0].getUsage('codex').status).toBe('idle');
-  expect(mocks.sidebarDeps[0].getUsage('google').status).toBe('idle');
+  await vi.waitFor(() => expect(mocks.sidebarControl[0].usage('claude').status).toBe('ok'));
+  expect(mocks.sidebarControl[0].usage('codex').status).toBe('idle');
+  expect(mocks.sidebarControl[0].usage('google').status).toBe('idle');
 });

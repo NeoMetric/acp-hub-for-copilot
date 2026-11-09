@@ -39,6 +39,20 @@ describe('engine boundaries', () => {
 	});
 
 	/**
+	 * The control service is what a browser page drives, so it takes the window
+	 * as callbacks rather than reaching for it: a `vscode` import here would make
+	 * the page depend on the editor it is meant to work without.
+	 */
+	it('drives the page from a control service that has no host in it', () => {
+		expect(existsSync('src/engine/control/ControlService.ts'), 'the control service lives in the engine').toBe(true);
+		expect(sourceFiles(join(ENGINE_ROOT, 'control')).length, 'src/engine/control has source files').toBeGreaterThan(0);
+		assertEngineIsHostFree(join(ENGINE_ROOT, 'control'));
+		for (const file of sourceFiles(join(ENGINE_ROOT, 'control'))) {
+			expect(readFileSync(file, 'utf8'), `${file} reaches for the editor's window`).not.toMatch(/vscode\./);
+		}
+	});
+
+	/**
 	 * How Copilot marks up a chat is the VS Code host's business: the engine sees
 	 * neutral messages, and the host that scraped the prompt hands it the chat's
 	 * identity and guidance.

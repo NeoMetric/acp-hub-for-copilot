@@ -5,35 +5,13 @@
 
 import { randomBytes } from 'crypto';
 import type * as vscode from 'vscode';
-import type { AgentAdapter, AgentSettings } from '../core/adapter';
-import { canUninstall, type InstallState } from '../core/installers';
-import type { UsageState } from '../core/usage';
+import type { AgentAdapter } from '../core/adapter';
+import { canUninstall } from '../core/installers';
+import type { ControlSurface } from '../engine/control/ControlService';
 import type { AgentCardState, FromWebview, SettingValue, SettingView, ToWebview } from './messages';
 
-/** Everything the sidebar needs from the rest of the extension, as plain functions. */
-export interface SidebarDeps {
-	listAdapters(): AgentAdapter[];
-	getVisibleAgents(): string[] | undefined;
-	saveVisibleAgents(ids: string[]): Promise<void>;
-	getInstallState(adapterId: string): Promise<InstallState>;
-	/** Rejects when the install fails. */
-	install(adapterId: string, onProgress: (message: string, fraction?: number) => void): Promise<void>;
-	/** Asks the user to confirm, stops the agent and deletes its files; resolves to false when the user declines. */
-	uninstall(adapterId: string): Promise<boolean>;
-	isSignedIn(adapterId: string): Promise<boolean | undefined>;
-	hasSavedKey(adapterId: string): Promise<boolean>;
-	signIn(adapterId: string): Promise<{ ok: boolean; message?: string }>;
-	signOut(adapterId: string): Promise<void>;
-	readSettings(adapterId: string): AgentSettings;
-	writeSetting(adapterId: string, key: string, value: SettingValue): Promise<void>;
-	/** Reads a setting under `acpHub.` that applies to every agent, such as `resume.transcriptDetail`. */
-	readGlobalSetting(key: string): SettingValue | undefined;
-	writeGlobalSetting(key: string, value: SettingValue): Promise<void>;
-	isEnabled(adapterId: string): boolean;
-	setEnabled(adapterId: string, enabled: boolean): Promise<void>;
-	getUsage(adapterId: string): UsageState;
-	refreshUsage(adapterId: string): Promise<void>;
-	onUsageChange(listener: (adapterId: string) => void): { dispose(): void };
+/** What the sidebar needs from the VS Code window around it; everything else it asks the control service. */
+export interface SidebarPageDeps {
 	openExternal(url: string): Promise<void>;
 	copyToClipboard(text: string): Promise<void>;
 	/** Uri of a file inside the extension folder, for example `dist/sidebar.js`. */
@@ -85,8 +63,8 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 	private stateVersion = 0;
 	private readonly enabledWrites = new Map<string, Promise<void>>();
 
-	constructor(private readonly deps: SidebarDeps) {
-		deps.onUsageChange(() => {
+	constructor(private readonly control: ControlSurface, private readonly page: SidebarPageDeps) {
+		control.onUsageChange(() => {
 			void this.postState();
 		});
 	}
@@ -95,7 +73,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		this.view = view;
 		view.webview.options = {
 			enableScripts: true,
-			localResourceRoots: [this.deps.assetUri('dist'), this.deps.assetUri('media')],
+			localResourceRoots: [this.page.assetUri('dist'), this.page.assetUri('media')],
 		};
 		view.webview.html = this.buildHtml(view.webview);
 		view.webview.onDidReceiveMessage((message: FromWebview) => this.handleMessage(message));
@@ -113,7 +91,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 	showSignInUrl(adapterId: string, prompt: { url: string; message: string } | undefined): void {
 		if (prompt) {
 			this.signInUrls.set(adapterId, prompt);
-			void this.deps.openExternal(prompt.url);
+			void this.page.openExternal(prompt.url);
 		} else if (!this.signInUrls.delete(adapterId)) {
 			return;
 		}
@@ -127,13 +105,13 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		}
 		if (message.type === 'setGlobalSetting') {
 			if (GLOBAL_SETTINGS.some(spec => spec.key === message.key)) {
-				await this.deps.writeGlobalSetting(message.key, message.value);
+				await this.control.writeGlobalSetting(message.key, message.value);
 				await this.postState();
 			}
 			return;
 		}
 
-		const adapter = this.deps.listAdapters().find(item => item.id === message.agentId);
+		const adapter = this.control.agents().find(item => item.id === message.agentId);
 		if (!adapter) {
 			return;
 		}
@@ -147,7 +125,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 				} else {
 					this.visibleAgents!.delete(adapter.id);
 				}
-				await this.deps.saveVisibleAgents([...this.visibleAgents!]);
+				await this.control.saveVisibleAgents([...this.visibleAgents!]);
 				await this.postState();
 				return;
 			}
@@ -156,21 +134,21 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 				return;
 			case 'uninstall':
 				if (!this.installing.has(adapter.id)) {
-					await this.runBusy(adapter, 'Uninstalling...', async () => { await this.deps.uninstall(adapter.id); });
+					await this.runBusy(adapter, 'Uninstalling...', async () => { await this.control.uninstall(adapter.id); });
 				}
 				return;
 			case 'signIn':
 				await this.signIn(adapter);
 				return;
 			case 'signOut':
-				await this.runBusy(adapter, 'Signing out...', () => this.deps.signOut(adapter.id));
+				await this.runBusy(adapter, 'Signing out...', () => this.control.signOut(adapter.id));
 				return;
 			case 'refreshUsage':
-				await this.deps.refreshUsage(adapter.id);
+				await this.control.refreshUsage(adapter.id);
 				return;
 			case 'setEnabled': {
 				const previous = this.enabledWrites.get(adapter.id) ?? Promise.resolve();
-				const write = previous.then(() => this.runBusy(adapter, undefined, () => this.deps.setEnabled(adapter.id, message.enabled)));
+				const write = previous.then(() => this.runBusy(adapter, undefined, () => this.control.setEnabled(adapter.id, message.enabled)));
 				this.enabledWrites.set(adapter.id, write);
 				await write;
 				if (this.enabledWrites.get(adapter.id) === write) {
@@ -183,12 +161,12 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 				// The stored URL is used, never one that came from the webview.
 				const prompt = this.signInUrls.get(adapter.id);
 				if (prompt) {
-					await (message.type === 'copySignInUrl' ? this.deps.copyToClipboard(prompt.url) : this.deps.openExternal(prompt.url));
+					await (message.type === 'copySignInUrl' ? this.page.copyToClipboard(prompt.url) : this.page.openExternal(prompt.url));
 				}
 				return;
 			}
 			case 'setSetting':
-				await this.runBusy(adapter, undefined, () => this.deps.writeSetting(adapter.id, message.key, message.value));
+				await this.runBusy(adapter, undefined, () => this.control.writeSetting(adapter.id, message.key, message.value));
 				return;
 		}
 	}
@@ -202,7 +180,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		this.busy.set(adapter.id, 'Installing...');
 		await this.postState();
 		try {
-			await this.deps.install(adapter.id, (message, fraction) => {
+			await this.control.install(adapter.id, (message, fraction) => {
 				this.busy.set(adapter.id, message);
 				if (fraction !== undefined) {
 					this.installProgress.set(adapter.id, fraction);
@@ -220,7 +198,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 
 	private async signIn(adapter: AgentAdapter): Promise<void> {
 		await this.runBusy(adapter, 'Signing in...', async () => {
-			const result = await this.deps.signIn(adapter.id);
+			const result = await this.control.signIn(adapter.id);
 			if (!result.ok) {
 				throw new Error(result.message ?? 'Sign-in did not complete.');
 			}
@@ -244,11 +222,11 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 	}
 
 	private async buildCard(adapter: AgentAdapter): Promise<AgentCardState> {
-		const installState = await this.deps.getInstallState(adapter.id);
-		const signedIn = await this.deps.isSignedIn(adapter.id);
-		const hasSavedKey = await this.deps.hasSavedKey(adapter.id);
-		const usage = this.deps.getUsage(adapter.id);
-		const settings = this.deps.readSettings(adapter.id);
+		const installState = await this.control.installState(adapter.id);
+		const signedIn = await this.control.isSignedIn(adapter.id);
+		const hasSavedKey = await this.control.hasSavedKey(adapter.id);
+		const usage = this.control.usage(adapter.id);
+		const settings = this.control.readSettings(adapter.id);
 
 		const settingViews: SettingView[] = adapter.settings.map(spec => ({
 			key: spec.key,
@@ -267,7 +245,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 			removable: canUninstall(adapter),
 			signedIn: signedIn === undefined ? 'unknown' : signedIn ? 'yes' : 'no',
 			hasSavedKey,
-			enabled: this.deps.isEnabled(adapter.id),
+			enabled: this.control.isEnabled(adapter.id),
 			visible: this.visibleAgents!.has(adapter.id),
 			settings: settingViews,
 			usage: {
@@ -291,19 +269,19 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		if (this.visibleAgents) {
 			return;
 		}
-		const saved = this.deps.getVisibleAgents();
+		const saved = this.control.visibleAgents();
 		if (saved) {
 			this.visibleAgents = new Set(saved);
 			return;
 		}
 		const installed: string[] = [];
-		for (const adapter of this.deps.listAdapters()) {
-			if (await this.deps.getInstallState(adapter.id) === 'installed') {
+		for (const adapter of this.control.agents()) {
+			if (await this.control.installState(adapter.id) === 'installed') {
 				installed.push(adapter.id);
 			}
 		}
 		this.visibleAgents ??= new Set(installed);
-		await this.deps.saveVisibleAgents([...this.visibleAgents]);
+		await this.control.saveVisibleAgents([...this.visibleAgents]);
 	}
 
 	private async postState(): Promise<void> {
@@ -313,7 +291,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		const version = ++this.stateVersion;
 		await this.ensureVisibleAgents();
 		const agents: AgentCardState[] = [];
-		for (const adapter of this.deps.listAdapters()) {
+		for (const adapter of this.control.agents()) {
 			agents.push(await this.buildCard(adapter));
 		}
 		if (version !== this.stateVersion || !this.view) {
@@ -321,7 +299,7 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 		}
 		const globalSettings: SettingView[] = GLOBAL_SETTINGS.map(({ default: fallback, ...spec }) => ({
 			...spec,
-			value: this.deps.readGlobalSetting(spec.key) ?? fallback,
+			value: this.control.readGlobalSetting(spec.key) ?? fallback,
 		}));
 		const message: ToWebview = { type: 'state', agents, globalSettings };
 		await this.view.webview.postMessage(message);
@@ -329,8 +307,8 @@ export class SidebarHost implements vscode.WebviewViewProvider {
 
 	private buildHtml(webview: vscode.Webview): string {
 		const nonce = randomBytes(16).toString('base64');
-		const script = webview.asWebviewUri(this.deps.assetUri('dist/sidebar.js'));
-		const style = webview.asWebviewUri(this.deps.assetUri('media/sidebar.css'));
+		const script = webview.asWebviewUri(this.page.assetUri('dist/sidebar.js'));
+		const style = webview.asWebviewUri(this.page.assetUri('media/sidebar.css'));
 		const csp = [
 			`default-src 'none'`,
 			`style-src ${webview.cspSource} 'unsafe-inline'`,
