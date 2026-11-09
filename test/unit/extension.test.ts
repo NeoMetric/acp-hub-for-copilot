@@ -68,6 +68,14 @@ const mocks = vi.hoisted(() => ({
 	quickPicks: [] as Array<Array<{ label: string; id: string }>>,
 	/** Which entry the quick pick returns; `undefined` cancels it. */
 	pick: undefined as number | undefined,
+	/** What the API key migration was given, once per activation that ran it. */
+	keyMigrations: [] as Array<{
+		secrets: unknown;
+		target: unknown;
+		agentIds: string[];
+		state: unknown;
+		log: (message: string, level?: string) => void;
+	}>,
 }));
 
 vi.mock('vscode', () => {
@@ -169,6 +177,12 @@ vi.mock('../../src/sidebar/relay', () => ({
 		dispose() { }
 	},
 }));
+vi.mock('../../src/core/secretsMigration', () => ({
+	migrateSecretsOnce: (deps: (typeof mocks.keyMigrations)[number]) => {
+		mocks.keyMigrations.push(deps);
+		return Promise.resolve(true);
+	},
+}));
 vi.mock('../../src/sidebar/host', () => ({
 	SidebarHost: class {
 		constructor(readonly transport: unknown, readonly deps: { assetUri(relative: string): { path: string } }) {
@@ -187,6 +201,8 @@ let extensionDir = '';
 let globalStorage = '';
 /** The store root activation settles on, for the same test. */
 let root = '';
+/** The secret storage the window hands `activate`, for the same test. */
+let contextSecrets: unknown = undefined;
 
 beforeEach(() => {
 	root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-extension-'));
@@ -216,6 +232,8 @@ beforeEach(() => {
 	mocks.warnings.length = 0;
 	mocks.quickPicks.length = 0;
 	mocks.pick = undefined;
+	mocks.keyMigrations.length = 0;
+	contextSecrets = { get: async () => undefined, store: async () => undefined, delete: async () => undefined };
 	for (const key of Object.keys(mocks.config)) {
 		delete mocks.config[key];
 	}
@@ -239,6 +257,7 @@ function contextOf() {
 		extensionUri: { fsPath: extensionDir },
 		extension: { packageJSON: { version: '1' } },
 		globalState: { get: () => undefined, update: async () => undefined, keys: () => [] },
+		secrets: contextSecrets,
 	} as never;
 }
 
@@ -399,5 +418,17 @@ describe('the upgrade paths the extension still owns', () => {
 		// The move runs before activation returns, so the server's first install check already finds the agent.
 		expect(fs.readFileSync(path.join(root, 'agents', 'claude', 'entry.js'), 'utf8')).toBe('claude');
 		expect(fs.existsSync(legacy)).toBe(false);
+	});
+
+	it('carries the API keys of every registry agent over from the window secret storage', () => {
+		activateOnce();
+
+		expect(mocks.keyMigrations).toHaveLength(1);
+		const deps = mocks.keyMigrations[0];
+		expect(deps.agentIds).toEqual(REGISTRY.agents.map(agent => agent.id));
+		expect(deps.secrets).toBe(contextSecrets);
+		// The keys land in the store the server reads, under the state that records the one pass.
+		expect(deps.target).toBeDefined();
+		expect(deps.state).toBeDefined();
 	});
 });

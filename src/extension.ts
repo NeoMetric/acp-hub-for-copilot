@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { scopedLog } from './core/logging';
 import { REGISTRY } from './core/registry';
+import { migrateSecretsOnce } from './core/secretsMigration';
 import { migrateInstallsOnce, migrateState, openSharedStore } from './core/sharedStore';
 import { stateStoreOf } from './core/stateStore';
 import { recordStoragePath } from './core/storageCleanup';
@@ -55,6 +56,14 @@ export function activate(context: vscode.ExtensionContext): void {
 		state: shared.store.state,
 		log,
 	}).catch(error => log(`Could not move the agent installs into ${agentsDir}: ${messageOf(error)}`, 'warn'));
+	// A key the previous version saved in the window's secret storage moves into the shared store once, so the sidebar still offers it.
+	void migrateSecretsOnce({
+		secrets: context.secrets,
+		target: shared.store.secrets,
+		agentIds: REGISTRY.agents.map(agent => agent.id),
+		state: shared.store.state,
+		log,
+	}).catch(error => log(`Could not carry the saved API keys into the shared store: ${messageOf(error)}`, 'warn'));
 	// The uninstall hook deletes the agents with the extension.
 	recordStoragePath(extensionDir, agentsDir);
 
