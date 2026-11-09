@@ -4,21 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import type { AcpContentBlock, AcpImageBlock, AcpTextBlock } from './protocol';
 
-/** A text content block as defined by ACP. */
-export interface AcpTextBlock {
-	readonly type: 'text';
-	readonly text: string;
-}
-
-/** An image content block as defined by ACP; `data` is base64 encoded. */
-export interface AcpImageBlock {
-	readonly type: 'image';
-	readonly data: string;
-	readonly mimeType: string;
-}
-
-export type AcpContentBlock = AcpTextBlock | AcpImageBlock;
+export type { AcpContentBlock, AcpImageBlock, AcpTextBlock };
 
 /**
  * Converts Copilot chat messages into ACP prompt content blocks.

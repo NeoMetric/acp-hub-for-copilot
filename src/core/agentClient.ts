@@ -7,11 +7,12 @@ import * as cp from 'node:child_process';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { AgentAdapter, AgentSettings, LaunchContext } from './adapter';
-import type { AcpContentBlock } from './convert';
+import type { AcpAuthMethod, AcpTokenUsage, AcpContentBlock, AgentSession, ForkPoint, AcpConfigOption, AcpMcpHttpServer, AcpModels } from './protocol';
+import { RpcError } from './protocol';
 import { hideConsoleNodeOptions } from './hideConsole';
 import { levelOfLine, type Log, type LogLevel } from './logging';
 import { forgetAgent, killOrphanedServers, killStrayAgents, killTree, killTreeSync, pipeLines, recordAgent, trackChild, untrackChild } from './processes';
-import { isAuthRequiredError, JsonRpcConnection, RpcConnectionClosedError, RpcError } from './rpc';
+import { isAuthRequiredError, JsonRpcConnection, RpcConnectionClosedError } from './rpc';
 
 const ACP_PROTOCOL_VERSION = 1;
 const INVALID_PARAMS_CODE = -32602;
@@ -32,34 +33,6 @@ const FAST_EXIT_COOLDOWN_MS = 2 * 60_000;
 
 /** Arguments of a program started through the shell may only use these characters. */
 const SHELL_SAFE_ARGUMENT = /^[\w@+=:,./\\-]+$/;
-
-export interface AcpMcpHttpServer {
-	readonly type: 'http';
-	readonly name: string;
-	readonly url: string;
-	readonly headers: ReadonlyArray<{ readonly name: string; readonly value: string }>;
-}
-
-export interface AcpConfigOptionChoice {
-	readonly value: string;
-	readonly name: string;
-	readonly description?: string | null;
-}
-
-export interface AcpConfigOptionGroup {
-	readonly group: string;
-	readonly options: ReadonlyArray<AcpConfigOptionChoice>;
-}
-
-export interface AcpConfigOption {
-	readonly id: string;
-	readonly name: string;
-	readonly description?: string | null;
-	readonly category?: string | null;
-	readonly type: string;
-	readonly currentValue?: string | boolean;
-	readonly options?: ReadonlyArray<AcpConfigOptionChoice | AcpConfigOptionGroup>;
-}
 
 /** The loosely typed content block carried by an agent -> client `session/update`. */
 export interface AcpUpdateContent {
@@ -85,32 +58,6 @@ export interface AcpSessionUpdate {
 	readonly entries?: ReadonlyArray<{ readonly content: string; readonly status: string; readonly priority: string }>;
 }
 
-/** One entry of ACP's own model catalogue, whose ids may carry the effort as `model[effort]`. */
-export interface AcpModelInfo {
-	readonly modelId?: string;
-	readonly name?: string;
-	readonly description?: string;
-}
-
-export interface AcpModels {
-	readonly availableModels?: readonly AcpModelInfo[];
-	readonly currentModelId?: string;
-}
-
-/** A sign-in method the agent advertised in `initialize`. */
-export interface AcpAuthMethod {
-	readonly id?: string;
-	readonly name?: string;
-	readonly description?: string;
-}
-
-export interface AgentSession {
-	readonly sessionId: string;
-	configOptions: readonly AcpConfigOption[];
-	/** The model catalogue the agent reported with this session, if it did. */
-	readonly models?: AcpModels;
-}
-
 export interface CreateSessionOptions {
 	readonly cwd: string;
 	readonly mcpServers: readonly AcpMcpHttpServer[];
@@ -123,15 +70,6 @@ export interface CreateSessionOptions {
 	readonly ephemeral?: boolean;
 }
 
-/** Where in a stored conversation a fork is taken: after one agent message, named by id and by what it said. */
-export interface ForkPoint {
-	readonly messageId: string;
-	/** `sha256:<hex>` of the message's text, for an agent that no longer knows the id. */
-	readonly messageFingerprint: string;
-	/** Which of the messages with that fingerprint is meant, counting from 1. */
-	readonly messageOccurrence: number;
-}
-
 export interface PromptHandlers {
 	readonly onText: (text: string) => void;
 	readonly onThought?: (text: string) => void;
@@ -139,16 +77,6 @@ export interface PromptHandlers {
 	/** The usage of one model call of the turn, as soon as that call finishes. */
 	readonly onUsage?: (usage: AcpTokenUsage) => void;
 	readonly token?: vscode.CancellationToken;
-}
-
-/** Token counts of one turn, as reported by the agent. */
-export interface AcpTokenUsage {
-	readonly inputTokens: number;
-	readonly outputTokens: number;
-	readonly cachedReadTokens: number;
-	readonly cachedWriteTokens: number;
-	readonly totalTokens: number;
-	readonly reasoningOutputTokens?: number;
 }
 
 export interface PromptResult {
@@ -1023,6 +951,10 @@ function withForkPoint(extra: Record<string, unknown>, point: ForkPoint | undefi
 	const fork = { version: 1, messageId: point.messageId, messageFingerprint: point.messageFingerprint, messageOccurrence: point.messageOccurrence };
 	return { ...extra, _meta: { ...meta, jetbrains: { ...jetbrains, air: { ...air, fork } } } };
 }
+
+// Re-exports from protocol for backward compatibility
+export type { AcpAuthMethod, AcpTokenUsage, AcpContentBlock, AgentSession, ForkPoint, AcpConfigOption, AcpConfigOptionChoice, AcpConfigOptionGroup, AcpModelInfo, AcpModels, AcpMcpHttpServer } from './protocol';
+export { RpcError } from './protocol';
 
 function numberSetting(settings: AgentSettings, key: string, fallback: number): number {
 	const value = settings[key];

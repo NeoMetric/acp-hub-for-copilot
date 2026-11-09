@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Log } from './logging';
+import { RpcError } from './protocol';
 
 /** A JSON-RPC 2.0 request id as used by ACP. */
 export type RpcId = number | string;
@@ -16,15 +17,6 @@ export interface RpcErrorObject {
 
 /** ACP's JSON-RPC code for "authentication required". */
 export const AUTH_REQUIRED_CODE = -32000;
-
-/** An error returned by the peer, carrying the JSON-RPC code and payload. */
-export class RpcError extends Error {
-
-	constructor(message: string, readonly code: number, readonly data?: unknown) {
-		super(message);
-		this.name = "RpcError";
-	}
-}
 
 /** Whether `error` is the peer telling us that the user has to sign in. */
 export function isAuthRequiredError(error: unknown): boolean {
@@ -279,3 +271,6 @@ export class JsonRpcConnection {
 		this.write({ jsonrpc: "2.0", id, error: { code, message } });
 	}
 }
+
+// Re-export from protocol for backward compatibility
+export { RpcError };
