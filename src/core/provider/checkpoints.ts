@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AcpSessionUpdate } from '../agentClient';
+import type { AcpSessionUpdate } from '../../engine/acp/agentClient';
 import { messageFingerprintOf, type Checkpoint } from '../sessionStore';
 
 /** One message the agent said during a turn, put together from its chunks. */

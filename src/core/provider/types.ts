@@ -5,7 +5,7 @@
 
 import type * as vscode from 'vscode';
 import type { AgentAdapter, LastModelCall, LaunchContext } from '../adapter';
-import type { AcpTokenUsage, AgentClient, AgentClientDeps, AgentSession, PromptResult } from '../agentClient';
+import type { AcpTokenUsage, AgentClient, AgentClientDeps, AgentSession, PromptResult } from '../../engine/acp/agentClient';
 import type { McpBridge, McpServerEndpoint } from '../bridge';
 import type { ChatIdentity } from '../cache';
 import type { Log } from '../logging';

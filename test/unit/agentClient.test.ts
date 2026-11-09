@@ -8,9 +8,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, AgentSettings, LaunchContext } from '../../src/core/adapter';
-import { AdapterNotInstalledError, AgentClient, readTokenUsage, type AgentChange } from '../../src/core/agentClient';
+import { AdapterNotInstalledError, AgentClient, readTokenUsage, type AgentChange } from '../../src/engine/acp/agentClient';
 import type { Log } from '../../src/core/logging';
-import { isAuthRequiredError, RpcConnectionClosedError, RpcError } from '../../src/core/rpc';
+import { isAuthRequiredError, RpcConnectionClosedError, RpcError } from '../../src/engine/acp/rpc';
 
 const MOCK_AGENT = path.resolve(__dirname, '..', 'fixtures', 'mock-acp-agent.cjs');
 

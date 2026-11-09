@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import type { AcpTokenUsage } from '../../src/core/agentClient';
+import type { AcpTokenUsage } from '../../src/engine/acp/agentClient';
 import { CacheTracker, cacheTooltip, hitRateOf } from '../../src/core/cache';
 
 const turn = (cachedReadTokens: number, inputTokens: number, cachedWriteTokens: number, outputTokens = 10): AcpTokenUsage => ({

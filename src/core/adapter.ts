@@ -1,4 +1,4 @@
-import type { AcpAuthMethod, AcpTokenUsage, ForkPoint } from './agentClient';
+import type { AcpAuthMethod, AcpTokenUsage, ForkPoint } from '../engine/acp/protocol';
 import type { Log } from './logging';
 import type { SessionPolicy } from './sessionPolicy';
 

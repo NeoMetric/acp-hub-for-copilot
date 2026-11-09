@@ -13,7 +13,7 @@ import { codexAdapter } from '../../src/adapters/codex';
 import { googleAdapter } from '../../src/adapters/google';
 import { googleSessionPolicy } from '../../src/adapters/googleSessionPolicy';
 import type { AgentAdapter } from '../../src/core/adapter';
-import type { AgentSession, ForkPoint, PromptHandlers } from '../../src/core/agentClient';
+import type { AgentSession, ForkPoint, PromptHandlers } from '../../src/engine/acp/agentClient';
 import { AcpProvider } from '../../src/core/provider';
 import type { AgentApi, ProviderDeps } from '../../src/core/provider/types';
 import { policyOf, type ContinuationInput } from '../../src/core/sessionPolicy';

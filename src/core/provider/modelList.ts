@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 import type { AgentAdapter, ModelChoice, ModelPolicy } from '../adapter';
-import { AdapterNotInstalledError, type AgentSession } from '../agentClient';
+import { AdapterNotInstalledError, type AgentSession } from '../../engine/acp/agentClient';
 import type { Log } from '../logging';
 import { acpModelValue, effortLevelsOf, findModelOption, flattenChoices, toModelVariants } from '../models';
 import { describe, rpcDetailsOf } from './sessionOptions';

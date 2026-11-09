@@ -6,7 +6,7 @@
 import type { ModelPolicy } from '../adapter';
 import type { Log } from '../logging';
 import { acpModelValue, findEffortOption, findModelOption } from '../models';
-import { RpcError } from '../rpc';
+import { RpcError } from '../../engine/acp/rpc';
 import type { AgentApi, ChatSession } from './types';
 
 export function describe(error: unknown): string {

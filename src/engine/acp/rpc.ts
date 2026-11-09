@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Log } from './logging';
+import type { Log } from '../ports/host';
 import { RpcError } from './protocol';
 
 /** A JSON-RPC 2.0 request id as used by ACP. */

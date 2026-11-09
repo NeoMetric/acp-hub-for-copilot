@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import type { AcpSessionUpdate } from '../../src/core/agentClient';
+import type { AcpSessionUpdate } from '../../src/engine/acp/agentClient';
 import { checkpointOf, countsOf, noteAgentUpdate, type AgentMessage } from '../../src/core/provider/checkpoints';
 import { messageFingerprintOf } from '../../src/core/sessionStore';
 

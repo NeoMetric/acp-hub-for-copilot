@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { AcpContentBlock, AcpImageBlock, AcpTextBlock } from './protocol';
+import type { AcpContentBlock, AcpImageBlock, AcpTextBlock } from '../engine/acp/protocol';
 
 export type { AcpContentBlock, AcpImageBlock, AcpTextBlock };
 

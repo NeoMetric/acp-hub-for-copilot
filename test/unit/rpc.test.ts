@@ -5,7 +5,7 @@
 
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTH_REQUIRED_CODE, isAuthRequiredError, JsonRpcConnection, RpcConnectionClosedError, RpcError, RpcTimeoutError } from '../../src/core/rpc';
+import { AUTH_REQUIRED_CODE, isAuthRequiredError, JsonRpcConnection, RpcConnectionClosedError, RpcError, RpcTimeoutError } from '../../src/engine/acp/rpc';
 
 /** The agent's side of the pipes: what it receives, and a way to send. */
 function createPipes() {

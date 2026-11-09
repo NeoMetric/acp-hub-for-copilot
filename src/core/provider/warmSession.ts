@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AgentAdapter } from '../adapter';
-import type { AgentSession } from '../agentClient';
+import type { AgentSession } from '../../engine/acp/protocol';
 import type { McpBridge, McpServerEndpoint } from '../bridge';
 import type { AgentApi } from './types';
 

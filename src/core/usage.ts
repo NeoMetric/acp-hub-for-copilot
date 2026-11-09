@@ -1,7 +1,7 @@
 import type { AgentAdapter, UsageContext, UsageReading, UsageWindow } from './adapter';
 import type { Log } from './logging';
-import type { AcpTokenUsage } from './agentClient';
-import { isAuthRequiredError } from './rpc';
+import type { AcpTokenUsage } from '../engine/acp/protocol';
+import { isAuthRequiredError } from '../engine/acp/rpc';
 import { CacheTracker, type CacheStats, type MissStats, type RequestMeasurement } from './cache';
 
 /** A reading younger than this is reused instead of asking the agent again. */

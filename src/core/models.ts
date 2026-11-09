@@ -5,7 +5,7 @@
 
 import type * as vscode from 'vscode';
 import type { ModelPolicy } from './adapter';
-import type { AcpConfigOption, AcpConfigOptionChoice, AcpConfigOptionGroup } from './agentClient';
+import type { AcpConfigOption, AcpConfigOptionChoice, AcpConfigOptionGroup } from '../engine/acp/protocol';
 
 const MODEL_CATEGORY = 'model';
 /** The model's own version is not known to the adapter; the picker only needs a stable value. */

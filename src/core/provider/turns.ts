@@ -5,11 +5,12 @@
 
 import * as vscode from 'vscode';
 import type { AgentAdapter, AgentSettings } from '../adapter';
-import type { AcpSessionUpdate, AcpTokenUsage } from '../agentClient';
+import type { AcpSessionUpdate } from '../../engine/acp/agentClient';
+import type { AcpTokenUsage } from '../../engine/acp/protocol';
 import type { RequestMeasurement } from '../cache';
 import type { AcpContentBlock } from '../convert';
 import type { Log } from '../logging';
-import { RpcConnectionClosedError } from '../rpc';
+import { RpcConnectionClosedError } from '../../engine/acp/rpc';
 import { effectiveToolWaitMs, type SessionPolicy } from '../sessionPolicy';
 import type { SavedSessionStore } from '../sessionStore';
 import { checkpointOf, noteAgentUpdate } from './checkpoints';

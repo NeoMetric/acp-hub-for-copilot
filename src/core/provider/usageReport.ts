@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { AcpTokenUsage } from '../agentClient';
+import type { AcpTokenUsage } from '../../engine/acp/protocol';
 import { hitRateOf, sameInput } from '../cache';
 import type { Log } from '../logging';
 import type { ActiveTurn, ChatSession } from './types';

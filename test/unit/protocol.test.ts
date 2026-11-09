@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { expect, it } from 'vitest';
-import { RpcError } from '../../src/core/protocol';
+import { RpcError } from '../../src/engine/acp/protocol';
 
 it('RpcError keeps its code and message', () => {
 	const error = new RpcError('Authentication required', -32000);

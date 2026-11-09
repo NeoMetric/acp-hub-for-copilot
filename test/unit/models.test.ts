@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as vscode from 'vscode';
 import type { ModelPolicy } from '../../src/core/adapter';
-import type { AcpConfigOption } from '../../src/core/agentClient';
+import type { AcpConfigOption } from '../../src/engine/acp/agentClient';
 import {
 	acpModelValue, effortLevelsOf, effortOf, findEffortOption, findModelOption,
 	flattenChoices, toModelVariants,

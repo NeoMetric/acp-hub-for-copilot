@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import * as vscode from 'vscode';
 import { fingerprint, isSystemMessage, textOf } from '../convert';
 import { conversationIdOf, resolveCwd, systemGuidanceOf, workspaceFoldersOf } from '../requestContext';
-import { RpcConnectionClosedError } from '../rpc';
+import { RpcConnectionClosedError } from '../../engine/acp/rpc';
 import { shortHash } from '../sessionStore';
 import type { ChatContext, GuidanceChange } from './types';
 

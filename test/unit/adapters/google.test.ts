@@ -7,7 +7,7 @@ import { QuotaLimitError } from '../../../src/adapters/googleQuota';
 import { googleSessionPolicy } from '../../../src/adapters/googleSessionPolicy';
 import type { AgentSettings, InstallContext, LaunchContext } from '../../../src/core/adapter';
 import { HOST_IDENTITY } from '../../../src/core/hostIdentity';
-import { RpcError } from '../../../src/core/rpc';
+import { RpcError } from '../../../src/engine/acp/rpc';
 
 let temp: string;
 

@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { expect, it } from 'vitest';
 import { manifestToAdapter } from '../../src/adapters/generic';
-import { AgentClient } from '../../src/core/agentClient';
+import { AgentClient } from '../../src/engine/acp/agentClient';
 import { findAdapterEntry } from '../../src/core/npmInstaller';
 import { adaptersFromRegistry } from '../../src/core/agents';
 

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AcpTokenUsage } from './agentClient';
+import type { AcpTokenUsage } from '../engine/acp/protocol';
 
 /**
  * Token counts of one finished turn. A turn can make several model calls (one

@@ -5,13 +5,14 @@
 
 import * as cp from 'node:child_process';
 import * as path from 'node:path';
-import * as vscode from 'vscode';
-import type { AgentAdapter, AgentSettings, LaunchContext } from './adapter';
+import type { AgentAdapter, AgentSettings, LaunchContext } from '../../core/adapter';
+import { hideConsoleNodeOptions } from '../../core/hideConsole';
+import { levelOfLine } from '../../core/logging';
+import { forgetAgent, killOrphanedServers, killStrayAgents, killTree, killTreeSync, pipeLines, recordAgent, trackChild, untrackChild } from '../../core/processes';
+import type { Log, LogLevel } from '../ports/host';
+import { Emitter, type CancellationToken, type Disposable } from './emitter';
 import type { AcpAuthMethod, AcpTokenUsage, AcpContentBlock, AgentSession, ForkPoint, AcpConfigOption, AcpMcpHttpServer, AcpModels } from './protocol';
 import { RpcError } from './protocol';
-import { hideConsoleNodeOptions } from './hideConsole';
-import { levelOfLine, type Log, type LogLevel } from './logging';
-import { forgetAgent, killOrphanedServers, killStrayAgents, killTree, killTreeSync, pipeLines, recordAgent, trackChild, untrackChild } from './processes';
 import { isAuthRequiredError, JsonRpcConnection, RpcConnectionClosedError } from './rpc';
 
 /** Re-exports from `protocol` so every existing import site keeps working. */
@@ -80,7 +81,7 @@ export interface PromptHandlers {
 	readonly onUpdate?: (update: AcpSessionUpdate) => void;
 	/** The usage of one model call of the turn, as soon as that call finishes. */
 	readonly onUsage?: (usage: AcpTokenUsage) => void;
-	readonly token?: vscode.CancellationToken;
+	readonly token?: CancellationToken;
 }
 
 export interface PromptResult {
@@ -178,9 +179,9 @@ interface RequestPermissionParams {
  * has been idle, and exposes the operations the language model provider needs.
  * It never looks at which agent it is; the adapter holds every difference.
  */
-export class AgentClient implements vscode.Disposable {
+export class AgentClient implements Disposable {
 
-	private readonly changeEmitter = new vscode.EventEmitter<AgentChange>();
+	private readonly changeEmitter = new Emitter<AgentChange>();
 	/** Fires after the process was restarted, exited on its own, or was stopped for being idle. */
 	readonly onDidChange = this.changeEmitter.event;
 

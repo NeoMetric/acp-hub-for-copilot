@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { describeTier, formatReset, mapQuotaError, parseQuotaError, QuotaLimitError } from '../../../src/adapters/googleQuota';
-import { RpcError } from '../../../src/core/rpc';
+import { RpcError } from '../../../src/engine/acp/rpc';
 
 const NOW = Date.parse('2026-10-21T10:00:00Z');
 
