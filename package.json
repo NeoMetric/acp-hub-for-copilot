@@ -61,6 +61,10 @@
 				"title": "ACP Hub: Show Logs"
 			},
 			{
+				"command": "acpHub.showServerLogs",
+				"title": "ACP Hub: Show Server Logs"
+			},
+			{
 				"command": "acpHub.signIn",
 				"title": "ACP Hub: Sign In"
 			},
@@ -71,6 +75,10 @@
 			{
 				"command": "acpHub.refreshUsage",
 				"title": "ACP Hub: Refresh Usage"
+			},
+			{
+				"command": "acpHub.syncModels",
+				"title": "ACP Hub: Sync Models"
 			},
 			{
 				"command": "acpHub.stopServer",

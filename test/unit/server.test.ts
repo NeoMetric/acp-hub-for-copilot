@@ -20,6 +20,7 @@ import type { StreamEvent } from '../../src/engine/model/stream';
 import { settingKey } from '../../src/core/settings';
 import { createHeadlessHost, type HeadlessHost } from '../../src/hosts/http/host';
 import { createServer } from '../../src/hosts/http/server';
+import { mockAdapter } from './engine/serverHarness';
 
 const MOCK_AGENT = path.resolve(__dirname, '..', 'fixtures', 'mock-acp-agent.cjs');
 const NO_LOG = (): void => undefined;
@@ -76,7 +77,7 @@ interface BootOptions {
 	/** A service of the test's own, in place of the one over the mock agent. */
 	readonly service?: ChatService;
 	/** Sees every line the server logs. */
-	readonly log?: (message: string) => void;
+	readonly log?: (message: string, level?: string) => void;
 }
 
 /** Starts the server on a free port over the mock agent, with a store root of its own. */
@@ -278,6 +279,23 @@ describe('the HTTP server', () => {
 		}
 	});
 
+	it('reads the models again on request, and names the agent that answered', async () => {
+		const url = await start({ adapter: mockAdapter() });
+
+		const response = await post(`${url}/v1/models/refresh`);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ refreshed: [adapter.id] });
+	});
+
+	it('refuses the refresh route to a method it does not serve', async () => {
+		const url = await start();
+
+		const response = await fetch(`${url}/v1/models/refresh`);
+
+		expect(response.status).toBe(405);
+	});
+
 	describe('the names the user chose for models', () => {
 		const info = { name: 'Alpha', family: 'mock', version: '1', maxInputTokens: 1000, maxOutputTokens: 100, toolCalling: true, imageInput: false, efforts: [] };
 
@@ -339,6 +357,20 @@ describe('the HTTP server', () => {
 		expect(lines.filter(line => line.endsWith('Request received'))).toHaveLength(1);
 		expect(lines.filter(line => line.endsWith('Prompt sent'))).toHaveLength(1);
 		expect(lines.findIndex(line => line.endsWith('Request received'))).toBeLessThan(lines.findIndex(line => line.endsWith('Prompt sent')));
+	});
+
+	it('logs what a chat request carried, how large it was, and how long reading it took', async () => {
+		const lines: Array<{ message: string; level: string | undefined }> = [];
+		const { url } = await boot({ log: (message, level) => { lines.push({ message, level }); } });
+		const model = await firstModel(url);
+
+		const response = await post(`${url}/v1/chat/completions`, chat(model));
+
+		expect(response.status).toBe(200);
+		const line = lines.find(entry => entry.message.startsWith('Chat request: '));
+		expect(line?.level).toBe('debug');
+		expect(line?.message).toContain(`model ${model}, 1 message(s), `);
+		expect(line?.message).toMatch(/, \d+\.\d KB, read in \d+ ms$/);
 	});
 
 	it('starts every enabled agent on request, without waiting for them', async () => {

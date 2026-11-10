@@ -85,11 +85,22 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 		const controller = new AbortController();
 		const subscription = token.onCancellationRequested(() => controller.abort());
 		try {
+			this.deps.log(`Chat request from Copilot for ${model.id}: ${messages.length} message(s)`, 'info');
+			const asked = performance.now();
 			const state = await this.deps.link.ensure();
 			if (state.kind !== 'ready') {
 				throw new ServerChatError(`Could not reach the server: ${state.reason}`);
 			}
-			await streamChat(state.endpoint, bodyOf(model, this.deps.agentId, messages, options, this.deps.windowFolder()), controller.signal, event => {
+			const reached = performance.now();
+			const body = bodyOf(model, this.deps.agentId, messages, options, this.deps.windowFolder());
+			const built = performance.now();
+			this.deps.log(`Reaching the server took ${Math.round(reached - asked)} ms and building the request ${Math.round(built - reached)} ms.`, 'debug');
+			let first = true;
+			await streamChat(state.endpoint, body, controller.signal, event => {
+				if (first) {
+					first = false;
+					this.deps.log(`The first event of the turn arrived after ${Math.round(performance.now() - built)} ms.`, 'debug');
+				}
 				this.report(event, progress);
 			});
 		} catch (error) {
@@ -98,8 +109,9 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 				return;
 			}
 			this.deps.log(`The ${this.deps.agentId} chat failed: ${messageOf(error)}`, 'error');
-			// The server may have gone with the turn; the next message finds or starts one.
-			void this.deps.link.ensure();
+			// The server may have gone with the turn; the next message finds or starts one. This check is a
+			// background one, so a turn that fails cannot start a server the user stopped.
+			void this.deps.link.ensure({ background: true });
 			throw new vscode.LanguageModelError(messageOf(error));
 		} finally {
 			subscription.dispose();

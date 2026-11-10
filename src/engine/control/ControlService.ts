@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AgentAdapter, AgentSettings, LaunchContext } from '../../core/adapter';
-import { signOut as clearCredentials } from '../../core/auth';
+import { signInWithApiKey, signOut as clearCredentials } from '../../core/auth';
 import { getInstallState, installAgent, uninstallAgent, type InstallEnvironment, type InstallState } from '../../core/installers';
 import { readAgentSettings, settingKey } from '../../core/settings';
 import type { UsageState, UsageStore } from '../chat/usage';
@@ -64,6 +64,8 @@ export interface ControlSurface {
 	isSignedIn(agentId: string): Promise<boolean | undefined>;
 	hasSavedKey(agentId: string): Promise<boolean>;
 	signIn(agentId: string): Promise<SignInOutcome>;
+	/** Saves an API key for the agent and restarts it, so the key is the one it runs with. */
+	saveApiKey(agentId: string, key: string): Promise<SignInOutcome>;
 	signOut(agentId: string): Promise<void>;
 	readSettings(agentId: string): AgentSettings;
 	writeSetting(agentId: string, key: string, value: SettingValue): Promise<void>;
@@ -180,6 +182,21 @@ export class ControlService implements ControlSurface {
 		const outcome = await this.options.host.signIn(agentId);
 		if (outcome.ok) {
 			await this.options.state.update(`signedIn.${agentId}`, true);
+			void this.refreshUsage(agentId);
+		}
+		return outcome;
+	}
+
+	async saveApiKey(agentId: string, key: string): Promise<SignInOutcome> {
+		const adapter = this.adapter(agentId);
+		if (!adapter.auth.some(method => method.kind === 'api-key')) {
+			return { ok: false, message: `${adapter.displayName} does not sign in with an API key.` };
+		}
+		const outcome = await signInWithApiKey(agentId, key, this.options.secrets);
+		if (outcome.ok) {
+			await this.options.state.update(`signedIn.${agentId}`, true);
+			await this.options.host.restartAgent?.(agentId);
+			this.options.host.refreshAgent?.(agentId);
 			void this.refreshUsage(agentId);
 		}
 		return outcome;

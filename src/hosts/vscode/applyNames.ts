@@ -4,10 +4,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
+
+/** The state key that remembers which providers were last written to the CLI's `providers.json`. */
+export const CLI_PROVIDERS_KEY = 'server.cliProviders';
 
 /** The provider an earlier version of this server registered; its entries are replaced too. */
 const LEGACY_PROVIDER = 'acp-hub';
+
+/** The Copilot CLI's provider file: `COPILOT_PROVIDERS_CONFIG`, or `providers.json` in its folder in the home folder. */
+export function copilotProvidersFile(): string {
+	return process.env.COPILOT_PROVIDERS_CONFIG?.trim() || path.join(os.homedir(), '.copilot', 'providers.json');
+}
 
 /** One agent as the Copilot CLI lists it: the provider name and the models under it. */
 export interface CliProvider {
@@ -57,9 +66,10 @@ export function writeCliProviders(options: {
 
 /**
  * Sets the `displayName` VS Code shows for each vendor named in `names`, in the
- * extension's `package.json`; the indentation and line endings are kept.
+ * extension's `package.json`; the indentation and line endings are kept. Answers
+ * whether the file changed, since only a change needs a window reload.
  */
-export function writeVendorNames(options: { packageJson: string; names: Readonly<Record<string, string>> }): void {
+export function writeVendorNames(options: { packageJson: string; names: Readonly<Record<string, string>> }): boolean {
 	const text = withoutBom(fs.readFileSync(options.packageJson, 'utf8'));
 	const manifest = JSON.parse(text) as JsonObject;
 	const contributes = manifest.contributes as { languageModelChatProviders?: Array<{ vendor?: string; displayName?: string }> } | undefined;
@@ -72,12 +82,13 @@ export function writeVendorNames(options: { packageJson: string; names: Readonly
 		}
 	}
 	if (!changed) {
-		return;
+		return false;
 	}
 	const indent = /^([ \t]+)"/m.exec(text)?.[1] ?? '\t';
 	const eol = text.includes('\r\n') ? '\r\n' : '\n';
 	const body = JSON.stringify(manifest, null, indent).replace(/\n/g, eol);
 	fs.writeFileSync(options.packageJson, text.endsWith('\n') ? `${body}${eol}` : body, 'utf8');
+	return true;
 }
 
 function readConfig(file: string): JsonObject {

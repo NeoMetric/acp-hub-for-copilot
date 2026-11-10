@@ -13,8 +13,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Log } from '../../src/engine/ports/host';
-import { ServerLink, type LinkState, type ServerLinkDeps } from '../../src/hosts/vscode/serverLink';
-import { API_VERSION, SERVER_NAME } from '../../src/hosts/http/wire';
+import { ServerLink, stopMarkerOf, type LinkState, type ServerLinkDeps } from '../../src/hosts/vscode/serverLink';
+import { API_VERSION, SERVER_NAME, SHUTDOWN_ROUTE } from '../../src/hosts/http/wire';
 import { tokenFileOf } from '../../src/main/token';
 
 const STUB = path.resolve(__dirname, '..', 'fixtures', 'stub-server.cjs');
@@ -148,6 +148,7 @@ function makeLink(deps: { root: string; port: number } & Partial<ServerLinkDeps>
 		serverScript: STUB,
 		extensionDir: path.dirname(STUB),
 		log,
+		serverLog: log,
 		retryMs: 50,
 		spawn: capturing([]),
 		...deps,
@@ -356,11 +357,12 @@ describe('the link to the server', () => {
 		expect(await within(link.dispose(), 2_000), 'dispose never waits for an exit that cannot come').toBe('done');
 	});
 
-	it('relays a healthy start at the level the server names, not as a warning', async () => {
+	it('relays a healthy start to the server log at the level the server names, not as a warning', async () => {
 		const port = await freePort();
 		const lines: Array<{ message: string; level: string | undefined }> = [];
-		const log: Log = (message, level) => { lines.push({ message, level }); };
-		const link = makeLink({ root: storeRoot(), port, log });
+		const window: string[] = [];
+		const serverLog: Log = (message, level) => { lines.push({ message, level }); };
+		const link = makeLink({ root: storeRoot(), port, serverLog, log: message => { window.push(message); } });
 
 		expect(readyOf(await link.ensure()).owned).toBe(true);
 
@@ -371,6 +373,8 @@ describe('the link to the server', () => {
 		const start = lines.find(line => line.message.includes('listening'));
 		expect(start, 'the server says where it listens').toBeDefined();
 		expect(start?.level).toBe('info');
+		expect(window.some(line => line.includes('listening')), 'what the server says is not the window\'s line').toBe(false);
+		expect(window.some(line => line.includes('Starting the ACP Hub server')), 'what the window does is its own line').toBe(true);
 	});
 
 	it('takes over when the owner\'s server dies', async () => {
@@ -482,17 +486,42 @@ describe('a server that runs on its own', () => {
 		expect(command).toBe(process.execPath);
 	});
 
-	it('shows a running server\'s later log lines in the channel, also in a window that did not start it', async () => {
+	it('shows a running server\'s later log lines in the server log, also in a window that did not start it', async () => {
 		const port = await freePort();
 		const root = storeRoot();
 		readyOf(await makeLink({ root, port, detached: true }).ensure());
 		const lines: string[] = [];
-		const watcher = makeLink({ root, port, detached: true, log: (message: string) => { lines.push(message); } });
+		const watcher = makeLink({ root, port, detached: true, serverLog: (message: string) => { lines.push(message); } });
 
 		expect(readyOf(await watcher.ensure()).owned).toBe(false);
 		fs.appendFileSync(path.join(root, 'server.log'), `${new Date().toISOString()} INFO [claude] a chat started\n`);
 
-		await waitUntil(async () => lines.some(line => line.includes('a chat started')), 'the log line in the channel', 3_000);
+		await waitUntil(async () => lines.some(line => line.includes('a chat started')), 'the log line in the server log', 3_000);
+	});
+
+	it('shows the end of a log written before it attached, whole lines only, and each line once', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		const file = path.join(root, 'server.log');
+		// A log larger than the stretch a window shows, so the first line it reads starts mid-line.
+		const filler: string[] = [];
+		for (let index = 0; index < 5_000; index++) {
+			filler.push(`${new Date().toISOString()} INFO [filler] line ${index} ${'x'.repeat(40)}\n`);
+		}
+		filler.push(`${new Date().toISOString()} INFO [claude] a line written before the window attached\n`);
+		fs.writeFileSync(file, filler.join(''));
+
+		readyOf(await makeLink({ root, port, detached: true }).ensure());
+		const lines: string[] = [];
+		const watcher = makeLink({ root, port, detached: true, serverLog: (message: string) => { lines.push(message); } });
+
+		expect(readyOf(await watcher.ensure()).owned).toBe(false);
+
+		await waitUntil(async () => lines.some(line => line.includes('a line written before')), 'the lines of the log it attached to', 3_000);
+		expect(lines.filter(line => line.includes('a line written before')), 'the line it missed before is shown once').toHaveLength(1);
+		expect(lines[0], 'the first line it reads is whole').toMatch(/^\[filler\] line \d+ x+$/);
+		// The start of the server it attached to is in the stretch it shows too.
+		await waitUntil(async () => lines.some(line => line.includes('listening')), 'the start of the server in the replayed log', 3_000);
 	});
 
 	it('stops the server on request and leaves it stopped until it is asked for again', async () => {
@@ -523,6 +552,101 @@ describe('a server that runs on its own', () => {
 		expect(await answers(port), 'the sidebar reconnecting must not start it again').toBe(false);
 		readyOf(await link.ensure());
 		await waitForHealth(port);
+	});
+
+	it('records the stop before it asks the server to close, so another window sees it during the shutdown', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		readyOf(await makeLink({ root, port, detached: true }).ensure());
+		let recordedWhenAsked: boolean | undefined;
+		const asking = vi.fn();
+		const fetchOf = (async (url: string | URL | Request, init?: RequestInit) => {
+			if (String(url).endsWith(SHUTDOWN_ROUTE)) {
+				asking();
+				recordedWhenAsked = fs.existsSync(stopMarkerOf(root));
+			}
+			return fetch(url, init);
+		}) as typeof fetch;
+		const link = makeLink({ root, port, detached: true, fetch: fetchOf });
+
+		expect(await link.stopServer()).toBe(true);
+
+		expect(asking).toHaveBeenCalled();
+		expect(recordedWhenAsked, 'the record is there before the server is asked to close').toBe(true);
+		expect(fs.existsSync(stopMarkerOf(root)), 'a stop that stuck stays recorded').toBe(true);
+	});
+
+	it('takes the record back when the server would not stop', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		const link = makeLink({ root, port, detached: true });
+
+		expect(await link.stopServer(), 'nothing answers, so nothing was stopped').toBe(false);
+
+		expect(fs.existsSync(stopMarkerOf(root)), 'a stop that failed leaves no record').toBe(false);
+	});
+
+	it('another window starts no server after the stop, while a chat does', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		const first = makeLink({ root, port, detached: true });
+		readyOf(await first.ensure());
+		expect(await first.stopServer()).toBe(true);
+		await waitForPortClosed(port);
+		const spawned: ChildProcess[] = [];
+		// The second link has no memory of the stop: only the store root tells it.
+		const second = makeLink({ root, port, detached: true, spawn: capturing(spawned) });
+
+		const background = await second.ensure({ background: true });
+
+		expect(reasonOf(background)).toContain('was stopped');
+		expect(spawned, 'a window that opens after the stop starts nothing').toHaveLength(0);
+		await delay(300);
+		expect(await answers(port)).toBe(false);
+		expect(fs.existsSync(stopMarkerOf(root)), 'the stop is still recorded').toBe(true);
+
+		const asked = readyOf(await second.ensure());
+
+		expect(asked.owned).toBe(true);
+		expect(fs.existsSync(stopMarkerOf(root)), 'a chat asked for the server, so the stop is over').toBe(false);
+		await waitForHealth(port);
+	});
+
+	it('a background caller uses a server that answers after a stop, and the stop is over then', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		// The user stopped the server, and one was started deliberately afterwards.
+		fs.writeFileSync(stopMarkerOf(root), 'stopped\n');
+		startStub({ port });
+		await waitForHealth(port);
+		const spawn = vi.fn();
+		const link = makeLink({ root, port, spawn: spawn as unknown as ServerLinkDeps['spawn'] });
+
+		const state = readyOf(await link.ensure({ background: true }));
+
+		expect(state.owned).toBe(false);
+		expect(spawn, 'a server that answers is attached to, not started').not.toHaveBeenCalled();
+		expect(fs.existsSync(stopMarkerOf(root)), 'a server that answers means nothing is stopped').toBe(false);
+	});
+
+	it('the watch of another window starts no server after the stop', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		const owner = makeLink({ root, port, detached: true });
+		readyOf(await owner.ensure());
+		const spawned: ChildProcess[] = [];
+		const other = makeLink({ root, port, detached: true, watchMs: 100, spawn: capturing(spawned) });
+		expect(readyOf(await other.ensure()).owned, 'the other window only attached').toBe(false);
+
+		expect(await owner.stopServer()).toBe(true);
+		await waitForPortClosed(port);
+
+		// Several checks of the other window's watch, which used to start a new server a few seconds later.
+		await delay(600);
+
+		expect(spawned, 'the watch of a window that did not stop it starts nothing').toHaveLength(0);
+		expect(await answers(port)).toBe(false);
+		expect(reasonOf(other.state!), 'the other window says why the server is away').toContain('was stopped');
 	});
 
 	it('replaces a server of an older version, so an update takes effect', async () => {

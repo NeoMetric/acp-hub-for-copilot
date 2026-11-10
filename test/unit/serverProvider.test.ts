@@ -77,13 +77,16 @@ function serverWith(models: readonly ModelWire[], chat?: (request: http.Incoming
 
 class FakeLink {
 	ensured = 0;
+	/** Whether each `ensure()` was a background one, in the order they were asked. */
+	readonly backgrounds: boolean[] = [];
 	state: LinkState | undefined;
 	private readonly listeners = new Set<(state: LinkState) => void>();
 
 	constructor(private readonly answer: () => Promise<LinkState> | LinkState) { }
 
-	async ensure(): Promise<LinkState> {
+	async ensure(options: { readonly background?: boolean } = {}): Promise<LinkState> {
 		this.ensured++;
+		this.backgrounds.push(options.background === true);
 		const next = await this.answer();
 		this.publish(next);
 		return next;
@@ -152,13 +155,13 @@ async function waitUntil(ready: () => boolean, what: string, timeoutMs = 3_000):
 const logs: string[] = [];
 const log: Log = message => { logs.push(message); };
 
-function providerOf(overrides: { agentId?: string; link?: FakeLink; state?: StateStore; windowFolder?: string } = {}): ServerProvider {
+function providerOf(overrides: { agentId?: string; link?: FakeLink; state?: StateStore; windowFolder?: string; log?: Log } = {}): ServerProvider {
 	return new ServerProvider({
 		agentId: overrides.agentId ?? 'claude',
 		vendor: 'Test Agent',
 		link: overrides.link ?? new FakeLink(() => unavailable),
 		state: overrides.state ?? new MemoryState(),
-		log,
+		log: overrides.log ?? log,
 		windowFolder: () => overrides.windowFolder ?? 'c:\\window',
 	});
 }
@@ -422,6 +425,8 @@ describe('ServerProvider chat', () => {
 		expect((error as Error).message).toContain('127.0.0.1');
 		// One ensure() opened the turn; the failure asked for another, so the next message has a server.
 		expect(link.ensured).toBe(before + 2);
+		// The turn's own check asked for the server; the one after a failure must not undo a stop the user asked for.
+		expect(link.backgrounds).toEqual([false, true]);
 	});
 
 	it('an unavailable server throws LanguageModelError naming the reason', async () => {
@@ -439,5 +444,23 @@ describe('ServerProvider chat', () => {
 		const provider = providerOf();
 
 		expect(await provider.provideTokenCount(modelInfo, 'twelve chars', token())).toBe(3);
+	});
+
+	it('tells when a chat was asked for, and how long each step before the first event took', async () => {
+		const baseUrl = await serverWith([], (_request, response) => {
+			response.writeHead(200, { 'content-type': 'text/event-stream' });
+			send(response, { content: 'ok' });
+			send(response, {}, 'stop', { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 });
+			end(response);
+		});
+		const lines: Array<{ message: string; level: string | undefined }> = [];
+		const provider = providerOf({ link: new FakeLink(() => ready(baseUrl)), log: (message, level) => { lines.push({ message, level }); } });
+
+		await provider.provideLanguageModelChatResponse(modelInfo, messages, options, recorded().progress, token());
+
+		expect(lines[0]).toEqual({ message: 'Chat request from Copilot for sonnet: 1 message(s)', level: 'info' });
+		expect(lines.slice(1).map(line => line.level)).toEqual(['debug', 'debug']);
+		expect(lines[1].message).toMatch(/^Reaching the server took \d+ ms and building the request \d+ ms\.$/);
+		expect(lines[2].message).toMatch(/^The first event of the turn arrived after \d+ ms\.$/);
 	});
 });

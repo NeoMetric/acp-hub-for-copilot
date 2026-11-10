@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { writeCliProviders, writeVendorNames } from '../../src/hosts/http/applyNames';
+import { writeCliProviders, copilotProvidersFile, writeVendorNames } from '../../src/hosts/vscode/applyNames';
 
 /** The byte order mark Windows tools write at the start of a JSON file. */
 const BOM = String.fromCharCode(0xfeff);
@@ -121,5 +121,26 @@ describe('writeVendorNames', () => {
 
 	it('throws when the file is missing', () => {
 		expect(() => writeVendorNames({ packageJson: path.join(os.tmpdir(), 'acp-hub-no-such', 'package.json'), names: { 'Claude Agent': 'X' } })).toThrow();
+	});
+
+	it('answers whether the manifest changed, so the caller knows a reload is due', () => {
+		const file = tempFile('package.json', `${JSON.stringify(MANIFEST, null, '\t')}\n`);
+
+		expect(writeVendorNames({ packageJson: file, names: { 'Claude Agent': 'Work Claude' } })).toBe(true);
+		expect(writeVendorNames({ packageJson: file, names: { 'Claude Agent': 'Work Claude' } })).toBe(false);
+	});
+});
+
+describe('copilotProvidersFile', () => {
+	afterEach(() => {
+		delete process.env.COPILOT_PROVIDERS_CONFIG;
+	});
+
+	it('reads the file the environment names, and the home folder otherwise', () => {
+		expect(copilotProvidersFile()).toBe(path.join(os.homedir(), '.copilot', 'providers.json'));
+
+		process.env.COPILOT_PROVIDERS_CONFIG = path.join(os.tmpdir(), 'mine.json');
+
+		expect(copilotProvidersFile()).toBe(path.join(os.tmpdir(), 'mine.json'));
 	});
 });

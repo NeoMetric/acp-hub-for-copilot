@@ -48,11 +48,16 @@ export interface ServerLinkDeps {
 	readonly idleMinutes?: number;
 	/** The extension's version; a detached server of another version is replaced, so an update takes effect. */
 	readonly version?: string;
+	/** The window's own channel; the server's lines never go here. */
 	readonly log: Log;
+	/** The channel of the server's own lines, whether they come from its log file or a child's stderr. */
+	readonly serverLog: Log;
 	readonly spawn?: typeof nodeSpawn;
 	readonly fetch?: typeof fetch;
 	/** How long the link waits between two probes of a server that is still starting. */
 	readonly retryMs?: number;
+	/** How often a server this window reached is checked again; every window of this machine shares one, and a test names another. */
+	readonly watchMs?: number;
 }
 
 /** The port every window of this machine reaches the server on; the server's own default. */
@@ -95,8 +100,22 @@ const SERVER_LOG_LIMIT_BYTES = 2 * 1024 * 1024;
 /** How often the server's log file is read for new lines once the server is up. */
 const FOLLOW_INTERVAL_MS = 500;
 
+/** How much of a log a window that attaches to a running server shows before following it live. */
+const REPLAY_BYTES = 256 * 1024;
+
 /** How long a server asked to stop gets to release its port. */
 const STOP_TIMEOUT_MS = 10_000;
+
+/** The file whose presence says the user stopped the server and nothing has used it since, in the store root. */
+const STOP_MARKER = 'server.stopped';
+
+/**
+ * Where the stop marker lives: `<root>/server.stopped`, beside `server.log` and `server.token`. Every window
+ * of this machine derives it from the store root they share, so a stop in one window is seen by all of them.
+ */
+export function stopMarkerOf(root: string): string {
+	return path.join(path.resolve(root), STOP_MARKER);
+}
 
 /** What one probe of the port found. */
 type Probe =
@@ -119,16 +138,18 @@ export class ServerLink {
 	private readonly port: number;
 	private readonly baseUrl: string;
 	private readonly retryMs: number;
+	private readonly watchMs: number;
 	private readonly fetchOf: typeof fetch;
 	private readonly spawnOf: typeof nodeSpawn;
 	private readonly listeners = new Set<(state: LinkState) => void>();
 	private child: ChildProcess | undefined;
 	private tail: LogTail | undefined;
 	private follower: NodeJS.Timeout | undefined;
-	/** Set by a stop the user asked for, so the watch does not start the server again behind their back. */
-	private paused = false;
+	/** Set while a stop the user asked for is under way, so a background caller does not attach to the server that is leaving. */
+	private stopping = false;
 	private current: LinkState | undefined;
-	private pending: Promise<LinkState> | undefined;
+	/** The work in flight, and whether it was asked for in the background, which decides what it may do. */
+	private pending: { readonly work: Promise<LinkState>; readonly background: boolean } | undefined;
 	private watcher: NodeJS.Timeout | undefined;
 	private disposed = false;
 
@@ -137,6 +158,7 @@ export class ServerLink {
 		this.port = deps.port ?? SERVER_PORT;
 		this.baseUrl = `http://127.0.0.1:${this.port}`;
 		this.retryMs = deps.retryMs ?? DEFAULT_RETRY_MS;
+		this.watchMs = deps.watchMs ?? WATCH_INTERVAL_MS;
 		this.fetchOf = deps.fetch ?? fetch;
 		this.spawnOf = deps.spawn ?? nodeSpawn;
 	}
@@ -156,42 +178,86 @@ export class ServerLink {
 
 	/**
 	 * Attaches to the server, or starts one; concurrent and repeated calls share one answer. A `background`
-	 * caller, such as the sidebar reconnecting or the model list refreshing, leaves a server the user stopped
-	 * stopped: only a chat or a sidebar action asks for it again.
+	 * caller, such as the sidebar reconnecting or the model list refreshing, never starts a server the user
+	 * stopped — it uses one only when one answers. A chat or a sidebar action asks for the server, so it
+	 * clears the stop and starts one as it always did.
 	 */
 	async ensure(options: { readonly background?: boolean } = {}): Promise<LinkState> {
-		if (options.background && this.paused && this.current) {
-			return this.current;
+		const background = options.background === true;
+		if (!background) {
+			this.clearStopMarker();
 		}
-		this.paused = false;
-		return this.settle();
+		return this.settle(background);
 	}
 
 	/**
 	 * Asks the server to close, agents and all, whichever window started it, and waits until its port is
-	 * free. The link then leaves it stopped until something asks for the server again. `false` when the
-	 * server could not be asked or did not leave.
+	 * free. The stop is recorded in the store root before the server is asked, so the other windows see it
+	 * while the shutdown runs and leave the server stopped too. `false` when the server could not be asked
+	 * or did not leave; the record is taken back then, since the server still runs.
 	 */
 	async stopServer(): Promise<boolean> {
-		this.paused = true;
-		if (!await this.requestStop()) {
-			return false;
+		this.stopping = true;
+		this.markStopped();
+		try {
+			if (!await this.requestStop()) {
+				this.clearStopMarker();
+				return false;
+			}
+		} finally {
+			this.stopping = false;
 		}
 		this.child = undefined;
-		this.publish({ kind: 'unavailable', reason: `The server on port ${this.port} was stopped; it starts again when a chat needs it.` });
+		this.publish(this.stopped());
 		return true;
 	}
 
-	private async settle(): Promise<LinkState> {
-		if (this.pending) {
-			return this.pending;
+	/** Records the user's stop before the server is asked to close, so every window sees it during the shutdown. */
+	private markStopped(): void {
+		const file = stopMarkerOf(this.deps.root);
+		try {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, `${new Date().toISOString()}\n`, 'utf8');
+		} catch (error) {
+			// A stop that cannot be recorded still stops the server; the other windows may start one again.
+			this.deps.log(`The stop could not be recorded in ${file}: ${messageOf(error)}`, 'warn');
 		}
-		const work = this.run();
-		this.pending = work;
+	}
+
+	/** Forgets a stop, because the server is asked for again or one answered. */
+	private clearStopMarker(): void {
+		try {
+			fs.rmSync(stopMarkerOf(this.deps.root), { force: true });
+		} catch (error) {
+			this.deps.log(`The stop recorded for the server could not be taken back: ${messageOf(error)}`, 'warn');
+		}
+	}
+
+	/** Whether the user stopped the server and nothing has used it since, in any window. */
+	private stoppedByUser(): boolean {
+		try {
+			fs.statSync(stopMarkerOf(this.deps.root));
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	private async settle(background: boolean): Promise<LinkState> {
+		const pending = this.pending;
+		if (pending) {
+			if (background || !pending.background) {
+				return pending.work;
+			}
+			// A background answer leaves a server the user stopped stopped, and this call asks for one.
+			await pending.work;
+		}
+		const work = this.run(background);
+		this.pending = { work, background };
 		try {
 			return await work;
 		} finally {
-			if (this.pending === work) {
+			if (this.pending?.work === work) {
 				this.pending = undefined;
 			}
 		}
@@ -245,18 +311,22 @@ export class ServerLink {
 		}
 	}
 
-	private async run(): Promise<LinkState> {
+	private async run(background: boolean): Promise<LinkState> {
 		if (this.disposed) {
 			return this.closed();
 		}
 		try {
-			return await this.attachOrStart();
+			return await this.attachOrStart(background);
 		} catch (error) {
 			return this.publish({ kind: 'unavailable', reason: `The server on port ${this.port} could not be reached: ${messageOf(error)}` });
 		}
 	}
 
-	private async attachOrStart(): Promise<LinkState> {
+	private async attachOrStart(background: boolean): Promise<LinkState> {
+		if (background && this.stopping) {
+			// The server a stop is closing still answers for a moment; attaching to it would undo the stop.
+			return this.publish(this.stopped());
+		}
 		const probe = await this.classify();
 		// dispose() may have run while the probe was out; a closed link starts nothing.
 		if (this.disposed) {
@@ -264,6 +334,15 @@ export class ServerLink {
 		}
 		if (probe.kind === 'incompatible') {
 			return this.publish({ kind: 'unavailable', reason: probe.reason });
+		}
+		if (probe.kind === 'compatible') {
+			// The server may be one this window started earlier; a watch must not unown it.
+			return this.reach(this.ownsRunning());
+		}
+		// Nothing this link can use answers, and a background caller never starts a server the user stopped;
+		// attaching to one that does answer, above, is how a server someone asked for is used again.
+		if (background && this.stoppedByUser()) {
+			return this.publish(this.stopped());
 		}
 		if (probe.kind === 'older') {
 			// A server left running by an earlier version would keep serving the old code after an update.
@@ -274,11 +353,8 @@ export class ServerLink {
 			if (this.disposed) {
 				return this.closed();
 			}
-		} else if (probe.kind === 'compatible') {
-			// The server may be one this window started earlier; a watch must not unown it.
-			return this.reach(this.ownsRunning());
 		}
-		return this.start();
+		return this.start(background);
 	}
 
 	/** Verifies the token and reports the server as reachable, watching it from then on. */
@@ -290,6 +366,8 @@ export class ServerLink {
 		if (refused) {
 			return this.publish({ kind: 'unavailable', reason: refused });
 		}
+		// A server answers, so a stop that was recorded is over: the marker lives only while nothing uses it.
+		this.clearStopMarker();
 		this.watch();
 		this.followAttached();
 		return this.publish({
@@ -299,7 +377,7 @@ export class ServerLink {
 		});
 	}
 
-	private async start(): Promise<LinkState> {
+	private async start(background: boolean): Promise<LinkState> {
 		if (this.disposed) {
 			return this.closed();
 		}
@@ -314,6 +392,10 @@ export class ServerLink {
 		if (this.disposed) {
 			return this.closed();
 		}
+		// A stop that was recorded while this call was on its way is still a stop the user asked for.
+		if (background && this.stoppedByUser()) {
+			return this.publish(this.stopped());
+		}
 
 		ensureToken(this.deps.root);
 		this.deps.log(`Starting the ACP Hub server on port ${this.port}.`);
@@ -326,7 +408,7 @@ export class ServerLink {
 				const said = line.trim();
 				if (said) {
 					const { level, message } = parseServerLine(said);
-					this.deps.log(message, level);
+					this.deps.serverLog(message, level);
 				}
 			}
 		};
@@ -443,7 +525,7 @@ export class ServerLink {
 		return process.execPath;
 	}
 
-	/** Shows what a server writes to its log in this window's channel, from now on. */
+	/** Shows what a server writes to its log in the server's channel, from now on. */
 	private follow(tail: LogTail): void {
 		if (this.disposed || this.follower) {
 			return;
@@ -453,21 +535,24 @@ export class ServerLink {
 				const said = line.trim();
 				if (said) {
 					const { level, message } = parseServerLine(said);
-					this.deps.log(message, level);
+					this.deps.serverLog(message, level);
 				}
 			}
 		}, FOLLOW_INTERVAL_MS);
 		this.follower.unref();
 	}
 
-	/** A window that attached to a server it did not start follows that server's log from its end. */
+	/**
+	 * A window that attached to a server it did not start shows the end of that server's log, so the lines
+	 * of the requests before it attached are not lost, and then follows it live.
+	 */
 	private followAttached(): void {
 		if (!this.deps.detached || this.follower || this.tail) {
 			return;
 		}
 		const file = path.join(this.deps.root, SERVER_LOG);
 		try {
-			this.tail = new LogTail(file, fs.statSync(file).size);
+			this.tail = new LogTail(file, replayStartOf(file, fs.statSync(file).size));
 		} catch {
 			return;
 		}
@@ -641,6 +726,10 @@ export class ServerLink {
 		return this.publish({ kind: 'unavailable', reason: `The link to the server on port ${this.port} is closed.` });
 	}
 
+	private stopped(): LinkState {
+		return { kind: 'unavailable', reason: `The server on port ${this.port} was stopped; it starts again when a chat needs it.` };
+	}
+
 	/** Whether the server that answers is one this window started and that still runs. */
 	private ownsRunning(): boolean {
 		return this.child !== undefined && !gone(this.child);
@@ -650,12 +739,11 @@ export class ServerLink {
 		if (this.watcher || this.disposed) {
 			return;
 		}
-		// A light check, so a server that dies between turns is replaced on the next one.
+		// A light check, so a server that dies between turns is replaced on the next one. It is a background
+		// check, so a server the user stopped stays stopped even when the window that stopped it was another.
 		this.watcher = setInterval(() => {
-			if (!this.paused) {
-				void this.settle();
-			}
-		}, WATCH_INTERVAL_MS);
+			void this.settle(true);
+		}, this.watchMs);
 		this.watcher.unref();
 	}
 
@@ -757,6 +845,31 @@ class LogTail {
 		} catch {
 			return '';
 		}
+	}
+}
+
+/**
+ * Where to start reading a log of `size` bytes so its last `REPLAY_BYTES` are shown: just after the
+ * first newline of that stretch, since the line the offset falls in was cut in half.
+ */
+function replayStartOf(file: string, size: number): number {
+	const offset = Math.max(0, size - REPLAY_BYTES);
+	if (offset === 0) {
+		return 0;
+	}
+	try {
+		const buffer = Buffer.alloc(size - offset);
+		const descriptor = fs.openSync(file, 'r');
+		try {
+			fs.readSync(descriptor, buffer, 0, buffer.length, offset);
+		} finally {
+			fs.closeSync(descriptor);
+		}
+		const newline = buffer.indexOf(0x0a);
+		// A stretch of a single line that does not end yet shows nothing rather than half a line.
+		return newline < 0 ? size : offset + newline + 1;
+	} catch {
+		return offset;
 	}
 }
 

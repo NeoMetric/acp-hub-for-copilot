@@ -24,6 +24,14 @@ export const SHUTDOWN_ROUTE = '/shutdown';
 /** `POST /v1/warm`: starts every enabled agent's process ahead of its first chat. */
 export const WARM_ROUTE = '/v1/warm';
 
+/** `POST /v1/models/refresh`: reads every usable agent's models again; answers the agent ids that gave a list. */
+export const MODELS_REFRESH_ROUTE = '/v1/models/refresh';
+
+/** What `POST /v1/models/refresh` answers. */
+export interface ModelsRefreshWire {
+	refreshed: string[];
+}
+
 /** `GET /health`: who the server is, and what it can drive right now. */
 export interface HealthWire {
 	status: 'ok';

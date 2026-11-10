@@ -42,10 +42,12 @@ describe('googleAdapter', () => {
 		expect(googleAdapter.vendor).toBe('Google Agent');
 		expect(googleAdapter.displayName).toBe('Google Agent');
 		expect(googleAdapter.install.kind).toBe('download');
-		expect(googleAdapter.settings.map(setting => setting.key)).toContain('useAgentBuiltInTools');
-		expect(googleAdapter.settings.map(setting => setting.key)).toContain('idleTimeoutSeconds');
-		expect(googleAdapter.settings.map(setting => setting.key)).not.toContain('agyCommand');
-		expect(googleAdapter.settings.map(setting => setting.key)).toContain('replaceSystemPrompt');
+		const keys = googleAdapter.settings.map(setting => setting.key);
+		expect(keys).toContain('idleTimeoutSeconds');
+		expect(keys).toContain('replaceSystemPrompt');
+		expect(keys).not.toEqual(expect.arrayContaining(['command']));
+		expect(keys).not.toEqual(expect.arrayContaining(['args']));
+		expect(keys).not.toEqual(expect.arrayContaining(['useAgentBuiltInTools']));
 	});
 
 	it('owns how its stored conversations continue in a session policy', () => {

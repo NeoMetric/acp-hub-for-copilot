@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ModelWire } from '../http/wire';
+import { MODELS_REFRESH_ROUTE } from '../http/wire';
 import type { ServerEndpoint } from './serverLink';
 
 /**
@@ -50,6 +51,13 @@ export async function listModels(endpoint: ServerEndpoint, signal?: AbortSignal)
 		throw new ServerChatError(`The server at ${endpoint.baseUrl} answered the model list with something that is not JSON.`);
 	}
 	return modelsOf(value);
+}
+
+/** Asks the server to read the agents' models again, and answers the agent ids that gave a list. */
+export async function refreshModels(endpoint: ServerEndpoint, signal?: AbortSignal): Promise<string[]> {
+	const response = await send(endpoint, MODELS_REFRESH_ROUTE, { method: 'POST', signal }, 'the model refresh');
+	const value = parseJson(await response.text()) as { refreshed?: unknown } | undefined;
+	return Array.isArray(value?.refreshed) ? value.refreshed.filter((id): id is string => typeof id === 'string') : [];
 }
 
 /**

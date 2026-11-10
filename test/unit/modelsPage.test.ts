@@ -21,7 +21,7 @@ describe('renderModels', () => {
 		expect(html).toContain('Fast one');
 		expect(html.match(/data-action="editNames"/g)).toHaveLength(1);
 		expect(html).toContain('data-action="editNames" data-agent="claude"');
-		expect(html).toContain('data-action="syncModels"');
+		expect(html).toContain('data-action="refreshModels"');
 	});
 
 	it('shows the agent\'s own name beside a name the user chose, and nothing beside one they did not', () => {
@@ -55,20 +55,20 @@ describe('renderModels', () => {
 		expect(renderModels(view, undefined, { editing: 'a' })).toContain('value="&lt;b&gt;&amp;&quot;"');
 	});
 
-	it('shows a progress bar and disables Sync while the models are being fetched', () => {
-		const html = renderModels(VIEW, undefined, { syncing: true });
+	it('shows a progress bar and disables Refresh while the models are being fetched', () => {
+		const html = renderModels(VIEW, undefined, { refreshing: true });
 
 		expect(html).toContain('<progress');
 		expect(html).toContain('Fetching models');
-		expect(html).toMatch(/<button[^>]*data-action="syncModels"[^>]*disabled/);
+		expect(html).toMatch(/<button[^>]*data-action="refreshModels"[^>]*disabled/);
 		expect(renderModels(VIEW)).not.toContain('<progress');
-		expect(renderModels(VIEW)).not.toMatch(/data-action="syncModels"[^>]*disabled/);
+		expect(renderModels(VIEW)).not.toMatch(/data-action="refreshModels"[^>]*disabled/);
 	});
 
-	it('tells the user to sync when an agent has no models yet', () => {
+	it('tells the user to refresh when an agent has no models yet', () => {
 		const html = renderModels({ agents: [{ agentId: 'a', provider: { name: 'A', default: 'A' }, models: [] }] });
 
-		expect(html).toContain('No models yet; press Sync models to load them.');
+		expect(html).toContain('No models yet; press Refresh to load them.');
 		expect(renderModels(VIEW)).not.toContain('No models yet');
 	});
 
@@ -128,13 +128,13 @@ describe('the Models view of the page', () => {
 		expect(root.innerHTML).toContain('Reload it.');
 	});
 
-	it('sends syncModels when Sync is clicked', () => {
+	it('sends refreshModels when Refresh is clicked', () => {
 		const { root, sent, button } = mount(STATE);
 		root.fire('click', button('showModels'));
 
-		root.fire('click', button('syncModels'));
+		root.fire('click', button('refreshModels'));
 
-		expect(sent).toContainEqual({ type: 'syncModels' });
+		expect(sent).toContainEqual({ type: 'refreshModels' });
 	});
 
 	it('opens the inputs when the pencil is clicked, and drops them on Cancel or Escape', () => {
@@ -178,11 +178,11 @@ describe('the Models view of the page', () => {
 		expect(sent).toHaveLength(2);
 		expect(root.innerHTML).not.toContain('<input');
 	});
-	it('shows the progress bar while the host reports that it is syncing', () => {
+	it('shows the progress bar while the host reports that it is refreshing', () => {
 		const { root, button, deliver } = mount(STATE);
 		root.fire('click', button('showModels'));
 
-		deliver({ ...STATE, syncing: true });
+		deliver({ ...STATE, refreshing: true });
 
 		expect(root.innerHTML).toContain('<progress');
 	});

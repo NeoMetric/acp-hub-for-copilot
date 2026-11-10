@@ -169,6 +169,28 @@ describe('ControlService', () => {
 		expect(host.refreshAgent).toHaveBeenCalledWith('a');
 	});
 
+	it('saves an API key for an agent that takes one and restarts the agent with it', async () => {
+		const keyed = adapter('k', { auth: [{ kind: 'api-key', label: 'Key', envVar: 'K_KEY' }] });
+		const { service, secrets, state, host } = setup({ adapters: [keyed, adapter('b')] });
+
+		expect(await service.saveApiKey('k', '  sk-test  ')).toEqual({ ok: true });
+		expect(await secrets.get('k')).toBe('sk-test');
+		expect(state.get('signedIn.k')).toBe(true);
+		expect(host.restartAgent).toHaveBeenCalledWith('k');
+		expect(host.refreshAgent).toHaveBeenCalledWith('k');
+	});
+
+	it('refuses an empty API key and an agent that takes none', async () => {
+		const keyed = adapter('k', { auth: [{ kind: 'api-key', label: 'Key', envVar: 'K_KEY' }] });
+		const { service, secrets, host } = setup({ adapters: [keyed, adapter('b')] });
+
+		expect(await service.saveApiKey('k', '   ')).toEqual({ ok: false, message: 'Enter the API key.' });
+		expect(await service.saveApiKey('b', 'sk-test')).toEqual({ ok: false, message: 'Agent b does not sign in with an API key.' });
+		expect(await secrets.get('k')).toBeUndefined();
+		expect(await secrets.get('b')).toBeUndefined();
+		expect(host.restartAgent).not.toHaveBeenCalled();
+	});
+
 	it('reads the saved key as signed in, then the state the usage read wrote', async () => {
 		const { service, state, secrets } = setup();
 		expect(await service.isSignedIn('a')).toBeUndefined();

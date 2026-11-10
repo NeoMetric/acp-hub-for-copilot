@@ -15,6 +15,7 @@ interface LinkDeps {
 	extensionDir: string;
 	promptsDir?: string;
 	log: (message: string, level?: string) => void;
+	serverLog: (message: string, level?: string) => void;
 }
 
 /** What a provider was built with. */
@@ -62,7 +63,7 @@ const mocks = vi.hoisted(() => ({
 	views: [] as Array<{ id: string; provider: unknown }>,
 	hosts: [] as Array<{ transport: unknown; deps: { assetUri(relative: string): { path: string } } }>,
 	commands: new Map<string, (...args: unknown[]) => unknown>(),
-	logged: [] as Array<{ message: string; level: string }>,
+	logged: [] as Array<{ channel: string; message: string; level: string }>,
 	shown: 0,
 	executed: [] as string[],
 	opened: [] as string[],
@@ -71,6 +72,11 @@ const mocks = vi.hoisted(() => ({
 	quickPicks: [] as Array<Array<{ label: string; id: string }>>,
 	/** Which entry the quick pick returns; `undefined` cancels it. */
 	pick: undefined as number | undefined,
+	/** Whether the mocked link can reach a server. */
+	linkReady: true,
+	/** The messages `showInformationMessage` showed, and the button it answers with. */
+	info: [] as unknown[][],
+	answer: undefined as string | undefined,
 	/** What the API key migration was given, once per activation that ran it. */
 	keyMigrations: [] as Array<{
 		secrets: unknown;
@@ -92,11 +98,11 @@ vi.mock('vscode', () => {
 			selectChatModels: async () => [],
 		},
 		window: {
-			createOutputChannel: () => ({
-				info: (message: string) => { mocks.logged.push({ message, level: 'info' }); },
-				warn: (message: string) => { mocks.logged.push({ message, level: 'warn' }); },
-				error: (message: string) => { mocks.logged.push({ message, level: 'error' }); },
-				debug: (message: string) => { mocks.logged.push({ message, level: 'debug' }); },
+			createOutputChannel: (name: string) => ({
+				info: (message: string) => { mocks.logged.push({ channel: name, message, level: 'info' }); },
+				warn: (message: string) => { mocks.logged.push({ channel: name, message, level: 'warn' }); },
+				error: (message: string) => { mocks.logged.push({ channel: name, message, level: 'error' }); },
+				debug: (message: string) => { mocks.logged.push({ channel: name, message, level: 'debug' }); },
 				show: () => { mocks.shown += 1; },
 				dispose() { },
 			}),
@@ -110,7 +116,11 @@ vi.mock('vscode', () => {
 			},
 			showWarningMessage: async (...args: unknown[]) => {
 				mocks.warnings.push(args);
-				return 'Uninstall';
+				return mocks.answer ?? 'Uninstall';
+			},
+			showInformationMessage: async (...args: unknown[]) => {
+				mocks.info.push(args);
+				return mocks.answer;
 			},
 		},
 		commands: {
@@ -147,7 +157,9 @@ vi.mock('../../src/hosts/vscode/serverLink', () => ({
 		get state() { return undefined; }
 		ensure() {
 			mocks.ensured += 1;
-			return Promise.resolve({ kind: 'ready', endpoint: { baseUrl: 'http://127.0.0.1:8791' }, owned: true });
+			return Promise.resolve(mocks.linkReady
+				? { kind: 'ready', endpoint: { baseUrl: 'http://127.0.0.1:8791' }, owned: true }
+				: { kind: 'unavailable', reason: 'it is stopped' });
 		}
 		onDidChange(listener: (state: unknown) => void) {
 			mocks.linkListeners.add(listener);
@@ -241,6 +253,9 @@ beforeEach(() => {
 	mocks.warnings.length = 0;
 	mocks.quickPicks.length = 0;
 	mocks.pick = undefined;
+	mocks.linkReady = true;
+	mocks.info.length = 0;
+	mocks.answer = undefined;
 	mocks.keyMigrations.length = 0;
 	contextSecrets = { get: async () => undefined, store: async () => undefined, delete: async () => undefined };
 	for (const key of Object.keys(mocks.config)) {
@@ -250,6 +265,8 @@ beforeEach(() => {
 
 afterEach(async () => {
 	delete process.env.ACP_HUB_HOME;
+	delete process.env.COPILOT_PROVIDERS_CONFIG;
+	vi.unstubAllGlobals();
 	// The store writes in the background; let those writes land before the folder goes.
 	await new Promise(resolve => setTimeout(resolve, 50));
 	for (const directory of storeRoots.splice(0)) {
@@ -272,6 +289,26 @@ function contextOf() {
 
 function activateOnce(): void {
 	activate(contextOf());
+}
+
+/** The extension folder as an installed one looks: a manifest for the headings, and a CLI file of the test's own. */
+function prepareExtensionFolder(headings: Record<string, string> = {}): void {
+	fs.mkdirSync(extensionDir, { recursive: true });
+	const languageModelChatProviders = ['Claude Agent', 'Codex Agent', 'Google Agent'].map(vendor => ({ vendor, displayName: headings[vendor] ?? vendor }));
+	fs.writeFileSync(path.join(extensionDir, 'package.json'), `${JSON.stringify({ name: 'acp-hub', contributes: { languageModelChatProviders } }, null, '\t')}\n`);
+	process.env.COPILOT_PROVIDERS_CONFIG = path.join(root, 'copilot', 'providers.json');
+}
+
+/** The server's answers to a refresh and to a model list, so a sync has something to read. */
+function stubServerModels(): void {
+	const info = { name: 'Sonnet', family: 'f', version: '1', maxInputTokens: 1000, maxOutputTokens: 100, toolCalling: true, imageInput: false, efforts: [] };
+	vi.stubGlobal('fetch', async (input: unknown) => {
+		const url = String(input);
+		if (url.endsWith('/v1/models/refresh')) {
+			return new Response(JSON.stringify({ refreshed: ['claude', 'codex', 'google'] }), { status: 200 });
+		}
+		return new Response(JSON.stringify({ object: 'list', data: [{ id: 'claude/sonnet', object: 'model', created: 1, owned_by: 'claude', acp: info }] }), { status: 200 });
+	});
 }
 
 function source(): string {
@@ -312,6 +349,17 @@ describe('the extension is a client of the server', () => {
 		expect(deps.promptsDir).toBe(path.join(path.dirname(path.dirname(globalStorage)), 'prompts'));
 		// A server is reached, or started, as soon as the window loads.
 		expect(mocks.ensured).toBeGreaterThan(0);
+	});
+
+	it('gives the link a channel for the server\'s lines apart from the window\'s own', () => {
+		activateOnce();
+		const deps = mocks.linkDeps[0];
+
+		deps.log('a line the window wrote');
+		deps.serverLog('a line the server wrote', 'warn');
+
+		expect(mocks.logged.find(entry => entry.message === 'a line the window wrote')?.channel).toBe('ACP Hub');
+		expect(mocks.logged.find(entry => entry.message === 'a line the server wrote')).toMatchObject({ channel: 'ACP Hub Server', level: 'warn' });
 	});
 
 	it('reads how long the server lives and whether it is detached from its own settings', () => {
@@ -383,10 +431,12 @@ describe('the extension is a client of the server', () => {
 		mocks.pick = 1;
 		activateOnce();
 
-		expect([...mocks.commands.keys()].sort()).toEqual(['acpHub.install', 'acpHub.refreshUsage', 'acpHub.showLogs', 'acpHub.signIn', 'acpHub.stopServer']);
+		expect([...mocks.commands.keys()].sort()).toEqual(['acpHub.install', 'acpHub.refreshUsage', 'acpHub.showLogs', 'acpHub.showServerLogs', 'acpHub.signIn', 'acpHub.stopServer', 'acpHub.syncModels']);
 
 		mocks.commands.get('acpHub.showLogs')?.();
 		expect(mocks.shown).toBe(1);
+		mocks.commands.get('acpHub.showServerLogs')?.();
+		expect(mocks.shown, 'the server log opens a channel of its own').toBe(2);
 
 		await mocks.commands.get('acpHub.signIn')?.();
 		expect(mocks.quickPicks[0].map(item => item.label)).toEqual(['Claude Agent', 'Codex Agent', 'Google Agent']);
@@ -397,6 +447,54 @@ describe('the extension is a client of the server', () => {
 
 		await mocks.commands.get('acpHub.refreshUsage')?.();
 		expect(mocks.actions.filter(action => action.type === 'refreshUsage').map(action => action.agentId)).toEqual(['claude', 'codex', 'google']);
+	});
+
+	it('warns instead of syncing when the server is unavailable', async () => {
+		mocks.linkReady = false;
+		activateOnce();
+
+		await mocks.commands.get('acpHub.syncModels')?.();
+
+		expect(mocks.warnings.at(-1)?.[0]).toContain('not available');
+		expect(mocks.info).toEqual([]);
+	});
+
+	it('re-lists every provider after a sync, and says what it wrote', async () => {
+		prepareExtensionFolder();
+		stubServerModels();
+		activateOnce();
+
+		await mocks.commands.get('acpHub.syncModels')?.();
+
+		expect(mocks.refreshed).toEqual(['claude', 'codex', 'google']);
+		expect(mocks.info.at(-1)?.[0]).toContain('Synced');
+	});
+
+	it('offers a window reload only when the sync changed a provider heading', async () => {
+		prepareExtensionFolder({ 'Claude Agent': 'Old Claude' });
+		stubServerModels();
+		mocks.answer = 'Reload Window';
+		activateOnce();
+
+		await mocks.commands.get('acpHub.syncModels')?.();
+
+		expect(mocks.info.at(-1)?.[1]).toBe('Reload Window');
+		expect(mocks.executed).toContain('workbench.action.reloadWindow');
+	});
+
+	it('still offers the reload, and counts the models, when only the manifest could be written', async () => {
+		prepareExtensionFolder({ 'Claude Agent': 'Old Claude' });
+		fs.mkdirSync(path.dirname(process.env.COPILOT_PROVIDERS_CONFIG ?? ''), { recursive: true });
+		fs.writeFileSync(process.env.COPILOT_PROVIDERS_CONFIG ?? '', 'not json');
+		stubServerModels();
+		mocks.answer = 'Reload Window';
+		activateOnce();
+
+		await mocks.commands.get('acpHub.syncModels')?.();
+
+		expect(mocks.warnings.at(-1)?.[0]).toContain('Synced 1 model(s) of 1 agent(s)');
+		expect(mocks.warnings.at(-1)?.[1]).toBe('Reload Window');
+		expect(mocks.executed).toContain('workbench.action.reloadWindow');
 	});
 
 	it('drops a cancelled sign-in, and nothing else', async () => {

@@ -17,7 +17,7 @@ Run `copilot` (GitHub Copilot CLI) in a terminal and use the models this extensi
 Per the GitHub docs (BYOK / "Adding LLM models to Copilot CLI"):
 
 - Env vars: `COPILOT_PROVIDER_BASE_URL`, `COPILOT_PROVIDER_TYPE` (`openai` default, `azure`, `anthropic`), `COPILOT_PROVIDER_API_KEY`, `COPILOT_MODEL`. Setting these **replaces** GitHub model routing for that session (community request for side-by-side use: github/community discussion 194778).
-- `~/.copilot/providers.json` (or the path in `COPILOT_PROVIDERS_CONFIG`): models listed there appear in the CLI model picker **alongside** the GitHub models. Preferred.
+- `~/.copilot/providers.json` (or the path in `COPILOT_PROVIDERS_CONFIG`): models listed there appear in the CLI model picker **alongside** the GitHub models. Preferred. The extension's **ACP Hub: Sync Models** command writes it; the server never does.
 - The target must support tool calling and streaming.
 
 So any approach reduces to: serve an OpenAI- or Anthropic-compatible endpoint that fronts the ACP agents, then point the CLI at it.

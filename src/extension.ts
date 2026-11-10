@@ -14,6 +14,9 @@ import { stateStoreOf } from './core/stateStore';
 import { recordStoragePath } from './core/storageCleanup';
 import { vendorOf } from './core/vendors';
 import { agentsRoot, storageRoot } from './engine/store/paths';
+import { ModelNames } from './engine/models/modelNames';
+import { copilotProvidersFile } from './hosts/vscode/applyNames';
+import { syncModels } from './hosts/vscode/syncModels';
 import { ServerLink } from './hosts/vscode/serverLink';
 import { ServerProvider } from './hosts/vscode/serverProvider';
 import { warmAgents } from './hosts/vscode/warmAgents';
@@ -38,6 +41,9 @@ let link: ServerLink | undefined;
 export function activate(context: vscode.ExtensionContext): void {
 	const output = vscode.window.createOutputChannel('ACP Hub', { log: true });
 	const log = scopedLog(output);
+	// The server's own lines live in a channel of their own, so the window's channel shows only what the window did.
+	const serverOutput = vscode.window.createOutputChannel('ACP Hub Server', { log: true });
+	const serverLog = scopedLog(serverOutput);
 	const root = storageRoot();
 	const extensionDir = context.extensionUri.fsPath;
 	const globalStorageDir = context.globalStorageUri.fsPath;
@@ -84,6 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		// The prompts the server composes from, kept where the extension always kept them.
 		promptsDir: path.join(path.dirname(path.dirname(globalStorageDir)), 'prompts'),
 		log,
+		serverLog,
 	});
 	link = binding;
 	// A server that cannot be used is named once per change, in the channel the user opens for it.
@@ -150,11 +157,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	context.subscriptions.push(
 		output,
+		serverOutput,
 		binding,
 		relay,
 		{ dispose: unsubscribeCards },
 		vscode.window.registerWebviewViewProvider('acpHub.agents', sidebar),
 		vscode.commands.registerCommand('acpHub.showLogs', () => output.show()),
+		vscode.commands.registerCommand('acpHub.showServerLogs', () => serverOutput.show()),
 		vscode.commands.registerCommand('acpHub.stopServer', async () => {
 			if (await binding.stopServer()) {
 				void vscode.window.showInformationMessage('The ACP Hub server and its agents were stopped. They start again when a chat needs them.');
@@ -177,10 +186,51 @@ export function activate(context: vscode.ExtensionContext): void {
 				relay.send({ type: 'refreshUsage', agentId: agent.id });
 			}
 		}),
+		vscode.commands.registerCommand('acpHub.syncModels', async () => {
+			const state = await binding.ensure({ background: true });
+			if (state.kind !== 'ready') {
+				void vscode.window.showWarningMessage(`The ACP Hub server is not available (${state.reason}), so the model pickers were not synced.`);
+				return;
+			}
+			try {
+				const outcome = await syncModels({
+					endpoint: state.endpoint,
+					agents: REGISTRY.agents,
+					names: new ModelNames(shared.store.state),
+					state: shared.store.state,
+					packageJson: path.join(extensionDir, 'package.json'),
+					providersFile: copilotProvidersFile(),
+				});
+				for (const problem of outcome.problems) {
+					log(problem, 'warn');
+				}
+				for (const provider of providers.values()) {
+					provider.refresh();
+				}
+				const summary = `Synced ${outcome.models} model(s) of ${outcome.providers} agent(s) into the Copilot model pickers.`;
+				const advice = outcome.reloadNeeded
+					? 'Reload the window to see the provider names, and restart the Copilot CLI.'
+					: 'Restart the Copilot CLI to see them there.';
+				// Each target reported its own outcome, so a failure in one still says what the other did.
+				const text = [summary, advice, ...outcome.problems].join(' ');
+				const reload = 'Reload Window';
+				const choices = outcome.reloadNeeded ? [reload] : [];
+				const answer = outcome.problems.length > 0
+					? await vscode.window.showWarningMessage(text, ...choices)
+					: await vscode.window.showInformationMessage(text, ...choices);
+				if (answer === reload) {
+					await vscode.commands.executeCommand('workbench.action.reloadWindow');
+				}
+			} catch (error) {
+				void vscode.window.showErrorMessage(`The model pickers were not synced: ${messageOf(error)}`);
+			}
+		}),
 	);
 
-	// The server runs whether or not a chat is open, so the sidebar has a state to draw at once.
-	void binding.ensure();
+	// The server runs whether or not a chat is open, so the sidebar has a state to draw at once. This is a
+	// background start: a window that opens after the user stopped the server attaches to one that answers,
+	// but starts none, so opening a window does not undo the stop.
+	void binding.ensure({ background: true });
 }
 
 export async function deactivate(): Promise<void> {

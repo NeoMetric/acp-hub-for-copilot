@@ -1,19 +1,9 @@
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../../src/core/adapter';
 import type { ModelEntry } from '../../src/core/modelInfo';
 import { ModelNames } from '../../src/engine/models/modelNames';
 import type { StateStore } from '../../src/engine/ports/state';
-import { createModelsSurface } from '../../src/hosts/http/modelsSurface';
-
-const folders: string[] = [];
-afterEach(() => {
-	for (const folder of folders.splice(0)) {
-		fs.rmSync(folder, { recursive: true, force: true });
-	}
-});
+import { createModelsSurface, SAVED_NOTICE } from '../../src/hosts/http/modelsSurface';
 
 function memoryState(): StateStore {
 	const values: Record<string, unknown> = {};
@@ -28,16 +18,9 @@ function entry(value: string, name: string): ModelEntry {
 	return { value, info: { name, family: 'f', version: '1', maxInputTokens: 1, maxOutputTokens: 1, toolCalling: true, imageInput: false, efforts: [] } };
 }
 
-const TOKEN = 'tok-123';
+const NOTHING_REFRESHED = 'No installed agent answered with models; the saved lists are unchanged.';
 
-function setup(options: { usable?: (id: string) => boolean; refresh?: () => Promise<ModelEntry[]>; manifest?: boolean } = {}) {
-	const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-surface-'));
-	folders.push(folder);
-	const providersFile = path.join(folder, 'providers.json');
-	const packageJson = path.join(folder, 'package.json');
-	if (options.manifest !== false) {
-		fs.writeFileSync(packageJson, JSON.stringify({ contributes: { languageModelChatProviders: [{ vendor: 'Claude Agent', displayName: 'Claude Agent' }, { vendor: 'Codex Agent', displayName: 'Codex Agent' }] } }, null, '\t'));
-	}
+function setup(options: { usable?: (id: string) => boolean; refresh?: () => Promise<ModelEntry[]> } = {}) {
 	const state = memoryState();
 	const models: Record<string, ModelEntry[]> = { claude: [entry('sonnet', 'Sonnet 5.5'), entry('opus', 'Opus 5')], codex: [entry('gpt', 'GPT')] };
 	const refresh = vi.fn(options.refresh ?? (async () => []));
@@ -45,17 +28,10 @@ function setup(options: { usable?: (id: string) => boolean; refresh?: () => Prom
 		adapters: [adapterOf('claude', 'Claude Agent'), adapterOf('codex', 'Codex Agent')],
 		usable: async adapter => options.usable?.(adapter.id) ?? true,
 		names: new ModelNames(state),
-		state,
 		source: { savedOf: agentId => models[agentId] ?? [], refresh: async adapter => (await refresh(), models[adapter.id]) },
-		token: TOKEN,
-		baseUrl: () => 'http://127.0.0.1:8791/v1',
-		providersFile,
-		packageJson,
 	});
-	return { surface, providersFile, packageJson, refresh };
+	return { surface, refresh };
 }
-
-const read = (file: string): any => JSON.parse(fs.readFileSync(file, 'utf8'));
 
 describe('the models surface', () => {
 	it('shows each agent\'s names beside the ones the agent gives', async () => {
@@ -70,7 +46,7 @@ describe('the models surface', () => {
 		});
 	});
 
-	it('never asks an agent for its models except on sync', async () => {
+	it('never asks an agent for its models except on refresh', async () => {
 		const { surface, refresh } = setup();
 
 		await surface.view();
@@ -80,65 +56,59 @@ describe('the models surface', () => {
 		expect(refresh).not.toHaveBeenCalled();
 	});
 
-	it('writes the chosen names to providers.json and package.json, and says what to reload', async () => {
-		const { surface, providersFile, packageJson } = setup();
+	it('saves the chosen names and asks the client to sync them', async () => {
+		const { surface } = setup();
 
-		await surface.setModelName('claude', 'sonnet', 'Fast one');
-		const notice = await surface.setProviderName('claude', 'Work Claude');
+		expect(await surface.setModelName('claude', 'sonnet', 'Fast one')).toBe(SAVED_NOTICE);
+		expect(await surface.setProviderName('claude', 'Work Claude')).toBe(SAVED_NOTICE);
 
-		const config = read(providersFile);
-		expect(config.providers[0]).toEqual({ name: 'Work Claude', type: 'openai', baseUrl: 'http://127.0.0.1:8791/v1', bearerToken: TOKEN });
-		expect(config.models.filter((model: { provider: string }) => model.provider === 'Work Claude')).toEqual([
-			{ id: 'Fast-one', provider: 'Work Claude', wireModel: 'claude/sonnet' },
-			{ id: 'Opus-5', provider: 'Work Claude', wireModel: 'claude/opus' },
-		]);
-		expect(read(packageJson).contributes.languageModelChatProviders[0].displayName).toBe('Work Claude');
-		expect(notice).toMatch(/Reload the VS Code window and restart the Copilot CLI/);
-		expect(notice).not.toContain(TOKEN);
+		const view = await surface.view();
+		expect(view.agents[0].provider.name).toBe('Work Claude');
+		expect(view.agents[0].models[0].name).toBe('Fast one');
+	});
+
+	it('names no client of its own, since the server does not know which one syncs', async () => {
+		const { surface } = setup();
+
+		expect(await surface.setProviderName('claude', 'Work Claude')).not.toMatch(/VS Code|ACP Hub|Copilot/);
 	});
 
 	it('restores the agent\'s own name when a name is cleared', async () => {
-		const { surface, packageJson } = setup();
+		const { surface } = setup();
 		await surface.setProviderName('claude', 'Work Claude');
 
 		await surface.setProviderName('claude', '');
 
-		expect(read(packageJson).contributes.languageModelChatProviders[0].displayName).toBe('Claude Agent');
 		expect((await surface.view()).agents[0].provider.name).toBe('Claude Agent');
 	});
 
-	it('leaves a disabled or uninstalled agent out of providers.json', async () => {
-		const { surface, providersFile } = setup({ usable: id => id !== 'codex' });
-
-		await surface.setProviderName('claude', 'Work Claude');
-
-		expect(read(providersFile).providers.map((provider: { name: string }) => provider.name)).toEqual(['Work Claude']);
-	});
-
-	it('refuses a duplicate name, says why, and writes nothing', async () => {
-		const { surface, providersFile } = setup();
+	it('refuses a duplicate name, says why, and stores nothing', async () => {
+		const { surface } = setup();
 
 		const notice = await surface.setProviderName('claude', 'codex agent');
 
 		expect(notice).toMatch(/provider names must be different/);
-		expect(fs.existsSync(providersFile)).toBe(false);
+		expect((await surface.view()).agents[0].provider.name).toBe('Claude Agent');
 	});
 
-	it('still writes providers.json when package.json cannot be updated, and says so', async () => {
-		const { surface, providersFile } = setup({ manifest: false });
+	it('refreshes the models it can use, and names them', async () => {
+		const { surface, refresh } = setup({ usable: id => id === 'claude' });
 
-		const notice = await surface.setProviderName('claude', 'Work Claude');
+		expect(await surface.refresh()).toBe('Refreshed claude.');
 
-		expect(read(providersFile).providers[0].name).toBe('Work Claude');
-		expect(notice).toMatch(/package\.json/);
+		expect(refresh).toHaveBeenCalledTimes(1);
 	});
 
-	it('refreshes the models on sync, and goes on with the saved ones when a refresh fails', async () => {
-		const { surface, providersFile, refresh } = setup({ refresh: async () => { throw new Error('agent down'); } });
+	it('says the saved lists stand when no agent answered', async () => {
+		const { surface } = setup({ usable: () => false });
 
-		await surface.sync();
+		expect(await surface.refresh()).toBe(NOTHING_REFRESHED);
+	});
 
-		expect(refresh).toHaveBeenCalled();
-		expect(read(providersFile).models.length).toBe(3);
+	it('keeps the saved list when an agent cannot answer', async () => {
+		const { surface } = setup({ refresh: async () => { throw new Error('agent down'); } });
+
+		expect(await surface.refresh()).toBe(NOTHING_REFRESHED);
+		expect((await surface.view()).agents[0].models).toHaveLength(2);
 	});
 });

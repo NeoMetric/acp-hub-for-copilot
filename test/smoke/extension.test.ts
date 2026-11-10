@@ -8,7 +8,7 @@ suite('ACP Hub smoke test', () => {
 		await extension.activate();
 		assert.strictEqual(extension.isActive, true);
 		const commands = await vscode.commands.getCommands(true);
-		for (const command of ['acpHub.showLogs', 'acpHub.signIn', 'acpHub.install', 'acpHub.refreshUsage']) {
+		for (const command of ['acpHub.showLogs', 'acpHub.showServerLogs', 'acpHub.signIn', 'acpHub.install', 'acpHub.refreshUsage']) {
 			assert.ok(commands.includes(command), `${command} is not registered`);
 		}
 	});
