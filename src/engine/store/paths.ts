@@ -27,3 +27,11 @@ export function storageRoot(env: NodeJS.ProcessEnv = process.env): string {
 export function agentsRoot(root: string): string {
 	return path.join(path.resolve(root), 'agents');
 }
+
+/**
+ * The folder the token usage of finished turns is kept in, below the store
+ * root. A server writes it, and the page reads it; it settles nowhere else.
+ */
+export function usageRoot(root: string): string {
+	return path.join(path.resolve(root), 'usage');
+}

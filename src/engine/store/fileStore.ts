@@ -127,8 +127,12 @@ interface LockRecord {
 
 let lockSeq = 0;
 
-/** Runs `action` while holding the lock, so no other process reads and writes the same document in between. */
-async function withLock<T>(lockFile: string, action: () => Promise<T>): Promise<T> {
+/**
+ * Runs `action` while holding the lock, so no other process reads and writes the
+ * same document in between. Exported for the files that keep their own document
+ * beside `state.json`, such as the usage days.
+ */
+export async function withLock<T>(lockFile: string, action: () => Promise<T>): Promise<T> {
 	const token = await acquireLock(lockFile);
 	try {
 		return await action();
