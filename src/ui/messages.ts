@@ -53,10 +53,34 @@ export interface AgentCardState {
 	error?: string;
 }
 
+/** The names the Models page edits: each agent's provider and its models, with the name the agent itself gives them. */
+export interface ModelsView {
+	agents: Array<{
+		agentId: string;
+		provider: { name: string; default: string };
+		models: Array<{ value: string; name: string; default: string }>;
+	}>;
+}
+
+/** What the Models page asks of the host; each action resolves to the notice the page shows. */
+export interface ModelsSurface {
+	view(): Promise<ModelsView>;
+	setProviderName(agentId: string, name: string): Promise<string>;
+	setModelName(agentId: string, model: string, name: string): Promise<string>;
+	/** Fetches the agents' current models, then applies the names. */
+	sync(): Promise<string>;
+}
+
 /** Everything the page draws, in one snapshot that names no host. */
 export interface ControlState {
 	agents: AgentCardState[];
 	globalSettings?: SettingView[];
+	/** Present when the host can rename providers and models. */
+	models?: ModelsView;
+	/** What the last Models action did, and what the user has to reload for it to show. */
+	notice?: string;
+	/** Whether the models are being fetched from the agents now. */
+	syncing?: boolean;
 }
 
 export type ToWebview = { type: 'state' } & ControlState;
@@ -67,7 +91,10 @@ export type FromWebview =
 	| { type: 'install' | 'uninstall' | 'signIn' | 'signOut' | 'refreshUsage' | 'copySignInUrl' | 'openSignInUrl'; agentId: string }
 	| { type: 'addAgent' | 'removeAgent'; agentId: string }
 	| { type: 'setEnabled'; agentId: string; enabled: boolean }
-	| { type: 'setSetting'; agentId: string; key: string; value: SettingValue };
+	| { type: 'setSetting'; agentId: string; key: string; value: SettingValue }
+	| { type: 'setProviderName'; agentId: string; name: string }
+	| { type: 'setModelName'; agentId: string; model: string; name: string }
+	| { type: 'syncModels' };
 
 /** Everything the page asks a host to do; the same message travels over either transport. */
 export type ControlAction = FromWebview;

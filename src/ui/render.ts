@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { UsageWindow } from '../core/adapter';
-import type { AgentCardState, SettingView } from './messages';
+import type { AgentCardState, ModelsView, SettingView } from './messages';
 
 export function escapeHtml(text: string): string {
 	return text
@@ -181,6 +181,56 @@ function renderCard(agent: AgentCardState, settingsOpen: boolean): string {
 		+ `</section>`;
 }
 
+/** The two views of the page; the switch is drawn only when the host can rename models. */
+export type PageView = 'agents' | 'models';
+
+export function renderNav(view: PageView): string {
+	const tab = (target: PageView, label: string): string =>
+		`<button class="${view === target ? '' : 'secondary'}" data-action="${target === 'agents' ? 'showAgents' : 'showModels'}" aria-pressed="${view === target}">${label}</button>`;
+	return `<nav class="page-nav">${tab('agents', 'Agents')}${tab('models', 'Models')}</nav>`;
+}
+
+/** A name as the input being edited: it holds a value only when a name was chosen, and shows the agent's own as its placeholder. */
+function nameInput(label: string, attributes: string, name: string, fallback: string): string {
+	const value = name === fallback ? '' : name;
+	return `<input type="text" aria-label="${escapeHtml(label)}" ${attributes} value="${escapeHtml(value)}" placeholder="${escapeHtml(fallback)}">`;
+}
+
+/** A name as text, with the agent's own name beside it when the user chose another. */
+function nameText(name: string, fallback: string): string {
+	const original = name === fallback ? '' : ` <span class="muted">${escapeHtml(fallback)}</span>`;
+	return `<span class="name-value">${escapeHtml(name)}</span>${original}`;
+}
+
+/**
+ * The Models view: the provider name of each agent, in bold with one pencil that opens the
+ * provider name and every model name under it for editing together, and the sync button.
+ * `editing` is the id of the agent whose names are inputs.
+ */
+export function renderModels(models: ModelsView, notice?: string, options: { syncing?: boolean; editing?: string } = {}): string {
+	const { syncing = false, editing } = options;
+	const status = syncing
+		? '<div class="note fetching" role="status"><progress aria-label="Fetching models"></progress> Fetching models from the agents…</div>'
+		: notice ? `<div class="note" role="status">${escapeHtml(notice).replace(/\n/g, '<br>')}</div>` : '';
+	const sections = models.agents.map(agent => {
+		const id = escapeHtml(agent.agentId);
+		const open = editing === agent.agentId;
+		const empty = agent.models.length === 0 ? '<div class="note">No models yet; press Sync models to load them.</div>' : '';
+		const rows = agent.models.map(model => `<div class="setting">${open
+			? nameInput(`name of ${model.default}`, `data-models="model" data-agent="${id}" data-model="${escapeHtml(model.value)}"`, model.name, model.default)
+			: nameText(model.name, model.default)}</div>`).join('');
+		const head = open
+			? `<div class="card-head">${nameInput('provider name', `data-models="provider" data-agent="${id}"`, agent.provider.name, agent.provider.default)}`
+				+ `<div class="card-controls"><button data-action="saveNames" data-agent="${id}">Save</button><button class="secondary" data-action="cancelNames" data-agent="${id}">Cancel</button></div></div>`
+			: `<div class="card-head"><h2>${nameText(agent.provider.name, agent.provider.default)}</h2>`
+				+ `<button class="icon-button" data-action="editNames" data-agent="${id}" aria-label="Rename ${escapeHtml(agent.provider.name)} and its models" title="Rename">✎</button></div>`;
+		return `<section class="card" data-agent="${id}">${head}${rows}${empty}</section>`;
+	}).join('');
+	return `<div class="note">Names shown in the model pickers. Use the pencil to rename a provider and its models; clearing a name restores the agent's own.</div>`
+		+ status
+		+ sections
+		+ `<div class="actions"><button data-action="syncModels"${syncing ? ' disabled' : ''}>Sync models</button></div>`;
+}
 export const GLOBAL_SETTINGS_ID = '*global';
 
 function renderGlobalSettings(settings: SettingView[], open: boolean): string {

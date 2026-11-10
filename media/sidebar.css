@@ -231,3 +231,30 @@ select {
 	background: var(--vscode-input-background);
 	border: 1px solid var(--vscode-input-border, transparent);
 }
+
+.page-nav {
+	display: flex;
+	gap: 6px;
+	margin-bottom: 8px;
+}
+
+.card-head input[type="text"] {
+	flex: 1;
+	min-width: 0;
+}
+
+.name-value {
+	overflow-wrap: anywhere;
+}
+
+.muted {
+	color: var(--vscode-descriptionForeground);
+	font-size: 0.9em;
+}
+
+.fetching progress {
+	vertical-align: middle;
+	width: 100%;
+	max-width: 120px;
+	accent-color: var(--vscode-progressBar-background);
+}

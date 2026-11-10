@@ -152,7 +152,7 @@ function fakeControl(overrides: Partial<ControlSurface> = {}) {
 const cleanups: Array<() => Promise<void>> = [];
 
 /** The real server over a fake control service; the chat surface needs no agent for these routes. */
-async function start(control: ControlSurface | undefined): Promise<string> {
+async function start(control: ControlSurface | undefined, token?: string): Promise<string> {
 	const composition = {
 		host: { log: () => undefined } as unknown as HostPort,
 		adapters: [],
@@ -161,6 +161,7 @@ async function start(control: ControlSurface | undefined): Promise<string> {
 	} as HeadlessComposition;
 	const server = createServer({
 		composition,
+		token,
 		page: control ? { control, bundle: BUNDLE, style: STYLE } : undefined,
 	});
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
@@ -201,6 +202,21 @@ describe('the control transport', () => {
 
 		expect(webviewRoot.innerHTML).toBe(renderCards(SAMPLE.agents, new Set(), SAMPLE.globalSettings ?? []));
 		expect(httpRoot.innerHTML).toBe(webviewRoot.innerHTML);
+	});
+
+	it('delivers the Models fields of a snapshot in both hosts', async () => {
+		const withModels: ControlState = { ...SAMPLE, models: { agents: [{ agentId: 'a', provider: { name: 'A', default: 'A' }, models: [] }] }, notice: 'Reload it.', syncing: true };
+
+		const webview = webviewChannel();
+		const fromWebview: ControlState[] = [];
+		webview.transport.onState(state => { fromWebview.push(state); });
+		webview.state(withModels);
+		expect(fromWebview[0]).toEqual(withModels);
+
+		const http = httpChannel(withModels);
+		const fromHttp: ControlState[] = [];
+		http.transport.onState(state => { fromHttp.push(state); });
+		await vi.waitFor(() => expect(fromHttp[0]).toEqual(withModels));
 	});
 
 	it('draws a change the host sends after the first snapshot', async () => {
@@ -256,6 +272,41 @@ describe('the control transport', () => {
 		const style = await fetch(`${url}/sidebar.css`);
 		expect(style.status).toBe(200);
 		expect(style.headers.get('content-type')).toContain('text/css');
+	});
+
+	it('trades /?token= for a cookie that lets a browser use the page without the header', async () => {
+		const url = await start(fakeControl().control, 'se cret/1');
+
+		expect((await fetch(`${url}/`)).status).toBe(401);
+		expect((await fetch(`${url}/?token=wrong`)).status).toBe(401);
+
+		const signIn = await fetch(`${url}/?token=${encodeURIComponent('se cret/1')}`, { redirect: 'manual' });
+		expect(signIn.status).toBe(302);
+		expect(signIn.headers.get('location')).toBe('/');
+		const cookie = signIn.headers.get('set-cookie') ?? '';
+		expect(cookie).toMatch(/HttpOnly/);
+		expect(cookie).toMatch(/SameSite=Strict/);
+
+		const headers = { Cookie: cookie.split(';')[0] };
+		expect((await fetch(`${url}/`, { headers })).status).toBe(200);
+		expect((await fetch(`${url}${STATE_ROUTE}`, { headers })).status).toBe(200);
+		expect((await fetch(`${url}${STATE_ROUTE}`, { headers: { Cookie: 'acp_hub_token=wrong' } })).status).toBe(401);
+	});
+
+	it('does not let a page from another origin use the cookie, though the header still works', async () => {
+		const url = await start(fakeControl().control, 'secret');
+		const cookie = { Cookie: 'acp_hub_token=secret' };
+		const send = (headers: Record<string, string>) => fetch(`${url}${ACTION_ROUTE}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'text/plain', ...headers },
+			body: JSON.stringify({ type: 'ready' }),
+		});
+
+		expect((await send({ ...cookie })).status).toBe(200);
+		expect((await send({ ...cookie, Origin: url })).status).toBe(200);
+		expect((await send({ ...cookie, Origin: 'http://127.0.0.1:1' })).status).toBe(401);
+		expect((await send({ ...cookie, Origin: 'null' })).status).toBe(401);
+		expect((await send({ Authorization: 'Bearer secret', Origin: 'http://127.0.0.1:1' })).status).toBe(200);
 	});
 
 	it('answers /api/state and runs an action sent to /api/action', async () => {

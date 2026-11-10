@@ -5,8 +5,8 @@
 
 /// <reference lib="dom" />
 
-import type { AgentCardState, SettingValue, SettingView } from './messages';
-import { GLOBAL_SETTINGS_ID, renderCards } from './render';
+import type { AgentCardState, ModelsView, SettingValue, SettingView } from './messages';
+import { GLOBAL_SETTINGS_ID, renderCards, renderModels, renderNav, type PageView } from './render';
 import type { ControlTransport } from './transport';
 
 /**
@@ -18,9 +18,48 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 	const openSettings = new Set<string>();
 	let agents: AgentCardState[] = [];
 	let globalSettings: SettingView[] = [];
+	let models: ModelsView | undefined;
+	let notice: string | undefined;
+	let syncing = false;
+	let view: PageView = 'agents';
+	/** The agent whose provider and model names are inputs in the Models view, if any. */
+	let editing: string | undefined;
 
 	function draw(): void {
-		root.innerHTML = renderCards(agents, openSettings, globalSettings);
+		if (!models) {
+			root.innerHTML = renderCards(agents, openSettings, globalSettings);
+			return;
+		}
+		root.innerHTML = renderNav(view) + (view === 'models' ? renderModels(models, notice, { syncing, editing }) : renderCards(agents, openSettings, globalSettings));
+		if (editing !== undefined) {
+			const input = root.querySelector?.('input[data-models]') as HTMLInputElement | null | undefined;
+			input?.focus();
+			input?.select();
+		}
+	}
+
+	function stopEditing(): void {
+		if (editing !== undefined) {
+			editing = undefined;
+			draw();
+		}
+	}
+
+	/** Sends each name that was changed in the inputs being edited, then turns them back into text. */
+	function saveNames(): void {
+		const inputs = Array.from(root.querySelectorAll?.('input[data-models]') ?? []) as HTMLInputElement[];
+		for (const input of inputs) {
+			if (input.value === input.defaultValue) {
+				continue;
+			}
+			const { models: kind, agent, model } = input.dataset;
+			if (kind === 'provider' && agent) {
+				transport.send({ type: 'setProviderName', agentId: agent, name: input.value });
+			} else if (kind === 'model' && agent && model !== undefined) {
+				transport.send({ type: 'setModelName', agentId: agent, model, name: input.value });
+			}
+		}
+		stopEditing();
 	}
 
 	function readSettingValue(input: HTMLInputElement | HTMLSelectElement): SettingValue {
@@ -44,6 +83,28 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		}
 		const action = target.dataset.action;
 		const agentId = target.dataset.agent ?? '';
+		if (action === 'showAgents' || action === 'showModels') {
+			view = action === 'showModels' ? 'models' : 'agents';
+			draw();
+			return;
+		}
+		if (action === 'syncModels') {
+			transport.send({ type: 'syncModels' });
+			return;
+		}
+		if (action === 'editNames') {
+			editing = agentId;
+			draw();
+			return;
+		}
+		if (action === 'saveNames') {
+			saveNames();
+			return;
+		}
+		if (action === 'cancelNames') {
+			stopEditing();
+			return;
+		}
 		if (action === 'toggleSettings') {
 			if (!openSettings.delete(agentId)) {
 				openSettings.add(agentId);
@@ -69,6 +130,9 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 
 	root.addEventListener('change', event => {
 		const target = event.target as HTMLInputElement | HTMLSelectElement;
+		if (target.dataset.models) {
+			return;
+		}
 		if (target.dataset.global && target.dataset.key) {
 			transport.send({ type: 'setGlobalSetting', key: target.dataset.key, value: readSettingValue(target) });
 			return;
@@ -87,9 +151,25 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		}
 	});
 
+	// Enter saves the names being edited and Escape drops them.
+	root.addEventListener('keydown', event => {
+		const { key, target } = event as KeyboardEvent;
+		if (!(target as HTMLElement).dataset?.models) {
+			return;
+		}
+		if (key === 'Enter') {
+			saveNames();
+		} else if (key === 'Escape') {
+			stopEditing();
+		}
+	});
+
 	transport.onState(state => {
 		agents = state.agents;
 		globalSettings = state.globalSettings ?? [];
+		models = state.models;
+		notice = state.notice;
+		syncing = state.syncing === true;
 		draw();
 	});
 

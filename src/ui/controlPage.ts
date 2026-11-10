@@ -6,7 +6,7 @@
 import type { AgentAdapter } from '../core/adapter';
 import { canUninstall } from '../core/installers';
 import type { ControlSurface } from '../engine/control/ControlService';
-import type { AgentCardState, ControlAction, ControlState, SettingValue, SettingView } from './messages';
+import type { AgentCardState, ControlAction, ControlState, ModelsSurface, SettingValue, SettingView } from './messages';
 
 /** What the page asks of the host it runs in; neither part touches a window or a DOM. */
 export interface ControlPageHost {
@@ -67,7 +67,12 @@ export class ControlPage {
 	private visibleAgents: Set<string> | undefined;
 	private stateVersion = 0;
 
-	constructor(private readonly control: ControlSurface, private readonly host: ControlPageHost) {
+	/** What the last Models action did; it stays until the next one. */
+	private notice: string | undefined;
+	private syncing = false;
+	private modelsQueue: Promise<void> = Promise.resolve();
+
+	constructor(private readonly control: ControlSurface, private readonly host: ControlPageHost, private readonly models?: ModelsSurface) {
 		control.onUsageChange(agentId => {
 			// A read that proves the account makes an earlier sign-in complaint stale.
 			if (control.usage(agentId).signedIn === true) {
@@ -111,6 +116,11 @@ export class ControlPage {
 				await this.control.writeGlobalSetting(action.key, action.value);
 				await this.publish();
 			}
+			return;
+		}
+
+		if (action.type === 'setProviderName' || action.type === 'setModelName' || action.type === 'syncModels') {
+			await this.runModels(action);
 			return;
 		}
 
@@ -185,7 +195,34 @@ export class ControlPage {
 			...spec,
 			value: this.control.readGlobalSetting(spec.key) ?? fallback,
 		}));
-		return { agents, globalSettings };
+		return { agents, globalSettings, ...(this.models ? { models: await this.models.view(), notice: this.notice, syncing: this.syncing } : {}) };
+	}
+
+	/** Runs the Models actions one after another: a save of several names sends them together, and each one rewrites the same files. */
+	private runModels(action: Extract<ControlAction, { type: 'setProviderName' | 'setModelName' | 'syncModels' }>): Promise<void> {
+		const run = this.modelsQueue.then(() => this.runModelsNow(action));
+		this.modelsQueue = run.catch(() => undefined);
+		return run;
+	}
+
+	/** Runs one Models action; what it did, or why it failed, becomes the notice. */
+	private async runModelsNow(action: Extract<ControlAction, { type: 'setProviderName' | 'setModelName' | 'syncModels' }>): Promise<void> {
+		if (!this.models || this.syncing) {
+			return;
+		}
+		if (action.type === 'syncModels') {
+			this.syncing = true;
+			await this.publish();
+		}
+		try {
+			this.notice = action.type === 'setProviderName' ? await this.models.setProviderName(action.agentId, action.name)
+				: action.type === 'setModelName' ? await this.models.setModelName(action.agentId, action.model, action.name)
+					: await this.models.sync();
+		} catch (error) {
+			this.notice = errorText(error);
+		}
+		this.syncing = false;
+		await this.publish();
 	}
 
 	/** Hands a fresh snapshot to every listener, unless a newer one already went out. */

@@ -4,7 +4,7 @@ import type { InstallState } from '../../src/core/installers';
 import type { ControlSurface } from '../../src/engine/control/ControlService';
 import type { UsageState } from '../../src/engine/chat/usage';
 import { ControlPage } from '../../src/ui/controlPage';
-import type { ControlState } from '../../src/ui/messages';
+import type { ControlState, ModelsSurface } from '../../src/ui/messages';
 
 function fakeAdapter(id: string): AgentAdapter {
 	return {
@@ -60,6 +60,68 @@ function setup(overrides: Partial<ControlSurface> = {}) {
 	const card = (id: string) => last().agents.find(item => item.id === id)!;
 	return { ...surface, ...host, page, states, last, card };
 }
+
+describe('ControlPage models', () => {
+	const VIEW = { agents: [{ agentId: 'a', provider: { name: 'Agent a', default: 'Agent a' }, models: [{ value: 'm', name: 'M', default: 'M' }] }] };
+
+	function withModels(overrides: Partial<ModelsSurface> = {}) {
+		const models: ModelsSurface = {
+			view: async () => VIEW,
+			setProviderName: vi.fn(async () => 'provider saved'),
+			setModelName: vi.fn(async () => 'model saved'),
+			sync: vi.fn(async () => 'synced'),
+			...overrides,
+		};
+		const host = { openExternal: async () => { }, copyToClipboard: async () => { } };
+		return { models, page: new ControlPage(fake().control, host, models) };
+	}
+
+	it('has no models in its state when the host offers none', async () => {
+		const { page } = setup();
+		expect((await page.state()).models).toBeUndefined();
+	});
+
+	it('draws the models and runs the three actions, showing each notice', async () => {
+		const { page, models } = withModels();
+		expect((await page.state()).models).toEqual(VIEW);
+
+		await page.handle({ type: 'setProviderName', agentId: 'a', name: 'Mine' });
+		expect(models.setProviderName).toHaveBeenCalledWith('a', 'Mine');
+		expect((await page.state()).notice).toBe('provider saved');
+
+		await page.handle({ type: 'setModelName', agentId: 'a', model: 'm', name: 'Mine' });
+		expect(models.setModelName).toHaveBeenCalledWith('a', 'm', 'Mine');
+		expect((await page.state()).notice).toBe('model saved');
+
+		await page.handle({ type: 'syncModels' });
+		expect(models.sync).toHaveBeenCalled();
+		expect((await page.state()).notice).toBe('synced');
+	});
+
+	it('reports that it is syncing until the sync ends', async () => {
+		let finish: (notice: string) => void = () => undefined;
+		const { page } = withModels({ sync: () => new Promise<string>(resolve => { finish = resolve; }) });
+		const states: ControlState[] = [];
+		page.onState(state => { states.push(state); });
+
+		const running = page.handle({ type: 'syncModels' });
+		await vi.waitFor(() => expect(states.at(-1)?.syncing).toBe(true));
+		expect((await page.state()).syncing).toBe(true);
+
+		finish('done');
+		await running;
+
+		expect(states.at(-1)).toMatchObject({ syncing: false, notice: 'done' });
+	});
+
+	it('shows a failure as the notice', async () => {
+		const { page } = withModels({ sync: async () => { throw new Error('disk full'); } });
+
+		await page.handle({ type: 'syncModels' });
+
+		expect((await page.state()).notice).toBe('disk full');
+	});
+});
 
 describe('ControlPage', () => {
 	it('drops the sign-in complaint once a usage read proves the account', async () => {

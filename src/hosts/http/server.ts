@@ -6,6 +6,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type { HeadlessComposition } from '../../composition/headless';
 import type { AgentAdapter } from '../../core/adapter';
@@ -14,14 +15,16 @@ import { AdapterNotInstalledError } from '../../engine/acp/agentClient';
 import type { ChatService } from '../../engine/chat/ChatService';
 import { ChatError } from '../../engine/chat/ChatError';
 import type { ControlSurface } from '../../engine/control/ControlService';
+import { ModelNames } from '../../engine/models/modelNames';
 import type { ChatMessage, ChatRequest, ChatRole, Part, ToolDef } from '../../engine/model/chat';
 import type { StreamEvent } from '../../engine/model/stream';
 import type { Log } from '../../engine/ports/host';
 import { ControlPage } from '../../ui/controlPage';
-import type { ControlAction, ControlState } from '../../ui/messages';
+import type { ControlAction, ControlState, ModelsSurface } from '../../ui/messages';
 import { ACTION_ROUTE, EVENTS_ROUTE, STATE_ROUTE } from '../../ui/transport';
-import { DEFAULT_TOOL_CALL_WAIT_MS, rememberExtras, ToolCallParking, type RequestExtras } from './host';
-import { API_VERSION, SERVER_NAME, type AcpRequestExtras, type HealthWire, type ModelWire } from './wire';
+import { rememberExtras, ToolCallParking, type RequestExtras } from './host';
+import { createModelsSurface } from './modelsSurface';
+import { API_VERSION, SERVER_NAME, SHUTDOWN_ROUTE, type AcpRequestExtras, type HealthWire, type ModelWire } from './wire';
 
 /** The package version esbuild bakes into the bundle; it is undefined when the sources run unbundled. */
 declare const __ACP_HUB_VERSION__: string | undefined;
@@ -38,6 +41,12 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024;
  * still has to be reachable.
  */
 const AGENT_DEFAULT_MODEL = 'default';
+
+/** The cookie a browser keeps once it has opened the control page with the token, since it cannot send the header. */
+const SESSION_COOKIE = 'acp_hub_token';
+
+/** How long that cookie lives; the token itself outlives server restarts, so the cookie may too. */
+const SESSION_COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
 
 /** The finish reasons OpenAI clients understand. */
 type FinishReason = 'stop' | 'tool_calls' | 'length' | 'error';
@@ -75,6 +84,12 @@ export interface HttpServerOptions {
 	readonly toolCallWaitMs?: number;
 	/** The control page; without it the server offers the chat surface alone. */
 	readonly page?: ControlPageOptions;
+	/** The Copilot CLI's provider file the Models page writes; `COPILOT_PROVIDERS_CONFIG` or `~/.copilot/providers.json` by default. */
+	readonly providersFile?: string;
+	/** The extension's `package.json` the Models page writes the provider names into; found beside the bundle by default. */
+	readonly packageJson?: string;
+	/** Stops the server when a client asks, over `POST /shutdown`; without it that route does not exist. */
+	readonly onShutdown?: () => void;
 }
 
 /** Where the page's files are, and what it may ask this host to do. */
@@ -119,16 +134,30 @@ function pageStylePath(): string {
 	]);
 }
 
+/** The extension's `package.json`, which sits above the server bundle in a build and above `src/` in a checkout. */
+function manifestPath(): string {
+	return firstExisting([
+		path.join(__dirname, '..', 'package.json'),
+		path.join(__dirname, '..', '..', '..', 'package.json'),
+		path.join(process.cwd(), 'package.json'),
+	]);
+}
+
+/** The Copilot CLI's provider file: `COPILOT_PROVIDERS_CONFIG`, or `providers.json` in its folder in the home folder. */
+function copilotProvidersFile(): string {
+	return process.env.COPILOT_PROVIDERS_CONFIG?.trim() || path.join(os.homedir(), '.copilot', 'providers.json');
+}
+
 function firstExisting(candidates: readonly string[]): string {
 	return candidates.find(candidate => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 /** One control page over the operations it drives, with the host parts a server can offer. */
-function openPage(options: ControlPageOptions, log: Log): OpenPage {
+function openPage(options: ControlPageOptions, log: Log, models: ModelsSurface | undefined): OpenPage {
 	const control = new ControlPage(options.control, {
 		openExternal: options.openExternal ?? (async url => { log(`The page shows this sign-in URL: ${url}`); }),
 		copyToClipboard: options.copyToClipboard ?? (async text => { log(`The page asked to copy: ${text}`); }),
-	});
+	}, models);
 	return { control, bundle: options.bundle ?? pageBundlePath(), style: options.style ?? pageStylePath() };
 }
 
@@ -141,11 +170,29 @@ function openPage(options: ControlPageOptions, log: Log): OpenPage {
  */
 export function createServer(options: HttpServerOptions): http.Server {
 	const { composition, token } = options;
-	const parking = new ToolCallParking(options.toolCallWaitMs ?? DEFAULT_TOOL_CALL_WAIT_MS, composition.host.log);
-	const page = options.page ? openPage(options.page, composition.host.log) : undefined;
-	const catalog = new ModelCatalog(composition);
+	const parking = new ToolCallParking(options.toolCallWaitMs, composition.host.log);
+	const names = new ModelNames(composition.host.state);
+	const catalog = new ModelCatalog(composition, names);
+	const models = options.page && createModelsSurface({
+		adapters: composition.adapters,
+		usable: async adapter => {
+			const service = composition.serviceOf(adapter.id);
+			return service !== undefined && service.enabled && await isInstalled(service, composition);
+		},
+		names,
+		state: composition.host.state,
+		source: catalog,
+		token,
+		baseUrl: () => {
+			const address = server.address();
+			return `http://127.0.0.1:${typeof address === 'object' && address !== null ? address.port : 0}/v1`;
+		},
+		providersFile: options.providersFile ?? copilotProvidersFile(),
+		packageJson: options.packageJson ?? manifestPath(),
+	});
+	const page = options.page ? openPage(options.page, composition.host.log, models) : undefined;
 	const server = http.createServer((request, response) => {
-		void handle(composition, catalog, token, parking, page, request, response);
+		void handle(composition, catalog, token, parking, page, options.onShutdown, request, response);
 	});
 	// A stopped server has no client left to answer a parked call, so its timers
 	// must not re-drive an agent on the way out.
@@ -153,17 +200,35 @@ export function createServer(options: HttpServerOptions): http.Server {
 	return server;
 }
 
-async function handle(composition: HeadlessComposition, catalog: ModelCatalog, token: string | undefined, parking: ToolCallParking, page: OpenPage | undefined, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+async function handle(composition: HeadlessComposition, catalog: ModelCatalog, token: string | undefined, parking: ToolCallParking, page: OpenPage | undefined, onShutdown: (() => void) | undefined, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
 	try {
-		const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+		const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+		const pathname = url.pathname;
 		// The health probe is what a process manager reads, before it has any token.
 		if (pathname === '/health' && request.method === 'GET') {
 			await sendHealth(composition, response);
 			return;
 		}
+		// A browser cannot send the header, so `/?token=...` trades the token for a cookie and drops it from the URL.
+		if (page && token !== undefined && request.method === 'GET' && pathname === '/' && sameToken(url.searchParams.get('token') ?? undefined, token)) {
+			response.writeHead(302, {
+				Location: '/',
+				'Set-Cookie': `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${SESSION_COOKIE_MAX_AGE_S}; HttpOnly; SameSite=Strict`,
+				'Cache-Control': 'no-store',
+				'Referrer-Policy': 'no-referrer',
+			});
+			response.end();
+			return;
+		}
 		if (token !== undefined && !carriesToken(request, token)) {
 			response.setHeader('WWW-Authenticate', 'Bearer');
 			sendError(response, 401, 'A bearer token is required; send it as "Authorization: Bearer <token>".', 'invalid_request_error', 'invalid_api_key');
+			return;
+		}
+		if (onShutdown && request.method === 'POST' && pathname === SHUTDOWN_ROUTE) {
+			// The answer goes out before the server closes, so the caller learns that it was heard.
+			response.once('finish', onShutdown);
+			sendJson(response, 202, { status: 'stopping' });
 			return;
 		}
 		if (page && request.method === 'GET' && pathname === '/') {
@@ -405,12 +470,12 @@ async function sendModels(catalog: ModelCatalog, composition: HeadlessCompositio
  * behind that answer keeps the saved list current. One lookup per agent runs at
  * a time, however many requests ask for it.
  */
-class ModelCatalog {
+export class ModelCatalog {
 
 	/** The lookups in flight, by agent id, so a burst of requests asks the agent once. */
 	private readonly lookups = new Map<string, Promise<ModelEntry[]>>();
 
-	constructor(private readonly composition: HeadlessComposition) { }
+	constructor(private readonly composition: HeadlessComposition, private readonly names: ModelNames) { }
 
 	/** The models of one agent as the wire publishes them: the saved copy when there is one, the agent's own otherwise. */
 	async modelsOf(adapter: AgentAdapter): Promise<ModelWire[]> {
@@ -423,8 +488,13 @@ class ModelCatalog {
 		return entries.map(entry => this.wireOf(adapter.id, entry));
 	}
 
-	/** The models saved for the agent, in the shape this server publishes them in. */
-	private savedOf(agentId: string): ModelEntry[] {
+	/** Asks the agent for its models now, saving what it answers. */
+	refresh(adapter: AgentAdapter): Promise<ModelEntry[]> {
+		return this.lookup(adapter);
+	}
+
+	/** The models saved for the agent, in the shape this server publishes them in; reading them never starts the agent. */
+	savedOf(agentId: string): ModelEntry[] {
 		const saved = this.composition.host.state.get<unknown>(modelsStateKey(agentId));
 		// A list saved in a shape this server does not know is ignored rather than published broken.
 		return Array.isArray(saved) ? saved.filter(isModelEntry) : [];
@@ -471,7 +541,7 @@ class ModelCatalog {
 			id: `${agentId}/${entry.value}`,
 			object: 'model',
 			owned_by: agentId,
-			acp: { ...info, efforts: Array.isArray(info.efforts) ? info.efforts : [], maxInputTokens: window - info.maxOutputTokens },
+			acp: { ...info, name: this.names.modelName(agentId, entry.value, info.name), efforts: Array.isArray(info.efforts) ? info.efforts : [], maxInputTokens: window - info.maxOutputTokens },
 		};
 	}
 }
@@ -535,8 +605,8 @@ async function complete(composition: HeadlessComposition, parking: ToolCallParki
 	const messages = messagesOf(body.messages);
 	const chatRequest = chatRequestOf(composition, request, body, messages, toolsOf(body), target.model);
 	// A turn the client continues after a tool call carries that call's result;
-	// only a call this chat still holds may be settled, so a stale or foreign
-	// call id is refused instead of resuming the wrong turn.
+	// a call another chat is running is refused rather than allowed to resume
+	// the wrong turn, while one this chat has given up on is answered afresh.
 	const unpaid = takeToolResults(parking, chatRequest.chatId, messages);
 	if (unpaid !== undefined) {
 		sendError(response, 400, `No tool call "${unpaid}" is waiting for a result in this chat; it may have ended, or belong to another chat.`, 'invalid_request_error', 'tool_call_not_found');
@@ -629,21 +699,64 @@ function effortOf(value: unknown): string | undefined {
 
 /**
  * Takes the calls whose results this request returns, so their timers cannot
- * fail them afterwards, and names the first one the chat is not holding.
+ * fail them afterwards, and names the first one another chat is running.
+ *
+ * A call this chat no longer holds is not refused: the client did answer, only
+ * after the hub had given the call up, so the answer is carried into the next
+ * turn rather than thrown away.
  */
-function takeToolResults(parking: ToolCallParking, chatId: string, messages: readonly ChatMessage[]): string | undefined {
+function takeToolResults(parking: ToolCallParking, chatId: string, messages: ChatMessage[]): string | undefined {
 	// Results before the last assistant message answered earlier requests of the same turn; their calls are settled.
 	const lastAssistant = messages.map(message => message.role).lastIndexOf('assistant');
 	const results = messages.slice(lastAssistant + 1).flatMap(message => message.parts.filter((part): part is Extract<Part, { type: 'tool-result' }> => part.type === 'tool-result'));
 	for (const result of results) {
-		if (!parking.has(chatId, result.callId)) {
+		if (parking.heldElsewhere(chatId, result.callId)) {
 			return result.callId;
 		}
 	}
+	if (results.length === 0) {
+		return undefined;
+	}
+	if (lastAssistant < 0) {
+		// No reply of this chat stands before the results, so no call of it can be the one they answer.
+		return results[0].callId;
+	}
+	const late = results.filter(result => !parking.has(chatId, result.callId));
 	for (const result of results) {
 		parking.take(chatId, result.callId);
 	}
+	if (late.length > 0) {
+		adoptLateResults(messages, late);
+	}
 	return undefined;
+}
+
+/**
+ * Folds the results of calls this chat had already given up on into the words
+ * of the messages that carried them. A call the hub failed after its wait, and
+ * a user who answered the question it asked afterwards, would otherwise have
+ * what they said dropped with the call: the next turn answers it as the user's
+ * own message instead.
+ */
+function adoptLateResults(messages: ChatMessage[], late: readonly Extract<Part, { type: 'tool-result' }>[]): void {
+	const adopted = new Set<Part>(late);
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
+		const own = message.parts.filter((part): part is Extract<Part, { type: 'tool-result' }> => part.type === 'tool-result' && adopted.has(part));
+		if (own.length === 0) {
+			continue;
+		}
+		const parts = message.parts.filter(part => !adopted.has(part));
+		parts.push({ type: 'text', text: own.map(lateResultText).join('\n\n') }, ...own.flatMap(result => result.content.filter((part): part is Extract<Part, { type: 'image' }> => part.type === 'image')));
+		messages[index] = { ...message, parts };
+	}
+}
+
+/** What the agent is told about one result that arrived after its chat had stopped waiting for it. */
+function lateResultText(result: Extract<Part, { type: 'tool-result' }>): string {
+	const text = result.content.map(part => part.type === 'text' ? part.text : '').filter(line => line.length > 0).join('\n');
+	const outcome = result.isError === true ? ', and reports an error' : '';
+	return `The result of tool call ${result.callId} arrived after this chat had stopped waiting for it${outcome}:${text.length > 0 ? `\n${text}` : ' (it carried no text)'}`;
 }
 
 /** One JSON body: the turn is followed to its end, or to the tool calls the client has to run. */
@@ -723,7 +836,7 @@ async function stream(service: ChatService, request: ChatRequest, model: string,
 function parkTurnToolCall(parking: ToolCallParking, service: ChatService, request: ChatRequest, event: Extract<StreamEvent, { type: 'tool-call' }>, log: Log): void {
 	parking.park(request.chatId, event, () => {
 		void failParkedToolCall(parking, service, request, event, log);
-	});
+	}, service.toolWaitMs);
 }
 
 /**
@@ -1045,7 +1158,45 @@ function headerOf(request: http.IncomingMessage, name: string): string | undefin
 	return text ? text : undefined;
 }
 
+/** A request is let in by the bearer header, or by the cookie a browser got from `/?token=...`. */
 function carriesToken(request: http.IncomingMessage, token: string): boolean {
+	return carriesBearer(request, token) || (fromOwnPage(request) && sameToken(cookieToken(request), token));
+}
+
+/**
+ * Whether the request names no other origin. A browser sends the cookie on any
+ * request to this host, whatever port the page that made it came from, so the
+ * cookie only speaks for the user when the page is this server's own.
+ */
+function fromOwnPage(request: http.IncomingMessage): boolean {
+	const origin = headerOf(request, 'origin');
+	return origin === undefined || origin === `http://${headerOf(request, 'host')}`;
+}
+
+function cookieToken(request: http.IncomingMessage): string | undefined {
+	for (const pair of headerOf(request, 'cookie')?.split(';') ?? []) {
+		const at = pair.indexOf('=');
+		if (at > 0 && pair.slice(0, at).trim() === SESSION_COOKIE) {
+			try {
+				return decodeURIComponent(pair.slice(at + 1).trim());
+			} catch {
+				return undefined;
+			}
+		}
+	}
+	return undefined;
+}
+
+function sameToken(offered: string | undefined, token: string): boolean {
+	if (offered === undefined) {
+		return false;
+	}
+	const actual = Buffer.from(offered);
+	const expected = Buffer.from(token);
+	return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function carriesBearer(request: http.IncomingMessage, token: string): boolean {
 	const header = headerOf(request, 'authorization');
 	if (!header) {
 		return false;

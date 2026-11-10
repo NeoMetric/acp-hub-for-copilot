@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { HeadlessComposition } from '../../src/composition/headless';
 import type { AgentAdapter } from '../../src/core/adapter';
+import { nativeSessionPolicy } from '../../src/core/nativeSessionPolicy';
 import type { CancellationToken } from '../../src/engine/acp/emitter';
 import { ChatService } from '../../src/engine/chat/ChatService';
 import type { ToolBridge } from '../../src/engine/chat/types';
@@ -65,28 +66,36 @@ function signalOf(token: CancellationToken): AbortSignal {
 
 const cleanups: Array<() => Promise<void>> = [];
 
+/** How a test's server is set up: the agent it serves, its token, and a wait that replaces every agent's own. */
+interface BootOptions {
+	readonly token?: string;
+	readonly toolCallWaitMs?: number;
+	readonly adapter?: AgentAdapter;
+}
+
 /** Starts the server on a free port over the mock agent, with a store root of its own. */
-async function start(options: { token?: string; toolCallWaitMs?: number } = {}): Promise<string> {
+async function start(options: BootOptions = {}): Promise<string> {
 	return (await boot(options)).url;
 }
 
 /** Starts the server and hands its host back too, so a test can change what the control page would. */
-async function boot(options: { token?: string; toolCallWaitMs?: number } = {}): Promise<{ url: string; host: HeadlessHost }> {
+async function boot(options: BootOptions = {}): Promise<{ url: string; host: HeadlessHost }> {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-server-'));
 	const host = createHeadlessHost({ root, log: NO_LOG });
 	const loopback = new McpBridge(NO_LOG);
+	const agent = options.adapter ?? adapter;
 	const service = new ChatService({
-		adapter,
+		adapter: agent,
 		host,
 		bridge: toolsOver(loopback),
 		resolveLaunch: () => Promise.resolve({ entryPath: MOCK_AGENT, installDir: '', storageDir: path.join(root, 'agent'), workspaceFolder: root, settings: {} }),
 		// The gate the composition hands the engine, read from `config.json` on every call.
-		isEnabled: () => host.settings.get<boolean>(settingKey(adapter.id, 'enabled')) !== false,
+		isEnabled: () => host.settings.get<boolean>(settingKey(agent.id, 'enabled')) !== false,
 	});
 	const composition: HeadlessComposition = {
 		host,
-		adapters: [adapter],
-		serviceOf: id => id === adapter.id ? service : undefined,
+		adapters: [agent],
+		serviceOf: id => id === agent.id ? service : undefined,
 		close: () => service.close(),
 	};
 	const server = createServer({ composition, token: options.token, toolCallWaitMs: options.toolCallWaitMs });
@@ -200,6 +209,33 @@ describe('the HTTP server', () => {
 			expect(entry.object).toBe('model');
 			expect(entry.owned_by).toBe(adapter.id);
 		}
+	});
+
+	describe('the names the user chose for models', () => {
+		const info = { name: 'Alpha', family: 'mock', version: '1', maxInputTokens: 1000, maxOutputTokens: 100, toolCalling: true, imageInput: false, efforts: [] };
+
+		async function entryOf(names: unknown): Promise<any> {
+			const { url, host } = await boot();
+			await host.state.update('server.models.mock', [{ value: 'm1', info }]);
+			if (names !== undefined) {
+				await host.state.update('server.modelNames', names);
+			}
+			const body = await (await fetch(`${url}/v1/models`)).json() as any;
+			return body.data.find((entry: { id: string }) => entry.id === 'mock/m1');
+		}
+
+		it('publishes the chosen name and keeps the id', async () => {
+			const entry = await entryOf({ providers: {}, models: { mock: { m1: 'My Alpha' } } });
+
+			expect(entry.acp.name).toBe('My Alpha');
+			expect(entry.owned_by).toBe('mock');
+		});
+
+		it('publishes the agent\'s own name when none was chosen', async () => {
+			const entry = await entryOf(undefined);
+
+			expect(entry.acp.name).toBe('Alpha');
+		});
 	});
 
 	it('answers an unknown model with a 404 in the OpenAI error shape', async () => {
@@ -324,7 +360,7 @@ describe('the HTTP server', () => {
 		expect(answeredB.choices[0].message.content).toBe('tool:b 42');
 	});
 
-	it('fails a call the client does not answer in time, so a later result is refused', async () => {
+	it('answers a result whose call the client settled after the wait ran out, instead of losing it', async () => {
 		const url = await start({ toolCallWaitMs: 300 });
 		const model = await firstModel(url);
 		const first = await bodyOf(await post(`${url}/v1/chat/completions`, toolChat(model)));
@@ -341,8 +377,34 @@ describe('the HTTP server', () => {
 			],
 		});
 
-		expect(response.status).toBe(400);
-		expect((await response.json() as any).error.code).toBe('tool_call_not_found');
+		// The agent answers a new turn of the chat, as it does for any message the user sends.
+		expect(response.status).toBe(200);
+		const body = await response.json() as any;
+		expect(body.choices[0].finish_reason).toBe('stop');
+		expect(body.choices[0].message.content).toBe('hello');
+	});
+
+	it('gives a parked call the wait the agent\'s own policy names, not one of the server\'s', async () => {
+		// The mock agent's policy waits 200ms here: a result after that continues the chat afresh,
+		// while a server that kept its own wait would still have continued the parked turn.
+		const bounded: AgentAdapter = { ...adapter, sessionPolicy: { ...nativeSessionPolicy, toolWaitMs: () => 200 } };
+		const url = await start({ adapter: bounded });
+		const model = await firstModel(url);
+		const first = await bodyOf(await post(`${url}/v1/chat/completions`, toolChat(model)));
+		const toolCall = first.choices[0].message.tool_calls[0];
+
+		await new Promise(resolve => setTimeout(resolve, 700));
+		const answered = await bodyOf(await post(`${url}/v1/chat/completions`, {
+			model,
+			tools: [TOOL],
+			messages: [
+				{ role: 'user', content: 'tool' },
+				{ role: 'assistant', content: null, tool_calls: [toolCall] },
+				{ role: 'tool', tool_call_id: toolCall.id, content: 'too late' },
+			],
+		}));
+
+		expect(answered.choices[0].message.content).toBe('hello');
 	});
 
 	describe('an agent the user disabled from the sidebar', () => {
