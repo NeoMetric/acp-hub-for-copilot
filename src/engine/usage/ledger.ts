@@ -178,6 +178,13 @@ function messageOf(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+function clampRetain(days: number): number {
+	if (!Number.isFinite(days)) {
+		return DEFAULT_RETAIN_DAYS;
+	}
+	return Math.min(MAX_RETAIN_DAYS, Math.max(1, Math.round(days)));
+}
+
 /**
  * The token usage of finished turns, kept per day, hour, workspace and agent.
  *
@@ -194,9 +201,46 @@ export class UsageLedger {
 	private timer: NodeJS.Timeout | undefined;
 	/** Flushes run one after another, so two of them never write the same day at once. */
 	private writing: Promise<void> = Promise.resolve();
+	private retain: number;
 
 	constructor(private readonly options: UsageLedgerOptions) {
+		this.retain = clampRetain(options.retainDays);
 		this.load();
+	}
+
+	/** How many days the ledger keeps, as the setting allows. */
+	retainDays(): number {
+		return this.retain;
+	}
+
+	/** Drops the days outside a new window, from memory and from the folder. Lowering it cannot be undone. */
+	async prune(retainDays: number): Promise<void> {
+		this.retain = clampRetain(retainDays);
+		const oldest = this.oldestDay();
+		for (const day of [...this.days.keys()]) {
+			if (day < oldest) {
+				this.days.delete(day);
+				this.deltas.delete(day);
+			}
+		}
+		const folder = usageRoot(this.options.root);
+		let names: string[];
+		try {
+			names = await fs.promises.readdir(folder);
+		} catch {
+			return;
+		}
+		for (const name of names) {
+			const day = /^(\d{4}-\d{2}-\d{2})\.json$/.exec(name)?.[1];
+			if (!day || day >= oldest) {
+				continue;
+			}
+			try {
+				await fs.promises.rm(path.join(folder, name), { force: true });
+			} catch (error) {
+				this.options.log?.(`Could not delete the usage day ${name}: ${messageOf(error)}`, 'warn');
+			}
+		}
 	}
 
 	/** Reads the days still inside the window, so a restart continues where the last one stopped. */
@@ -242,7 +286,7 @@ export class UsageLedger {
 	/** The first day still kept, as `YYYY-MM-DD`. */
 	private oldestDay(): string {
 		const today = new Date(this.now());
-		const back = Math.max(1, this.options.retainDays) - 1;
+		const back = this.retain - 1;
 		return localDayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - back).getTime());
 	}
 

@@ -271,3 +271,36 @@ describe('reading the store at startup', () => {
 		expect(ledgerAt(11, 10).daily({}, 30)).toEqual([]);
 	});
 });
+
+describe('retention', () => {
+	it('deletes the files and the memory outside the window', async () => {
+		store();
+		writeDayFile('2026-10-01', [{ h: 9, w: '/repo', a: 'claude', in: 1, cr: 0, cw: 0, out: 1 }]);
+		writeDayFile('2026-11-10', [{ h: 9, w: '/repo', a: 'claude', in: 2, cr: 0, cw: 0, out: 2 }]);
+		const ledger = new UsageLedger({ root, retainDays: 365, now: () => at(11, 10, 14), flushDelayMs: 60_000 });
+		expect(ledger.daily({}, 365)).toHaveLength(2);
+
+		await ledger.prune(30);
+		expect(fs.existsSync(fileOf('2026-10-01'))).toBe(false);
+		expect(ledger.daily({}, 365).map(bucket => bucket.key)).toEqual(['2026-11-10']);
+		expect(ledger.retainDays()).toBe(30);
+	});
+
+	it('clamps the window to what the setting allows', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		await ledger.prune(0);
+		expect(ledger.retainDays()).toBe(1);
+		await ledger.prune(999);
+		expect(ledger.retainDays()).toBe(365);
+	});
+
+	it('keeps a day the window still covers', async () => {
+		store();
+		writeDayFile('2026-11-04', [{ h: 9, w: '/repo', a: 'claude', in: 2, cr: 0, cw: 0, out: 2 }]);
+		const ledger = ledgerAt(11, 10);
+		await ledger.prune(7);
+		expect(fs.existsSync(fileOf('2026-11-04'))).toBe(true);
+		expect(ledger.daily({}, 7).map(bucket => bucket.key)).toEqual(['2026-11-04']);
+	});
+});
