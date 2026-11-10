@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { randomBytes } from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import type { AgentAdapter, AgentSettings, ConversationForker, LaunchContext } from '../../core/adapter';
 import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentClientDeps, type AgentSession, type CreateSessionOptions, type ForkPoint, type SignInUrlPrompt } from '../acp/agentClient';
@@ -74,6 +75,12 @@ export interface ChatServiceDeps {
 	agentChanged?(change: AgentChange): void;
 	/** Whether the host wants the agent running at all. */
 	isEnabled?(): boolean;
+	/**
+	 * Run one process for every chat, in a folder of the agent's own storage, whatever folders the chats
+	 * belong to. The agent's own tools are off and the host builds the prompt, so the folder it runs in
+	 * decides nothing a chat sees; the chat's real folders reach the model through the prompt.
+	 */
+	readonly sharedProcess?: boolean;
 }
 
 /**
@@ -125,7 +132,7 @@ export class ChatService {
 			adapter,
 			bridge: deps.bridge,
 			agentClient: () => this.defaultClient(),
-			cwd: () => this.defaultRoot ?? this.workspaceFolder,
+			cwd: () => this.sharedRoot() ?? this.defaultRoot ?? this.workspaceFolder,
 			opened: () => this.scheduleIdleSweep(),
 		});
 		this.turns = new TurnRunner({
@@ -172,6 +179,17 @@ export class ChatService {
 	 * in the launch's folder.
 	 */
 	private defaultRoot: string | undefined;
+
+	/** The folder every process and session runs in when {@link ChatServiceDeps.sharedProcess} is on; `undefined` otherwise, or before the agent is launched. */
+	private sharedRoot(): string | undefined {
+		const storage = this.deps.sharedProcess ? this.launch?.storageDir : undefined;
+		if (!storage) {
+			return undefined;
+		}
+		const root = normalizeRoot(path.join(storage, 'workspace'));
+		fs.mkdirSync(root, { recursive: true });
+		return root;
+	}
 
 	/** The folder the agent was launched in, `''` until it is launched; a chat that names no folder this machine has is rooted there. */
 	get workspaceFolder(): string {
@@ -268,7 +286,7 @@ export class ChatService {
 	/** The process the host's own requests run in: the window's first folder. */
 	private async defaultProcess(): Promise<WorkspaceProcess> {
 		const ctx = await this.resolveLaunch();
-		return this.processAt(this.defaultRoot ?? normalizeRoot(ctx.workspaceFolder), ctx);
+		return this.processAt(this.sharedRoot() ?? this.defaultRoot ?? normalizeRoot(ctx.workspaceFolder), ctx);
 	}
 
 	/** The client of the process the host's own requests run in, such as the one that lists the models. */
@@ -314,7 +332,7 @@ export class ChatService {
 		// folder off the launched agent when the request names no folder of its own.
 		const launch = await this.resolveLaunch();
 		const identity = this.deps.host.chatIdentity(request);
-		const entry = await this.processAt(workspaceRootOf(identity), launch);
+		const entry = await this.processAt(this.sharedRoot() ?? workspaceRootOf(identity), launch);
 		const client = entry.client;
 		lap('agent client ready');
 
@@ -511,8 +529,11 @@ export class ChatService {
 			return;
 		}
 		const launch = await this.resolveLaunch();
-		const root = normalizeRoot(folder);
-		this.moveDefaultTo(root, launch);
+		const shared = this.sharedRoot();
+		const root = shared ?? normalizeRoot(folder);
+		if (!shared) {
+			this.moveDefaultTo(root, launch);
+		}
 		const entry = await this.processAt(root, launch);
 		await entry.client.ensureStarted();
 	}
@@ -759,7 +780,7 @@ export class ChatService {
 				void this.promptArchive().remember(systemPromptAppend);
 			}
 			const options: CreateSessionOptions = {
-				cwd: context.cwd,
+				cwd: this.sharedRoot() ?? context.cwd,
 				mcpServers: [bridgeServer(endpoint)],
 				model: acpModelValue(modelId),
 				systemPromptAppend,

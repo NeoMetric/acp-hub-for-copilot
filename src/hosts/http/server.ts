@@ -688,7 +688,9 @@ function chatRequestOf(composition: HeadlessComposition, request: http.IncomingM
 		tools,
 		model: model === AGENT_DEFAULT_MODEL ? undefined : model,
 		effort: effortOf(body.reasoning_effort),
-		systemGuidance: extras.acp?.systemGuidance,
+		// A client that sends no `acp` extras is a stock one: its own system message is the guidance that
+		// tells the model where it works. The extension names its guidance itself, and may send none on purpose.
+		systemGuidance: isObject(body.acp) ? extras.acp?.systemGuidance : systemTextOf(messages),
 	};
 	rememberExtras(draft, extras);
 	// A stock OpenAI client sends no session key, so the host names the chat by its
@@ -983,6 +985,17 @@ function usageOf(usage: TurnUsage): unknown {
 		...(usage.cachedTokens > 0 ? { prompt_tokens_details: { cached_tokens: usage.cachedTokens } } : {}),
 		completion_tokens_details: { reasoning_tokens: usage.reasoningTokens ?? 0 },
 	};
+}
+
+/** What the system (or developer) messages of a request say, or `undefined` when they say nothing. */
+function systemTextOf(messages: readonly ChatMessage[]): string | undefined {
+	const text = messages
+		.filter(message => message.role === 'system')
+		.flatMap(message => message.parts)
+		.flatMap(part => part.type === 'text' ? [part.text] : [])
+		.join('\n\n')
+		.trim();
+	return text.length > 0 ? text : undefined;
 }
 
 /** The messages of the body as the engine's own: text, tool calls, and the results the client ran. */

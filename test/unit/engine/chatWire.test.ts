@@ -111,6 +111,25 @@ describe('the chat wire', () => {
 		expect(server.host.chatWideContextOf(request.messages.slice(0, 1))).toBe('<environment_info>Windows</environment_info>');
 	});
 
+	it('takes the system message of a stock client as its guidance, and the extension\'s own acp guidance over it', async () => {
+		const server = await start();
+		const model = await firstModel(server.url);
+		const requests = recordEngine(plainTurn);
+		const system = { role: 'system', content: 'The user\'s workspace folder is C:\\work\\one.' };
+		const developer = { role: 'developer', content: 'Prefer small diffs.' };
+		const user = { role: 'user', content: 'hi' };
+
+		await post(`${server.url}/v1/chat/completions`, { model, messages: [system, developer, user] });
+		await post(`${server.url}/v1/chat/completions`, { model, messages: [system, user], acp: { systemGuidance: 'from the extension' } });
+		await post(`${server.url}/v1/chat/completions`, { model, messages: [system, user], acp: { chatId: 'x' } });
+		await post(`${server.url}/v1/chat/completions`, { model, messages: [user] });
+
+		expect(requests[0].systemGuidance).toBe('The user\'s workspace folder is C:\\work\\one.\n\nPrefer small diffs.');
+		expect(requests[1].systemGuidance).toBe('from the extension');
+		expect(requests[2].systemGuidance, 'the extension may send no guidance on purpose').toBeUndefined();
+		expect(requests[3].systemGuidance).toBeUndefined();
+	});
+
 	it('lets acp.chatId win over the x-chat-id header', async () => {
 		const server = await start();
 		const model = await firstModel(server.url);

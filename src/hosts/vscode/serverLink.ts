@@ -46,6 +46,8 @@ export interface ServerLinkDeps {
 	 * editor's executable. `undefined`, or no answer, falls back to the editor's binary.
 	 */
 	readonly nodeCommand?: () => Promise<string | undefined>;
+	/** Run one agent process for every folder instead of one per folder; applies to the next server that starts. */
+	readonly sharedAgents?: boolean;
 	/** How many minutes a detached server may go unused before it closes itself; 0 keeps it running. */
 	readonly idleMinutes?: number;
 	/** The extension's version; a detached server of another version is replaced, so an update takes effect. */
@@ -412,6 +414,9 @@ export class ServerLink {
 		};
 		if (this.deps.promptsDir) {
 			env.ACP_HUB_PROMPTS_DIR = this.deps.promptsDir;
+		}
+		if (this.deps.sharedAgents) {
+			env.ACP_HUB_SHARED_AGENTS = '1';
 		}
 		if (this.deps.detached && this.deps.idleMinutes !== undefined) {
 			env.ACP_HUB_IDLE_MINUTES = String(this.deps.idleMinutes);

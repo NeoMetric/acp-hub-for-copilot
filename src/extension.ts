@@ -81,6 +81,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		port: settings.get<number>('server.port') ?? DEFAULT_PORT,
 		autoStart: settings.get<boolean>('server.autoStart') ?? true,
 		detached: settings.get<boolean>('server.detached') ?? true,
+		sharedAgents: settings.get<boolean>('server.sharedAgents') ?? false,
 		idleMinutes: Math.max(0, settings.get<number>('server.idleTimeoutMinutes') ?? DEFAULT_IDLE_MINUTES),
 		version: typeof context.extension.packageJSON?.version === 'string' ? context.extension.packageJSON.version : undefined,
 		serverScript: path.join(extensionDir, 'dist', 'server.js'),

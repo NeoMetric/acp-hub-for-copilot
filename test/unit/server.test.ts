@@ -73,6 +73,8 @@ interface BootOptions {
 	readonly adapter?: AgentAdapter;
 	/** Sees every line the server logs. */
 	readonly log?: (message: string) => void;
+	/** One agent process for every folder. */
+	readonly sharedProcess?: boolean;
 }
 
 /** Starts the server on a free port over the mock agent, with a store root of its own. */
@@ -93,6 +95,7 @@ async function boot(options: BootOptions = {}): Promise<{ url: string; host: Hea
 		resolveLaunch: () => Promise.resolve({ entryPath: MOCK_AGENT, installDir: '', storageDir: path.join(root, 'agent'), workspaceFolder: root, settings: {} }),
 		// The gate the composition hands the engine, read from `config.json` on every call.
 		isEnabled: () => host.settings.get<boolean>(settingKey(agent.id, 'enabled')) !== false,
+		sharedProcess: options.sharedProcess,
 	});
 	const composition: HeadlessComposition = {
 		host,
@@ -308,6 +311,41 @@ describe('the HTTP server', () => {
 
 		expect(started()).toHaveLength(1);
 		expect(started()[0].toLowerCase()).toContain(folder.toLowerCase());
+	});
+
+	describe('chats from two folders', () => {
+		/** Sends one chat from each of two folders, and returns the lines that say a process started. */
+		const startedFor = async (sharedProcess: boolean): Promise<string[]> => {
+			const lines: string[] = [];
+			const { url } = await boot({ sharedProcess, log: message => { lines.push(message); } });
+			const model = await firstModel(url);
+			const folders = ['a', 'b'].map(name => fs.mkdtempSync(path.join(os.tmpdir(), `acp-hub-two-${name}-`)));
+			cleanups.push(async () => {
+				for (const folder of folders) {
+					try {
+						fs.rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+					} catch {
+						// Left to the temp folder's own clean-up.
+					}
+				}
+			});
+			for (const [index, folder] of folders.entries()) {
+				const response = await post(`${url}/v1/chat/completions`, chat(model, `hello from folder ${index}`), { 'x-acp-cwd': folder });
+				expect(response.status).toBe(200);
+			}
+			return lines.filter(line => line.includes('Started the agent in'));
+		};
+
+		it('get a process each by default, beside the one that reads the model list', async () => {
+			expect(await startedFor(false)).toHaveLength(3);
+		});
+
+		it('share one process in the agent\'s own folder when asked to', async () => {
+			const started = await startedFor(true);
+
+			expect(started).toHaveLength(1);
+			expect(started[0].replace(/\\/g, '/')).toContain('/agent/workspace');
+		});
 	});
 
 	it('refuses to warm a folder that is not an existing absolute path', async () => {

@@ -137,6 +137,12 @@
 					"default": true,
 					"type": "boolean"
 				},
+				"acpHub.server.sharedAgents": {
+					"order": 5,
+					"description": "Run one process per agent for every chat and every folder, instead of one per folder. The agents' own tools are off and the prompt names the chat's real folders, so the folder the agent runs in decides nothing a chat sees. Fewer processes, and agents warm for every window and client. Experimental. Applies the next time the server starts: run `ACP Hub: Stop Server` after changing it.",
+					"default": false,
+					"type": "boolean"
+				},
 				"acpHub.server.autoStart": {
 					"order": 3,
 					"description": "Start the ACP Hub server when no server answers on the port. Turn it off to run the server yourself, with `npm run server`.",

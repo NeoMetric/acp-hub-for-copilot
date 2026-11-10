@@ -45,6 +45,8 @@ export interface HeadlessCompositionOptions {
 	readonly promptsDir?: string;
 	/** The agents this gateway serves: the registry by default, and the one under test in a test. */
 	readonly adapters?: readonly AgentAdapter[];
+	/** Run one process per agent for every chat, in a folder of the agent's own storage, instead of one per workspace folder. */
+	readonly sharedAgents?: boolean;
 }
 
 /** One host, the adapters it can drive, and the chat use case of each. */
@@ -149,6 +151,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 			bridge: options.bridge,
 			resolveLaunch: () => resolveLaunch(adapter),
 			isEnabled: () => host.settings.get<boolean>(settingKey(adapter.id, 'enabled')) !== false,
+			sharedProcess: options.sharedAgents,
 			client: { onSignInUrl: prompt => control.reportSignInUrl(adapter.id, prompt) },
 			buildSessionPrompt: createSessionPrompt(log, adapter.systemPrompt, workspaceOf, options.promptsDir),
 			transcriptOptions,
