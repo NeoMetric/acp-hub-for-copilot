@@ -8,7 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AcpTokenUsage } from '../../src/engine/acp/protocol';
-import { UsageLedger, type UsageRecord } from '../../src/engine/usage/ledger';
+import { MAX_WORKSPACES_PER_DAY, UsageLedger, type UsageRecord } from '../../src/engine/usage/ledger';
 import { usageRoot } from '../../src/engine/store/paths';
 
 const roots: string[] = [];
@@ -350,5 +350,38 @@ describe('the week, hour and workspace views', () => {
 		ledger.record(record({ workspace: '/heavy', usage: counts(100, 0, 0, 0) }));
 		expect(ledger.workspaces()).toEqual(['/heavy', '/light']);
 		expect(ledger.workspaces(1)).toEqual(['/heavy']);
+	});
+});
+
+describe('the workspace cap of a day', () => {
+	it('folds the least used workspace into one other row once the day is full', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		const inputs: number[] = [];
+		for (let n = 0; n <= MAX_WORKSPACES_PER_DAY; n += 1) {
+			const input = 10 * (n + 1);
+			inputs.push(input);
+			ledger.record(record({ workspace: `/repo/${n}`, usage: counts(input, 0, 0, 0) }));
+		}
+		await ledger.flush();
+
+		const rows = rowsOf('2026-11-10');
+		const workspaces = new Set(rows.map(row => row.w));
+		expect(workspaces.size).toBe(MAX_WORKSPACES_PER_DAY);
+		expect(workspaces.has('other')).toBe(true);
+		expect(workspaces.has('/repo/0')).toBe(false);
+		expect(rows.reduce((sum, row) => sum + row.in, 0)).toBe(inputs.reduce((sum, input) => sum + input, 0));
+	});
+
+	it('keeps the folded day after a reload', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		for (let n = 0; n <= MAX_WORKSPACES_PER_DAY; n += 1) {
+			ledger.record(record({ workspace: `/repo/${n}`, usage: counts(10 * (n + 1), 0, 0, 0) }));
+		}
+		await ledger.flush();
+		const reloaded = ledgerAt(11, 10);
+		expect(reloaded.workspaces()).toHaveLength(MAX_WORKSPACES_PER_DAY);
+		expect(reloaded.daily({}, 1).reduce((sum, bucket) => sum + bucket.totals.input, 0)).toBe(1530);
 	});
 });

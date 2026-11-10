@@ -9,7 +9,7 @@ import type { AcpTokenUsage } from '../acp/protocol';
 import type { Log } from '../ports/host';
 import { usageRoot } from '../store/paths';
 import { withLock } from '../store/fileStore';
-import { addTotals, isZero, localDayKey, localHour, UNKNOWN_WORKSPACE, weekStartOf, type TokenTotals } from './totals';
+import { addTotals, FOLDED_WORKSPACE, isZero, localDayKey, localHour, UNKNOWN_WORKSPACE, weekStartOf, type TokenTotals } from './totals';
 
 /** One finished turn, as the chat service reports it. */
 export interface UsageRecord {
@@ -113,6 +113,51 @@ function addTo(rows: Map<string, UsageRow> | undefined, row: UsageRow): Map<stri
 /** Where the tallies of one local day live. */
 function dayFile(root: string, day: string): string {
 	return path.join(usageRoot(root), `${day}.json`);
+}
+
+function spentOf(row: UsageRow): number {
+	return row.totals.input + row.totals.cacheRead + row.totals.cacheWrite + row.totals.output;
+}
+
+/** Adds a row into a set of rows, so a row that is already there grows instead of repeating. */
+function mergeInto(rows: Map<string, UsageRow>, row: UsageRow): void {
+	const key = rowKey(row);
+	const existing = rows.get(key);
+	rows.set(key, existing ? { ...existing, totals: addTotals(existing.totals, row.totals) } : row);
+}
+
+/**
+ * Folds the lightest workspaces of a day into `other` until the day is back under
+ * its cap. Done on the rows about to be written, where the file's own rows and the
+ * deltas are in view together, so two writers folding at once still agree and no
+ * token is counted twice.
+ */
+function foldDay(rows: Map<string, UsageRow>): void {
+	for (;;) {
+		const spent = new Map<string, number>();
+		let folded = false;
+		for (const row of rows.values()) {
+			if (row.workspace === FOLDED_WORKSPACE) {
+				folded = true;
+			} else {
+				spent.set(row.workspace, (spent.get(row.workspace) ?? 0) + spentOf(row));
+			}
+		}
+		if (spent.size + (folded ? 1 : 0) <= MAX_WORKSPACES_PER_DAY) {
+			return;
+		}
+		const lightest = [...spent.entries()].sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))[0]?.[0];
+		if (lightest === undefined) {
+			return;
+		}
+		for (const [key, row] of [...rows]) {
+			if (row.workspace !== lightest) {
+				continue;
+			}
+			rows.delete(key);
+			mergeInto(rows, { hour: row.hour, workspace: FOLDED_WORKSPACE, agent: row.agent, totals: row.totals });
+		}
+	}
 }
 
 /** The rows a day file holds, or `undefined` when it does not parse or holds rows of the wrong shape. */
@@ -448,6 +493,7 @@ export class UsageLedger {
 						const current = merged.get(key);
 						merged.set(key, current ? { ...current, totals: addTotals(current.totals, row.totals) } : row);
 					}
+					foldDay(merged);
 					await writeDay(file, day, [...merged.values()]);
 				});
 				this.deltas.delete(day);
