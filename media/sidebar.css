@@ -225,11 +225,18 @@ button:disabled {
 
 input[type="text"],
 input[type="number"],
+input[type="password"],
 select {
 	padding: 3px 4px;
 	color: var(--vscode-input-foreground);
 	background: var(--vscode-input-background);
 	border: 1px solid var(--vscode-input-border, transparent);
+}
+
+.key-entry input[type="password"] {
+	width: 100%;
+	box-sizing: border-box;
+	margin-bottom: 6px;
 }
 
 .page-nav {
@@ -257,4 +264,122 @@ select {
 	width: 100%;
 	max-width: 120px;
 	accent-color: var(--vscode-progressBar-background);
+}
+
+/* The Usage view: four distinct hues, readable on a light and a dark sidebar. */
+:root {
+	--chart-input: #2f81f7;
+	--chart-cache-read: #3fb950;
+	--chart-cache-write: #d29922;
+	--chart-output: #a371f7;
+}
+
+.usage-view {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.usage-retention .actions {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+}
+
+.usage-retention input[type="number"] {
+	width: 80px;
+}
+
+.usage-filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+
+.usage-filter-group {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+	flex: 1 1 220px;
+}
+
+.usage-filter {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 0.9em;
+}
+
+.usage-chart {
+	width: 100%;
+	height: auto;
+	overflow: visible;
+}
+
+.usage-chart .chart-axis {
+	fill: var(--vscode-descriptionForeground);
+	font-size: 10px;
+}
+
+.usage-chart .chart-column {
+	fill: transparent;
+}
+
+.usage-chart .chart-column:hover {
+	fill: var(--vscode-list-hoverBackground, rgb(128 128 128 / 15%));
+}
+
+.usage-chart path {
+	stroke: none;
+}
+
+.usage-chart .series-input,
+.legend-swatch.series-input {
+	fill: var(--chart-input);
+	background: var(--chart-input);
+}
+
+.usage-chart .series-cache-read,
+.legend-swatch.series-cache-read {
+	fill: var(--chart-cache-read);
+	background: var(--chart-cache-read);
+}
+
+.usage-chart .series-cache-write,
+.legend-swatch.series-cache-write {
+	fill: var(--chart-cache-write);
+	background: var(--chart-cache-write);
+}
+
+.usage-chart .series-output,
+.legend-swatch.series-output {
+	fill: var(--chart-output);
+	background: var(--chart-output);
+}
+
+.legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	align-items: center;
+	font-size: 0.9em;
+}
+
+.legend-entry {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.legend-swatch {
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	border-radius: 2px;
+}
+
+.legend-total {
+	margin-left: auto;
+	color: var(--vscode-descriptionForeground);
 }

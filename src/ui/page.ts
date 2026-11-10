@@ -5,8 +5,8 @@
 
 /// <reference lib="dom" />
 
-import type { AgentCardState, ModelsView, SettingValue, SettingView } from './messages';
-import { GLOBAL_SETTINGS_ID, renderCards, renderModels, renderNav, type PageView } from './render';
+import type { AgentCardState, ModelsView, SettingValue, SettingView, UsageHistoryView } from './messages';
+import { GLOBAL_SETTINGS_ID, renderCards, renderModels, renderNav, renderUsageView, type PageView, type UsageRange } from './render';
 import type { ControlTransport } from './transport';
 
 /**
@@ -19,18 +19,62 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 	let agents: AgentCardState[] = [];
 	let globalSettings: SettingView[] = [];
 	let models: ModelsView | undefined;
+	let usage: UsageHistoryView | undefined;
 	let notice: string | undefined;
-	let syncing = false;
+	let refreshing = false;
 	let view: PageView = 'agents';
 	/** The agent whose provider and model names are inputs in the Models view, if any. */
 	let editing: string | undefined;
+	/** The range and the filters of the Usage view; they stay here, so changing one costs no round trip. */
+	let usageRange: UsageRange = '30';
+	const usageAgents = new Set<string>();
+	const usageWorkspaces = new Set<string>();
+
+	/** The agents whose API key field is open, and what was typed in each, so a redraw does not wipe it. */
+	const keyEntry = new Set<string>();
+	const keyDrafts = new Map<string, string>();
+
+		function toggle(set: Set<string>, value: string | undefined, on: boolean): void {
+			if (value === undefined) {
+				return;
+			}
+			if (on) {
+				set.add(value);
+			} else {
+				set.delete(value);
+			}
+		}
+
+	function restoreKeyDrafts(): void {
+		for (const input of Array.from(root.querySelectorAll?.('input[data-key-input]') ?? []) as HTMLInputElement[]) {
+			if (input.dataset?.keyInput) {
+				input.value = keyDrafts.get(input.dataset.agent ?? '') ?? '';
+			}
+		}
+	}
+
+	function saveApiKey(agentId: string): void {
+		const key = keyDrafts.get(agentId) ?? '';
+		keyEntry.delete(agentId);
+		keyDrafts.delete(agentId);
+		transport.send({ type: 'saveApiKey', agentId, key });
+		draw();
+	}
 
 	function draw(): void {
-		if (!models) {
-			root.innerHTML = renderCards(agents, openSettings, globalSettings);
+		const available = { models: models !== undefined, usage: usage !== undefined };
+		if (!available.models && !available.usage) {
+			root.innerHTML = renderCards(agents, openSettings, globalSettings, keyEntry);
+			restoreKeyDrafts();
 			return;
 		}
-		root.innerHTML = renderNav(view) + (view === 'models' ? renderModels(models, notice, { syncing, editing }) : renderCards(agents, openSettings, globalSettings));
+		const body = view === 'models' && models
+			? renderModels(models, notice, { refreshing, editing })
+			: view === 'usage' && usage
+				? renderUsageView(usage, { range: usageRange, agents: usageAgents, workspaces: usageWorkspaces })
+				: renderCards(agents, openSettings, globalSettings, keyEntry);
+		root.innerHTML = renderNav(view, available) + body;
+		restoreKeyDrafts();
 		if (editing !== undefined) {
 			const input = root.querySelector?.('input[data-models]') as HTMLInputElement | null | undefined;
 			input?.focus();
@@ -83,13 +127,26 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		}
 		const action = target.dataset.action;
 		const agentId = target.dataset.agent ?? '';
-		if (action === 'showAgents' || action === 'showModels') {
-			view = action === 'showModels' ? 'models' : 'agents';
+		if (action === 'showAgents' || action === 'showModels' || action === 'showUsage') {
+			view = action === 'showModels' ? 'models' : action === 'showUsage' ? 'usage' : 'agents';
 			draw();
 			return;
 		}
-		if (action === 'syncModels') {
-			transport.send({ type: 'syncModels' });
+		if (action === 'setUsageRange') {
+			usageRange = (target.dataset.range as UsageRange | undefined) ?? '30';
+			draw();
+			return;
+		}
+		if (action === 'setRetentionDays') {
+			const input = root.querySelector?.('input[data-retention]') as HTMLInputElement | null | undefined;
+			const days = Number(input?.value);
+			if (Number.isFinite(days)) {
+				transport.send({ type: 'setRetentionDays', days });
+			}
+			return;
+		}
+		if (action === 'refreshModels') {
+			transport.send({ type: 'refreshModels' });
 			return;
 		}
 		if (action === 'editNames') {
@@ -103,6 +160,22 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		}
 		if (action === 'cancelNames') {
 			stopEditing();
+			return;
+		}
+		if (action === 'showApiKey') {
+			keyEntry.add(agentId);
+			draw();
+			(root.querySelector?.(`input[data-key-input][data-agent="${agentId}"]`) as HTMLInputElement | null | undefined)?.focus();
+			return;
+		}
+		if (action === 'cancelApiKey') {
+			keyEntry.delete(agentId);
+			keyDrafts.delete(agentId);
+			draw();
+			return;
+		}
+		if (action === 'saveApiKey') {
+			saveApiKey(agentId);
 			return;
 		}
 		if (action === 'toggleSettings') {
@@ -128,9 +201,29 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		}
 	}, true);
 
+	root.addEventListener('input', event => {
+		const target = event.target as HTMLInputElement;
+		if (target.dataset?.keyInput && target.dataset.agent) {
+			keyDrafts.set(target.dataset.agent, target.value);
+		}
+	});
+
 	root.addEventListener('change', event => {
 		const target = event.target as HTMLInputElement | HTMLSelectElement;
+		if (target.dataset.keyInput) {
+			return;
+		}
 		if (target.dataset.models) {
+			return;
+		}
+		if (target.dataset.agentFilter !== undefined) {
+			toggle(usageAgents, target.dataset.agentFilter, (target as HTMLInputElement).checked);
+			draw();
+			return;
+		}
+		if (target.dataset.workspaceFilter !== undefined) {
+			toggle(usageWorkspaces, target.dataset.workspaceFilter, (target as HTMLInputElement).checked);
+			draw();
 			return;
 		}
 		if (target.dataset.global && target.dataset.key) {
@@ -154,6 +247,17 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 	// Enter saves the names being edited and Escape drops them.
 	root.addEventListener('keydown', event => {
 		const { key, target } = event as KeyboardEvent;
+		const keyAgent = (target as HTMLElement).dataset?.keyInput ? (target as HTMLElement).dataset.agent : undefined;
+		if (keyAgent) {
+			if (key === 'Enter') {
+				saveApiKey(keyAgent);
+			} else if (key === 'Escape') {
+				keyEntry.delete(keyAgent);
+				keyDrafts.delete(keyAgent);
+				draw();
+			}
+			return;
+		}
 		if (!(target as HTMLElement).dataset?.models) {
 			return;
 		}
@@ -168,8 +272,9 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		agents = state.agents;
 		globalSettings = state.globalSettings ?? [];
 		models = state.models;
+		usage = state.usage;
 		notice = state.notice;
-		syncing = state.syncing === true;
+		refreshing = state.refreshing === true;
 		draw();
 	});
 

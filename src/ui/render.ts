@@ -6,7 +6,8 @@
 import type { UsageWindow } from '../core/adapter';
 import { formatTokens } from './chart';
 import { escapeHtml } from './html';
-import type { AgentCardState, ModelsView, SettingView } from './messages';
+import type { AgentCardState, ModelsView, SettingView, UsageHistoryView } from './messages';
+import { renderAreaChart, renderChartLegend } from './chart';
 
 export { escapeHtml };
 
@@ -189,13 +190,112 @@ function renderCard(agent: AgentCardState, settingsOpen: boolean, keyOpen: boole
 		+ `</section>`;
 }
 
-/** The two views of the page; the switch is drawn only when the host can rename models. */
-export type PageView = 'agents' | 'models';
+/** The views of the page; a tab is drawn only for the ones the host can fill. */
+export type PageView = 'agents' | 'models' | 'usage';
 
-export function renderNav(view: PageView): string {
+/** Which views this page can show: renaming models needs a Models surface, the chart a usage history. */
+export interface PageViews {
+	readonly models: boolean;
+	readonly usage: boolean;
+}
+
+export function renderNav(view: PageView, available: PageViews = { models: true, usage: false }): string {
+	const actions: Record<PageView, string> = { agents: 'showAgents', models: 'showModels', usage: 'showUsage' };
 	const tab = (target: PageView, label: string): string =>
-		`<button class="${view === target ? '' : 'secondary'}" data-action="${target === 'agents' ? 'showAgents' : 'showModels'}" aria-pressed="${view === target}">${label}</button>`;
-	return `<nav class="page-nav">${tab('agents', 'Agents')}${tab('models', 'Models')}</nav>`;
+		`<button class="${view === target ? '' : 'secondary'}" data-action="${actions[target]}" aria-pressed="${view === target}">${label}</button>`;
+	const tabs = [
+		tab('agents', 'Agents'),
+		...(available.models ? [tab('models', 'Models')] : []),
+		...(available.usage ? [tab('usage', 'Usage')] : []),
+	];
+	return `<nav class="page-nav">${tabs.join('')}</nav>`;
+}
+
+/** The range of the chart, and the agents and workspaces it leaves in; an empty set means every one. */
+export type UsageRange = 'today' | '7' | '30' | 'all';
+
+export interface UsageSelection {
+	readonly range: UsageRange;
+	readonly agents: ReadonlySet<string>;
+	readonly workspaces: ReadonlySet<string>;
+}
+
+const USAGE_RANGES: ReadonlyArray<{ readonly value: UsageRange; readonly label: string; readonly days: number }> = [
+	{ value: 'today', label: 'Today', days: 1 },
+	{ value: '7', label: '7 days', days: 7 },
+	{ value: '30', label: '30 days', days: 30 },
+	{ value: 'all', label: 'All', days: 0 },
+];
+
+/**
+ * The Usage view: what the turns spent over time, in the four token kinds, with
+ * the agents and workspaces left in by hand, and the retention that decides how
+ * much history there is at all.
+ */
+export function renderUsageView(view: UsageHistoryView, selection: UsageSelection): string {
+	const retention = `<div class="setting usage-retention"><div class="setting-heading">`
+		+ `<span class="setting-label">Keep history for</span>${renderInfo('Keep history for', 'How many days of token usage the server keeps. Lowering it deletes the older days for good.')}</div>`
+		+ `<div class="actions"><input aria-label="Keep history for" type="number" data-retention="true" min="1" max="365" value="${view.retentionDays}">`
+		+ `<button data-action="setRetentionDays">Save</button></div></div>`;
+
+	if (view.empty) {
+		return `<div class="usage-view">${retention}`
+			+ '<div class="note">Recording starts now; usage before this update was never stored.</div></div>';
+	}
+
+	const ranges = USAGE_RANGES.filter(range => range.value !== 'all' || view.retentionDays > 30)
+		.map(range => `<button class="${selection.range === range.value ? '' : 'secondary'}" data-action="setUsageRange" data-range="${range.value}" aria-pressed="${selection.range === range.value}">${range.label}</button>`)
+		.join('');
+
+	const chosen = (id: string, set: ReadonlySet<string>): boolean => set.size === 0 || set.has(id);
+	const box = (attributes: string, label: string, checked: boolean): string =>
+		`<label class="usage-filter"><input type="checkbox" ${attributes}${checked ? ' checked' : ''}> ${escapeHtml(label)}</label>`;
+
+	const agents = view.agents
+		.map(agent => box(`data-agent-filter="${escapeHtml(agent.id)}"`, agent.name, selection.agents.has(agent.id)))
+		.join('');
+	const workspaces = view.workspaces
+		.map(workspace => box(`data-workspace-filter="${escapeHtml(workspace.id)}"`, workspace.name, selection.workspaces.has(workspace.id)))
+		.join('');
+
+	const chosenAgent = (point: { a: number }): string => view.agents[point.a]?.id ?? '';
+	const chosenWorkspace = (point: { w: number }): string => view.workspaces[point.w]?.id ?? '';
+
+	const range = USAGE_RANGES.find(item => item.value === selection.range) ?? USAGE_RANGES[2]!;
+	const source = selection.range === 'today' ? view.today
+		: selection.range === 'all' ? view.weeks
+			: view.days.slice(-range.days);
+
+	const sums = new Map<string, { label: string; values: [number, number, number, number] }>();
+	for (const point of source) {
+		if (!chosen(chosenAgent(point), selection.agents) || !chosen(chosenWorkspace(point), selection.workspaces)) {
+			continue;
+		}
+		const sum = sums.get(point.d);
+		sums.set(point.d, {
+			label: point.d,
+			values: sum
+				? [sum.values[0] + point.v[0], sum.values[1] + point.v[1], sum.values[2] + point.v[2], sum.values[3] + point.v[3]]
+				: [...point.v],
+		});
+	}
+	const points = [...sums.values()].sort((a, b) => a.label.localeCompare(b.label));
+
+	const totals: [number, number, number, number] = [0, 0, 0, 0];
+	for (const point of points) {
+		for (let index = 0; index < 4; index += 1) {
+			totals[index] += point.values[index]!;
+		}
+	}
+
+	return `<div class="usage-view">`
+		+ retention
+		+ `<div class="actions">${ranges}</div>`
+		+ `<div class="usage-filters"><div class="usage-filter-group"><span class="setting-label">Agents</span>${agents}</div>`
+		+ `<div class="usage-filter-group"><span class="setting-label">Workspaces</span>${workspaces}</div></div>`
+		+ renderAreaChart(points)
+		+ renderChartLegend(totals)
+		+ '</div>';
 }
 
 /** A name as the input being edited: it holds a value only when a name was chosen, and shows the agent's own as its placeholder. */
