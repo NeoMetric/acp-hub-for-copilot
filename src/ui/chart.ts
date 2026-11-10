@@ -62,6 +62,11 @@ export function renderAreaChart(points: readonly ChartPoint[], options: { readon
 			lower.push(below);
 			upper.push(below + point.values[seriesIndex]!);
 		}
+		if (points.length === 1) {
+			// A lone point has no width to fill between, so the area would collapse to a line: draw a bar.
+			const barWidth = 48;
+			return `<rect class="${series.className}" x="${(x(0) - barWidth / 2).toFixed(1)}" y="${y(upper[0]!).toFixed(1)}" width="${barWidth}" height="${(y(lower[0]!) - y(upper[0]!)).toFixed(1)}"></rect>`;
+		}
 		const along = (values: readonly number[], from: number, to: number, stride: number): string => {
 			const steps: string[] = [];
 			for (let index = from; index !== to; index += stride) {

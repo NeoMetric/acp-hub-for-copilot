@@ -18,6 +18,12 @@ describe('the usage chart', () => {
 		expect(html.match(/<path class="series-/g)).toHaveLength(4);
 	});
 
+	it('draws a stacked bar, not a collapsed area, for a lone point', () => {
+		const html = renderAreaChart([{ label: '2026-11-11', values: [10, 20, 0, 5] }]);
+		expect(html.match(/<rect class="series-/g)).toHaveLength(4);
+		expect(html).not.toContain('<path');
+	});
+
 	it('labels the axis with the peak of the stack', () => {
 		expect(renderAreaChart([{ label: 'a', values: [10, 20, 0, 5] }])).toContain('>35<');
 	});

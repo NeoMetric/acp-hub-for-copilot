@@ -40,7 +40,8 @@ export function writeCliProviders(options: {
 }): { written: string[] } {
 	const { file } = options;
 	const config = readConfig(file);
-	const ours = new Set([...options.previous, LEGACY_PROVIDER]);
+	// The names about to be written count as ours too: the remembered list is lost with the window's state, and the CLI refuses a name that appears twice.
+	const ours = new Set([...options.previous, LEGACY_PROVIDER, ...options.providers.map(provider => provider.name)]);
 	const providers = arrayOf(config.providers).filter(entry => !ours.has(String((entry as JsonObject)?.name)));
 	const models = arrayOf(config.models).filter(entry => !ours.has(String((entry as JsonObject)?.provider)));
 	const taken = new Set(models.map(entry => String((entry as JsonObject)?.id)));

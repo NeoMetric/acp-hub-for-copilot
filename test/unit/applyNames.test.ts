@@ -55,6 +55,18 @@ describe('writeCliProviders', () => {
 		expect(config.models.map((model: { id: string }) => model.id)).toEqual(['keep', 'A']);
 	});
 
+	it('replaces a provider of the same name even when it was not remembered, so a name never appears twice', () => {
+		const file = tempFile('providers.json');
+		const providers = [{ name: 'Claude Agent', models: [{ name: 'A', wireModel: 'claude/a' }] }];
+
+		writeCliProviders({ file, ...BASE, previous: [], providers });
+		writeCliProviders({ file, ...BASE, token: 'fresh', previous: [], providers });
+
+		const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+		expect(config.providers).toEqual([{ name: 'Claude Agent', type: 'openai', baseUrl: BASE.baseUrl, bearerToken: 'fresh' }]);
+		expect(config.models).toEqual([{ id: 'A', provider: 'Claude Agent', wireModel: 'claude/a' }]);
+	});
+
 	it('makes ids slash-free and unique', () => {
 		const file = tempFile('providers.json');
 
