@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createFileStore } from '../../../src/engine/store/fileStore';
 import { storageRoot } from '../../../src/engine/store/paths';
 
@@ -57,6 +57,43 @@ describe('the file store', () => {
 
 		const reopened = createFileStore(root);
 		expect(reopened.state.get('signedIn.mock')).toBe(true);
+	});
+
+	it('retries a rename that a reader of the file holds up', async () => {
+		const root = storeRoot();
+		const store = createFileStore(root);
+		const rename = fs.promises.rename.bind(fs.promises);
+		let blocked = 2;
+		const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+			if (blocked-- > 0) {
+				throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+			}
+			await rename(from, to);
+		});
+
+		try {
+			await store.state.update('key', 1);
+			expect(spy).toHaveBeenCalledTimes(3);
+		} finally {
+			spy.mockRestore();
+		}
+
+		expect(documentAt(root).values).toEqual({ key: 1 });
+		expect(fs.readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([]);
+	});
+
+	it('gives up on a rename that keeps failing, and leaves no temp file', async () => {
+		const root = storeRoot();
+		const store = createFileStore(root);
+		const spy = vi.spyOn(fs.promises, 'rename').mockRejectedValue(Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }));
+
+		try {
+			await expect(store.state.update('key', 1)).rejects.toThrow('EPERM');
+		} finally {
+			spy.mockRestore();
+		}
+
+		expect(fs.readdirSync(root).filter(name => name.endsWith('.tmp'))).toEqual([]);
 	});
 
 	it('keeps what one gateway wrote when the other writes after it', async () => {

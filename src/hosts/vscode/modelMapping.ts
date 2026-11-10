@@ -23,6 +23,25 @@ export function bareModelValueOf(agentId: string, wireId: string): string {
 	return wireId.startsWith(prefix) ? wireId.slice(prefix.length) : wireId;
 }
 
+/** The wire model of a saved entry, or `undefined` when the entry is not in a shape the picker can show. */
+export function modelWireOfSaved(agentId: string, saved: unknown): ModelWire | undefined {
+	if (typeof saved !== 'object' || saved === null) {
+		return undefined;
+	}
+	const { value, info } = saved as { value?: unknown; info?: Partial<ModelInfoWire> };
+	if (typeof value !== 'string' || typeof info !== 'object' || info === null
+		|| typeof info.name !== 'string' || typeof info.maxInputTokens !== 'number' || typeof info.maxOutputTokens !== 'number') {
+		return undefined;
+	}
+	return {
+		id: `${agentId}/${value}`,
+		object: 'model',
+		created: 0,
+		owned_by: agentId,
+		acp: { ...info as ModelInfoWire, efforts: Array.isArray(info.efforts) ? info.efforts : [] },
+	};
+}
+
 /**
  * The picker entries of one wire model: the plain one and the copy aimed at the
  * Copilot CLI agent (which filters out models that do not name its session type).

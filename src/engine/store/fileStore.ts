@@ -111,10 +111,28 @@ async function writeDocument(file: string, document: StoreDocument, mode?: numbe
 			// writeFile's mode only applies to a new file, and the umask may narrow it; the secrets are the owner's alone.
 			await fs.promises.chmod(temp, mode);
 		}
-		await fs.promises.rename(temp, file);
+		await renameWithRetry(temp, file);
 	} catch (error) {
 		await fs.promises.rm(temp, { force: true }).catch(() => undefined);
 		throw error;
+	}
+}
+
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RENAME_ATTEMPTS = 6;
+
+/** On Windows a rename over a file another process has open fails until that process lets go, which a scanner or a reader does within moments. */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await fs.promises.rename(from, to);
+			return;
+		} catch (error) {
+			if (attempt >= RENAME_ATTEMPTS || !RENAME_RETRY_CODES.has((error as NodeJS.ErrnoException).code ?? '')) {
+				throw error;
+			}
+			await new Promise(resolve => setTimeout(resolve, 20 * attempt));
+		}
 	}
 }
 

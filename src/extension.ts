@@ -112,7 +112,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			agentId: agent.id,
 			vendor,
 			link: binding,
-			// The extension's own key in the shared store, so the next window offers these models before the server answers.
+			// Read-only: the server's saved models, so the window offers them before the server answers.
 			state: shared.store.state,
 			log: scopedLog(output, agent.id),
 			// A chat whose folders this machine does not have runs in the agents folder, as it always did.

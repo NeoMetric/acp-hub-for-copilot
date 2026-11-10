@@ -8,15 +8,11 @@ import { characterCountOf } from './tokenCount';
 import { CHARS_PER_TOKEN } from '../../engine/chat/usageReport';
 import type { Log } from '../../engine/ports/host';
 import type { StateStore } from '../../engine/ports/state';
-import { modelInformationOf } from './modelMapping';
+import { modelsStateKey } from '../../core/modelInfo';
+import { modelInformationOf, modelWireOfSaved } from './modelMapping';
 import { bodyOf } from './requestMapping';
 import { listModels, ServerChatError, streamChat, type WireEvent, type WireUsage } from './serverClient';
 import type { LinkState, ServerLink } from './serverLink';
-
-/** The models a window last listed, kept so a server that is down or cold cannot empty the picker. */
-export function savedModelsKey(agentId: string): string {
-	return `acpHub.models.${agentId}`;
-}
 
 /** What the provider needs of the window's link to the server. */
 export type ServerProviderLink = Pick<ServerLink, 'ensure' | 'state' | 'onDidChange'>;
@@ -27,8 +23,8 @@ export interface ServerProviderDeps {
 	/** The vendor the workbench registers the provider under. */
 	readonly vendor: string;
 	readonly link: ServerProviderLink;
-	/** The store the listed models are saved in, so the next window shows them at once. */
-	readonly state: StateStore;
+	/** The shared store the server saves its models in; the window only reads it, so a cold server cannot empty the picker. */
+	readonly state: Pick<StateStore, 'get'>;
 	readonly log: Log;
 	/** The window's own folder, which roots a chat whose folders this machine does not have. */
 	windowFolder(): string;
@@ -47,6 +43,8 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 	private readonly unsubscribe: () => void;
 	private listing: Promise<vscode.LanguageModelChatInformation[]> | undefined;
 	private lastKind: LinkState['kind'] | undefined;
+	/** The list the server answered last, kept in memory: it carries what the saved copy lacks, such as renamed models. */
+	private offered: vscode.LanguageModelChatInformation[] | undefined;
 	private disposed = false;
 
 	constructor(private readonly deps: ServerProviderDeps) {
@@ -173,13 +171,12 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 				this.deps.log(`The server listed no ${this.deps.agentId} models; offering the ${saved.length} saved one(s) instead.`, 'warn');
 				return [...saved];
 			}
-			if (saved.length > 0 && JSON.stringify(saved) !== JSON.stringify(models)) {
-				// The save lands first, so the workbench that lists again on this news already sees them.
-				await this.save(models);
+			const changed = saved.length > 0 && JSON.stringify(saved) !== JSON.stringify(models);
+			// Kept first, so the workbench that lists again on this news already sees them.
+			this.offered = models;
+			if (changed) {
 				this.changeEmitter.fire();
-				return models;
 			}
-			await this.save(models);
 			return models;
 		} catch (error) {
 			this.deps.log(`Could not list the ${this.deps.agentId} models: ${messageOf(error)}`, 'warn');
@@ -201,17 +198,19 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 		});
 	}
 
+	/** What the picker offers before the server answers: the last live list, or the copy the server saved. */
 	private savedModels(): vscode.LanguageModelChatInformation[] {
-		const saved = this.deps.state.get<vscode.LanguageModelChatInformation[]>(savedModelsKey(this.deps.agentId));
-		return Array.isArray(saved) ? saved : [];
-	}
-
-	private async save(models: readonly vscode.LanguageModelChatInformation[]): Promise<void> {
-		try {
-			await this.deps.state.update(savedModelsKey(this.deps.agentId), models);
-		} catch (error) {
-			this.deps.log(`Could not save the ${this.deps.agentId} models: ${messageOf(error)}`, 'warn');
+		if (this.offered) {
+			return this.offered;
 		}
+		const saved = this.deps.state.get<unknown>(modelsStateKey(this.deps.agentId));
+		if (!Array.isArray(saved)) {
+			return [];
+		}
+		return saved.flatMap(entry => {
+			const wire = modelWireOfSaved(this.deps.agentId, entry);
+			return wire ? modelInformationOf(this.deps.agentId, wire) : [];
+		});
 	}
 
 	/** A server that came or went changed what can be offered, so the workbench lists again. */

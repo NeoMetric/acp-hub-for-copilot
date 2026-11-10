@@ -11,7 +11,8 @@ import type { Log } from '../../src/engine/ports/host';
 import type { StateStore } from '../../src/engine/ports/state';
 import type { ModelWire } from '../../src/hosts/http/wire';
 import type { LinkState } from '../../src/hosts/vscode/serverLink';
-import { savedModelsKey, ServerProvider } from '../../src/hosts/vscode/serverProvider';
+import { modelsStateKey } from '../../src/core/modelInfo';
+import { ServerProvider } from '../../src/hosts/vscode/serverProvider';
 import { LanguageModelDataPart, LanguageModelTextPart, LanguageModelThinkingPart, LanguageModelToolCallPart } from './vscode-mock';
 import { user } from './messages';
 
@@ -52,6 +53,11 @@ function modelWire(agentId: string, value: string): ModelWire {
 			efforts: [],
 		},
 	};
+}
+
+/** One model as the server saves it in the shared store. */
+function savedEntry(agentId: string, value: string) {
+	return { value, info: modelWire(agentId, value).acp };
 }
 
 function modelsReply(models: readonly ModelWire[]): string {
@@ -209,29 +215,40 @@ describe('ServerProvider models', () => {
 		const models = await provider.provideLanguageModelChatInformation(modelsOptions, token());
 
 		expect(models.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent']);
-		expect(state.get(savedModelsKey('claude'))).toEqual(models);
-		expect(state.get(savedModelsKey('codex'))).toBeUndefined();
+		expect(state.keys()).toEqual([]);
 	});
 
-	it('keeps the saved models when the server is unavailable', async () => {
-		const saved = [{ id: 'sonnet', name: 'Sonnet', family: 'sonnet', version: '1', maxInputTokens: 1_000, maxOutputTokens: 100 }];
+	it('keeps the models the server saved when the server is unavailable, and never writes them', async () => {
 		const state = new MemoryState();
-		await state.update(savedModelsKey('claude'), saved);
+		await state.update(modelsStateKey('claude'), [savedEntry('claude', 'sonnet')]);
+		const writes = state.keys().length;
 		const provider = providerOf({ link: new FakeLink(() => unavailable), state });
 
-		expect(await provider.provideLanguageModelChatInformation(modelsOptions, token())).toEqual(saved);
-		expect(state.get(savedModelsKey('claude'))).toEqual(saved);
+		const models = await provider.provideLanguageModelChatInformation(modelsOptions, token());
+
+		expect(models.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent']);
+		expect(state.keys().length).toBe(writes);
+	});
+
+	it('ignores a saved entry in a shape it cannot show', async () => {
+		const state = new MemoryState();
+		await state.update(modelsStateKey('claude'), [{ value: 'sonnet' }, 'broken', savedEntry('claude', 'opus')]);
+		const provider = providerOf({ link: new FakeLink(() => unavailable), state });
+
+		const models = await provider.provideLanguageModelChatInformation(modelsOptions, token());
+
+		expect(models.map(model => model.id)).toEqual(['opus', 'opus::agent']);
 	});
 
 	it('keeps the saved models when the server lists none for its agent', async () => {
-		const saved = [{ id: 'sonnet', name: 'Sonnet', family: 'sonnet', version: '1', maxInputTokens: 1_000, maxOutputTokens: 100 }];
 		const state = new MemoryState();
-		await state.update(savedModelsKey('claude'), saved);
+		await state.update(modelsStateKey('claude'), [savedEntry('claude', 'sonnet')]);
 		const baseUrl = await serverWith([]);
 		const provider = providerOf({ link: new FakeLink(() => ready(baseUrl)), state });
 
-		expect(await provider.provideLanguageModelChatInformation(modelsOptions, token())).toEqual(saved);
-		expect(state.get(savedModelsKey('claude'))).toEqual(saved);
+		const models = await provider.provideLanguageModelChatInformation(modelsOptions, token());
+
+		expect(models.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent']);
 	});
 
 	it('a second provider for another agent does not see the first agent\'s models', async () => {
@@ -258,9 +275,8 @@ describe('ServerProvider models', () => {
 	});
 
 	it('answers from the saved list at once, and reports the live list when it differs', async () => {
-		const saved = [{ id: 'sonnet', name: 'Sonnet', family: 'sonnet', version: '1', maxInputTokens: 1_000, maxOutputTokens: 100 }];
 		const state = new MemoryState();
-		await state.update(savedModelsKey('claude'), saved);
+		await state.update(modelsStateKey('claude'), [savedEntry('claude', 'sonnet')]);
 		const baseUrl = await serverWith([modelWire('claude', 'sonnet'), modelWire('claude', 'opus')]);
 		// A cold server: the link is still finding one while the picker asks.
 		let release = (): void => { };
@@ -274,12 +290,34 @@ describe('ServerProvider models', () => {
 		provider.onDidChangeLanguageModelChatInformation(() => { fired++; });
 
 		const models = await within(provider.provideLanguageModelChatInformation(modelsOptions, token()), 500, 'the picker');
-		expect(models).toEqual(saved);
+		expect(models.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent']);
 
 		release();
 		await waitUntil(() => fired > 0, 'the live list to be reported');
-		const live = state.get<Array<{ id: string }>>(savedModelsKey('claude'));
-		expect(live?.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent', 'opus', 'opus::agent']);
+		const live = await provider.provideLanguageModelChatInformation(modelsOptions, token());
+		expect(live.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent', 'opus', 'opus::agent']);
+		expect(state.get(modelsStateKey('claude'))).toEqual([savedEntry('claude', 'sonnet')]);
+	});
+
+	it('does not report a change again once the live list is the one it offers', async () => {
+		const state = new MemoryState();
+		await state.update(modelsStateKey('claude'), [savedEntry('claude', 'sonnet')]);
+		const live = modelWire('claude', 'sonnet');
+		live.acp!.name = 'Renamed';
+		const baseUrl = await serverWith([live]);
+		const link = new FakeLink(() => ready(baseUrl));
+		// Already ready, so the only change reported is the list's own.
+		link.publish(ready(baseUrl));
+		const provider = providerOf({ link, state });
+		let fired = 0;
+		provider.onDidChangeLanguageModelChatInformation(() => { fired++; });
+
+		await provider.provideLanguageModelChatInformation(modelsOptions, token());
+		await waitUntil(() => fired === 1, 'the rename to be reported');
+		await provider.provideLanguageModelChatInformation(modelsOptions, token());
+		await new Promise(resolve => setTimeout(resolve, 100));
+
+		expect(fired).toBe(1);
 	});
 
 	it('lists again after a refresh, so an agent that changed is not stuck', async () => {
