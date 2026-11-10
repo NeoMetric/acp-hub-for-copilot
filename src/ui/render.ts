@@ -4,16 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { UsageWindow } from '../core/adapter';
+import { formatTokens } from './chart';
+import { escapeHtml } from './html';
 import type { AgentCardState, ModelsView, SettingView } from './messages';
 
-export function escapeHtml(text: string): string {
-	return text
-		.replace(/&/g, '&amp;')
-		.replace(/</g, '&lt;')
-		.replace(/>/g, '&gt;')
-		.replace(/"/g, '&quot;')
-		.replace(/'/g, '&#39;');
-}
+export { escapeHtml };
+
 
 function clampPercent(value: number): number {
 	if (!Number.isFinite(value)) {
@@ -77,10 +73,6 @@ function renderWindow(window: UsageWindow): string {
 		+ `</div>`;
 }
 
-function formatTokens(tokens: number): string {
-	return tokens >= 1_000_000 ? `${(tokens / 1_000_000).toFixed(1)}M` : tokens >= 1_000 ? `${Math.round(tokens / 1_000)}k` : String(tokens);
-}
-
 function renderCacheMisses(misses: NonNullable<AgentCardState['usage']['cacheMisses']>): string {
 	const idle = misses.expired > 0 ? ` <span class="resets">+${misses.expired} after idle</span>` : '';
 	const description = 'Calls of a chat that was already running which lost the prompt cache they should have had, such as after a tool change or a reopened session. Calls after the chat sat idle longer than the cache lives are counted apart. Chats seen for the first time are not counted. The token figure is the input billed at full price instead of read from the cache.';
@@ -134,16 +126,31 @@ function renderInstall(agent: AgentCardState): string {
 function renderAccount(agent: AgentCardState): string {
 	const id = escapeHtml(agent.id);
 	const disabled = agent.install !== 'installed' || agent.busy ? ' disabled' : '';
+	const keyButton = agent.apiKey
+		? `<button class="secondary" data-action="showApiKey" data-agent="${id}"${disabled}>${agent.hasSavedKey ? 'Replace API key' : 'Use API key'}</button>`
+		: '';
 	if (agent.hasSavedKey) {
-		return `<button class="secondary" data-action="signOut" data-agent="${id}"${disabled}>Remove API key</button>`;
+		return `<span class="badge">API key saved</span>${keyButton}<button class="secondary" data-action="signOut" data-agent="${id}"${disabled}>Remove API key</button>`;
 	}
 	if (agent.signedIn === 'yes') {
-		return '<span class="badge">Signed in</span>';
+		return `<span class="badge">Signed in</span>${keyButton}`;
 	}
 	if (agent.signedIn === 'unknown') {
-		return `<span>Account status unknown</span><button data-action="signIn" data-agent="${id}"${disabled}>Manage sign-in</button>`;
+		return `<span>Account status unknown</span><button data-action="signIn" data-agent="${id}"${disabled}>Manage sign-in</button>${keyButton}`;
 	}
-	return `<button data-action="signIn" data-agent="${id}"${disabled}>Sign in</button>`;
+	return `<button data-action="signIn" data-agent="${id}"${disabled}>Sign in</button>${keyButton}`;
+}
+
+/** The field an API key is typed into; the page keeps what was typed across redraws. */
+function renderKeyEntry(agent: AgentCardState): string {
+	if (!agent.apiKey) {
+		return '';
+	}
+	const id = escapeHtml(agent.id);
+	const label = escapeHtml(agent.apiKey.label);
+	const placeholder = agent.apiKey.keyPrefix ? ` placeholder="${escapeHtml(agent.apiKey.keyPrefix)}..."` : '';
+	return `<div class="key-entry"><input type="password" aria-label="${label}" data-key-input="true" data-agent="${id}" autocomplete="off" spellcheck="false"${placeholder}>`
+		+ `<div class="actions"><button data-action="saveApiKey" data-agent="${id}">Save</button><button class="secondary" data-action="cancelApiKey" data-agent="${id}">Cancel</button></div></div>`;
 }
 
 function renderSettingsPanel(agent: AgentCardState): string {
@@ -155,7 +162,7 @@ function renderSettingsPanel(agent: AgentCardState): string {
 	return `<div class="settings">${settings}${uninstall}</div>`;
 }
 
-function renderCard(agent: AgentCardState, settingsOpen: boolean): string {
+function renderCard(agent: AgentCardState, settingsOpen: boolean, keyOpen: boolean): string {
 	const id = escapeHtml(agent.id);
 	const checked = agent.enabled ? ' checked' : '';
 	const busy = agent.busy ? `<div class="note">${escapeHtml(agent.busy)}</div>` : '';
@@ -173,6 +180,7 @@ function renderCard(agent: AgentCardState, settingsOpen: boolean): string {
 		+ `<div class="card-head"><h2>${escapeHtml(agent.displayName)}</h2>`
 		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${id}"${checked}> Enabled</label>${gear}</div></div>`
 		+ `<div class="actions">${renderInstall(agent)}${renderAccount(agent)}</div>`
+		+ (keyOpen ? renderKeyEntry(agent) : '')
 		+ busy
 		+ signInUrl
 		+ error
@@ -204,18 +212,18 @@ function nameText(name: string, fallback: string): string {
 
 /**
  * The Models view: the provider name of each agent, in bold with one pencil that opens the
- * provider name and every model name under it for editing together, and the sync button.
+ * provider name and every model name under it for editing together, and the refresh button.
  * `editing` is the id of the agent whose names are inputs.
  */
-export function renderModels(models: ModelsView, notice?: string, options: { syncing?: boolean; editing?: string } = {}): string {
-	const { syncing = false, editing } = options;
-	const status = syncing
+export function renderModels(models: ModelsView, notice?: string, options: { refreshing?: boolean; editing?: string } = {}): string {
+	const { refreshing = false, editing } = options;
+	const status = refreshing
 		? '<div class="note fetching" role="status"><progress aria-label="Fetching models"></progress> Fetching models from the agents…</div>'
 		: notice ? `<div class="note" role="status">${escapeHtml(notice).replace(/\n/g, '<br>')}</div>` : '';
 	const sections = models.agents.map(agent => {
 		const id = escapeHtml(agent.agentId);
 		const open = editing === agent.agentId;
-		const empty = agent.models.length === 0 ? '<div class="note">No models yet; press Sync models to load them.</div>' : '';
+		const empty = agent.models.length === 0 ? '<div class="note">No models yet; press Refresh to load them.</div>' : '';
 		const rows = agent.models.map(model => `<div class="setting">${open
 			? nameInput(`name of ${model.default}`, `data-models="model" data-agent="${id}" data-model="${escapeHtml(model.value)}"`, model.name, model.default)
 			: nameText(model.name, model.default)}</div>`).join('');
@@ -229,7 +237,7 @@ export function renderModels(models: ModelsView, notice?: string, options: { syn
 	return `<div class="note">Names shown in the model pickers. Use the pencil to rename a provider and its models; clearing a name restores the agent's own.</div>`
 		+ status
 		+ sections
-		+ `<div class="actions"><button data-action="syncModels"${syncing ? ' disabled' : ''}>Sync models</button></div>`;
+		+ `<div class="actions"><button data-action="refreshModels"${refreshing ? ' disabled' : ''}>Refresh</button></div>`;
 }
 export const GLOBAL_SETTINGS_ID = '*global';
 
@@ -240,8 +248,8 @@ function renderGlobalSettings(settings: SettingView[], open: boolean): string {
 	return `<details class="global-settings"${open ? ' open' : ''}><summary>Settings for all agents</summary><div class="settings">${settings.map(setting => renderSetting(undefined, setting)).join('')}</div></details>`;
 }
 
-export function renderCards(agents: AgentCardState[], openSettings: ReadonlySet<string> = new Set(), globalSettings: SettingView[] = []): string {
-	const cards = agents.filter(agent => agent.visible).map(agent => renderCard(agent, openSettings.has(agent.id))).join('');
+export function renderCards(agents: AgentCardState[], openSettings: ReadonlySet<string> = new Set(), globalSettings: SettingView[] = [], keyEntry: ReadonlySet<string> = new Set()): string {
+	const cards = agents.filter(agent => agent.visible).map(agent => renderCard(agent, openSettings.has(agent.id), keyEntry.has(agent.id))).join('');
 	const available = agents.filter(agent => !agent.visible);
 	const choices = available.map(agent => `<button class="secondary add-choice" data-action="addAgent" data-agent="${escapeHtml(agent.id)}">${escapeHtml(agent.displayName)}</button>`).join('');
 	const addAgent = available.length ? `<details class="add-agent"><summary>+ Add agent</summary>${choices}</details>` : '';
