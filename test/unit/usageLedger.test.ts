@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AcpTokenUsage } from '../../src/engine/acp/protocol';
 import { UsageLedger, type UsageRecord } from '../../src/engine/usage/ledger';
+import { usageRoot } from '../../src/engine/store/paths';
 
 const roots: string[] = [];
 let root: string;
@@ -47,7 +48,31 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
 }
 
 function ledgerAt(month: number, day: number, hour = 14): UsageLedger {
-	return new UsageLedger({ root, retainDays: 30, now: () => at(month, day, hour) });
+	return new UsageLedger({ root, retainDays: 30, now: () => at(month, day, hour), flushDelayMs: 60_000 });
+}
+
+/** One row of a day file as it sits on disk. */
+interface WireRow {
+	h: number;
+	w: string;
+	a: string;
+	in: number;
+	cr: number;
+	cw: number;
+	out: number;
+}
+
+function fileOf(day: string): string {
+	return path.join(usageRoot(root), `${day}.json`);
+}
+
+function rowsOf(day: string): WireRow[] {
+	return (JSON.parse(fs.readFileSync(fileOf(day), 'utf8')) as { rows: WireRow[] }).rows;
+}
+
+function writeDayFile(day: string, rows: WireRow[]): void {
+	fs.mkdirSync(usageRoot(root), { recursive: true });
+	fs.writeFileSync(fileOf(day), JSON.stringify({ version: 1, day, rows }));
 }
 
 afterEach(() => {
@@ -135,5 +160,70 @@ describe('recording a turn', () => {
 		ledger.record(record({ at: at(11, 10, 10) }));
 		expect(ledger.daily({}, 1).map(bucket => bucket.key)).toEqual(['2026-11-10']);
 		expect(ledger.agents()).toEqual(['claude']);
+	});
+});
+
+describe('flushing a day', () => {
+	it('flushes a day to its own file', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record());
+		await ledger.flush();
+		expect(rowsOf('2026-11-10')).toEqual([{ h: 13, w: '/repo/app', a: 'claude', in: 100, cr: 900, cw: 40, out: 300 }]);
+	});
+
+	it('merges into a day file another server already wrote', async () => {
+		store();
+		writeDayFile('2026-11-10', [{ h: 13, w: '/other/repo', a: 'codex', in: 5, cr: 0, cw: 0, out: 7 }]);
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record());
+		await ledger.flush();
+		expect(rowsOf('2026-11-10')).toContainEqual({ h: 13, w: '/other/repo', a: 'codex', in: 5, cr: 0, cw: 0, out: 7 });
+		expect(rowsOf('2026-11-10')).toContainEqual({ h: 13, w: '/repo/app', a: 'claude', in: 100, cr: 900, cw: 40, out: 300 });
+	});
+
+	it('writes only the days that changed', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record({ at: at(11, 9, 10) }));
+		await ledger.flush();
+		const first = fs.statSync(fileOf('2026-11-09')).mtimeMs;
+		await new Promise(resolve => setTimeout(resolve, 20));
+		ledger.record(record());
+		await ledger.flush();
+		expect(fs.statSync(fileOf('2026-11-09')).mtimeMs).toBe(first);
+		expect(rowsOf('2026-11-10')).toHaveLength(1);
+	});
+
+	it('tells its listeners once the flush landed', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		const flushed: number[] = [];
+		ledger.onDidFlush(() => flushed.push(1));
+		ledger.record(record());
+		expect(flushed).toEqual([]);
+		await ledger.flush();
+		expect(flushed).toEqual([1]);
+	});
+
+	it('writes what is pending when it closes', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record());
+		await ledger.close();
+		expect(rowsOf('2026-11-10')).toHaveLength(1);
+	});
+
+	it('keeps the deltas when the write fails, and writes them next time', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record());
+		// A folder where the day file should go makes the write fail.
+		fs.mkdirSync(fileOf('2026-11-10'), { recursive: true });
+		await ledger.flush();
+		expect(ledger.daily({}, 1)).toHaveLength(1);
+		fs.rmdirSync(fileOf('2026-11-10'));
+		await ledger.flush();
+		expect(rowsOf('2026-11-10')).toHaveLength(1);
 	});
 });

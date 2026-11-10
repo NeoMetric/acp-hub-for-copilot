@@ -3,8 +3,12 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { AcpTokenUsage } from '../acp/protocol';
 import type { Log } from '../ports/host';
+import { usageRoot } from '../store/paths';
+import { withLock } from '../store/fileStore';
 import { addTotals, isZero, localDayKey, localHour, UNKNOWN_WORKSPACE, type TokenTotals } from './totals';
 
 /** One finished turn, as the chat service reports it. */
@@ -49,6 +53,22 @@ export const MAX_RETAIN_DAYS = 365;
 /** How many distinct workspaces one day keeps before the lightest is folded into `other`. */
 export const MAX_WORKSPACES_PER_DAY = 16;
 
+/** How long the ledger waits after the last turn before it writes. */
+const DEFAULT_FLUSH_DELAY_MS = 2_000;
+
+/** One row of a day file as it sits on disk. */
+interface WireRow {
+	h: number;
+	w: string;
+	a: string;
+	in: number;
+	cr: number;
+	cw: number;
+	out: number;
+}
+
+let tempSeq = 0;
+
 /** One stored figure of a day: an hour, a workspace and an agent, and what they spent. */
 interface UsageRow {
 	readonly hour: number;
@@ -76,6 +96,88 @@ function orderOf(a: UsageBucket, b: UsageBucket): number {
 	return a.key.localeCompare(b.key) || a.workspace.localeCompare(b.workspace) || a.agent.localeCompare(b.agent);
 }
 
+/** The key of a row, which names the hour, the workspace and the agent it counts. */
+function rowKey(row: { readonly hour: number; readonly workspace: string; readonly agent: string }): string {
+	return `${row.hour}\u0000${row.workspace}\u0000${row.agent}`;
+}
+
+/** Adds a row into a day's rows, creating the day's map and the row as it goes. */
+function addTo(rows: Map<string, UsageRow> | undefined, row: UsageRow): Map<string, UsageRow> {
+	const next = rows ?? new Map<string, UsageRow>();
+	const key = rowKey(row);
+	const existing = next.get(key);
+	next.set(key, existing ? { ...existing, totals: addTotals(existing.totals, row.totals) } : row);
+	return next;
+}
+
+/** Where the tallies of one local day live. */
+function dayFile(root: string, day: string): string {
+	return path.join(usageRoot(root), `${day}.json`);
+}
+
+/** The rows a day file holds; a file that does not parse, or holds rows of the wrong shape, reads as no rows. */
+function parseDay(text: string): UsageRow[] {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return [];
+	}
+	const rows = (parsed as { rows?: unknown } | null)?.rows;
+	if (!Array.isArray(rows)) {
+		return [];
+	}
+	const kept: UsageRow[] = [];
+	for (const row of rows as WireRow[]) {
+		if (!row || typeof row !== 'object') {
+			return [];
+		}
+		const { h, w, a, in: input, cr, cw, out } = row;
+		if (!Number.isInteger(h) || h < 0 || h > 23 || typeof w !== 'string' || typeof a !== 'string' || ![input, cr, cw, out].every(Number.isFinite)) {
+			return [];
+		}
+		kept.push({ hour: h, workspace: w, agent: a, totals: { input, cacheRead: cr, cacheWrite: cw, output: out } });
+	}
+	return kept;
+}
+
+async function readDay(file: string): Promise<Map<string, UsageRow>> {
+	const rows = new Map<string, UsageRow>();
+	let text: string;
+	try {
+		text = await fs.promises.readFile(file, 'utf8');
+	} catch {
+		// A day that is not there yet is a day with nothing in it.
+		return rows;
+	}
+	for (const row of parseDay(text)) {
+		rows.set(rowKey(row), row);
+	}
+	return rows;
+}
+
+/** Writes a day through a temp file in the same folder, so a reader sees the old file or the new one, never half. */
+async function writeDay(file: string, day: string, rows: readonly UsageRow[]): Promise<void> {
+	const ordered = [...rows].sort((a, b) => a.hour - b.hour || a.workspace.localeCompare(b.workspace) || a.agent.localeCompare(b.agent));
+	const document = {
+		version: 1,
+		day,
+		rows: ordered.map(row => ({ h: row.hour, w: row.workspace, a: row.agent, in: row.totals.input, cr: row.totals.cacheRead, cw: row.totals.cacheWrite, out: row.totals.output })),
+	};
+	const temp = `${file}.${process.pid}.${++tempSeq}.tmp`;
+	try {
+		await fs.promises.writeFile(temp, `${JSON.stringify(document, undefined, '\t')}\n`, 'utf8');
+		await fs.promises.rename(temp, file);
+	} catch (error) {
+		await fs.promises.rm(temp, { force: true }).catch(() => undefined);
+		throw error;
+	}
+}
+
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * The token usage of finished turns, kept per day, hour, workspace and agent.
  *
@@ -86,6 +188,12 @@ function orderOf(a: UsageBucket, b: UsageBucket): number {
 export class UsageLedger {
 
 	private readonly days = new Map<string, Map<string, UsageRow>>();
+	/** What a flush has not written yet, so a second writer's rows are added to instead of overwritten. */
+	private readonly deltas = new Map<string, Map<string, UsageRow>>();
+	private readonly listeners = new Set<() => void>();
+	private timer: NodeJS.Timeout | undefined;
+	/** Flushes run one after another, so two of them never write the same day at once. */
+	private writing: Promise<void> = Promise.resolve();
 
 	constructor(private readonly options: UsageLedgerOptions) { }
 
@@ -102,6 +210,28 @@ export class UsageLedger {
 		const hour = localHour(record.at);
 		const workspace = record.workspace && record.workspace.length > 0 ? record.workspace : UNKNOWN_WORKSPACE;
 		this.add(day, { hour, workspace, agent: record.agent, totals });
+		this.schedule();
+	}
+
+	/** Told once a flush wrote something, which is what redraws the page; never told per turn. */
+	onDidFlush(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => { this.listeners.delete(listener); };
+	}
+
+	/** Writes the days that changed since the last flush, merging into what is already on disk. */
+	flush(): Promise<void> {
+		this.writing = this.writing.then(() => this.writeDeltas(), () => this.writeDeltas());
+		return this.writing;
+	}
+
+	/** Stops the pending flush and writes what is still owed before the process goes. */
+	async close(): Promise<void> {
+		if (this.timer) {
+			clearTimeout(this.timer);
+			this.timer = undefined;
+		}
+		await this.flush();
 	}
 
 	/** Every agent that has spent anything inside the days still kept. */
@@ -147,14 +277,55 @@ export class UsageLedger {
 
 	/** Adds a row of a day, creating the day and the row as it goes. */
 	private add(day: string, row: UsageRow): void {
-		let rows = this.days.get(day);
-		if (!rows) {
-			rows = new Map();
-			this.days.set(day, rows);
+		this.days.set(day, addTo(this.days.get(day), row));
+		this.deltas.set(day, addTo(this.deltas.get(day), row));
+	}
+
+	/** Waits for a quiet moment after the last turn before writing, so a burst of turns costs one write. */
+	private schedule(): void {
+		if (this.timer) {
+			clearTimeout(this.timer);
 		}
-		const key = `${row.hour}\u0000${row.workspace}\u0000${row.agent}`;
-		const existing = rows.get(key);
-		rows.set(key, existing ? { ...existing, totals: addTotals(existing.totals, row.totals) } : row);
+		this.timer = setTimeout(() => {
+			this.timer = undefined;
+			void this.flush();
+		}, this.options.flushDelayMs ?? DEFAULT_FLUSH_DELAY_MS);
+		this.timer.unref?.();
+	}
+
+	/** Writes every day the deltas name, then drops them; a day whose write failed keeps its deltas for the next flush. */
+	private async writeDeltas(): Promise<void> {
+		const days = [...this.deltas.keys()];
+		let wrote = false;
+		for (const day of days) {
+			const rows = this.deltas.get(day);
+			if (!rows || rows.size === 0) {
+				this.deltas.delete(day);
+				continue;
+			}
+			const file = dayFile(this.options.root, day);
+			try {
+				await fs.promises.mkdir(path.dirname(file), { recursive: true });
+				await withLock(`${file}.lock`, async () => {
+					const merged = await readDay(file);
+					for (const [key, row] of rows) {
+						const current = merged.get(key);
+						merged.set(key, current ? { ...current, totals: addTotals(current.totals, row.totals) } : row);
+					}
+					await writeDay(file, day, [...merged.values()]);
+				});
+				this.deltas.delete(day);
+				wrote = true;
+			} catch (error) {
+				this.options.log?.(`Could not write the usage day ${day}: ${messageOf(error)}`, 'warn');
+			}
+		}
+		if (!wrote) {
+			return;
+		}
+		for (const listener of [...this.listeners]) {
+			listener();
+		}
 	}
 
 	private distinct(of: (row: UsageRow) => string): string[] {
