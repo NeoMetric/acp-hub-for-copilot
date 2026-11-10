@@ -31,7 +31,7 @@ Run these with the built extension (`npm run compile`, then `npx vsce package` a
 Deliberate differences from the in-host extension; do not count them as regressions.
 
 - A window regaining focus no longer wakes an agent the idle shutdown stopped; the next message starts it.
-- The "Dump requests" setting has no effect: requests no longer pass through the extension host, so no request files are written.
+- The "Dump requests" setting writes its files on the server, in `<root>/agents/<id>/requests`, not in the extension's storage folder.
 - Sign-in no longer offers a VS Code quick pick: the server shows a page URL to open, or the command to run in a terminal.
 
 The adapter contract is machine-checked: `test/unit/adapters/conformance.test.ts` runs every adapter in `ADAPTERS` against it, so a new adapter must declare a session policy or inherit `nativeSessionPolicy`.
