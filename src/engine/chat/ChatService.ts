@@ -417,9 +417,11 @@ export class ChatService {
 		let startIndex = session.history.length === 0 ? lastUser : session.history.length;
 		let restoreContext = session.history.length === 0;
 
-		if (session.history.length > fingerprints.length || diverged(session.history, fingerprints)) {
+		// A request with nothing past what the session has seen is a retry or a regenerate: there is no new
+		// message to send, so it is handled as an edit of the last turn.
+		if (session.history.length >= fingerprints.length || diverged(session.history, fingerprints)) {
 			const at = session.history.findIndex((fingerprint, index) => fingerprint !== fingerprints[index]);
-			this.log(`Chat history changed for ${key}. The session had seen ${session.history.length} message(s), the request has ${fingerprints.length}; ${at < 0 ? 'the request is shorter and otherwise the same' : `the first difference is message #${at + 1}, shown in full next`}.`, 'warn');
+			this.log(`Chat history changed for ${key}. The session had seen ${session.history.length} message(s), the request has ${fingerprints.length}; ${at < 0 ? 'the request adds nothing to what the session had seen' : `the first difference is message #${at + 1}, shown in full next`}.`, 'warn');
 			if (at >= 0) {
 				this.log(`[reuse] Message #${at + 1} was: ${session.history[at] ?? ''}`, 'warn');
 				this.log(`[reuse] Message #${at + 1} is now: ${fingerprints[at] ?? ''}`, 'warn');

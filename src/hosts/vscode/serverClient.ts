@@ -21,8 +21,7 @@ export type WireEvent =
 	| { type: 'text'; text: string }
 	| { type: 'thought'; text: string }
 	| { type: 'tool-call'; callId: string; name: string; input: unknown }
-	| { type: 'usage'; usage: WireUsage }
-	| { type: 'error'; message: string };
+	| { type: 'usage'; usage: WireUsage };
 
 /** The figures of a turn, in the shape the chat already reports them in. */
 export interface WireUsage {
@@ -56,7 +55,9 @@ export async function listModels(endpoint: ServerEndpoint, signal?: AbortSignal)
 /**
  * Sends one chat request and reports what the reply streams. Tool calls are
  * assembled from their deltas by index, since their arguments arrive in pieces.
- * A signal that fires ends the read without an error: the window left the turn.
+ * A reply ends at `[DONE]`; one that stops before it was cut, and one whose only
+ * word is an `error` chunk is that error, thrown with the server's own words. A
+ * signal that fires ends the read without an error: the window left the turn.
  */
 export async function streamChat(endpoint: ServerEndpoint, body: unknown, signal: AbortSignal, onEvent: (event: WireEvent) => void): Promise<void> {
 	let response: Response;
@@ -84,7 +85,6 @@ export async function streamChat(endpoint: ServerEndpoint, body: unknown, signal
 	const pending = new Map<number, { id: string; name: string; arguments: string }>();
 	let buffer = '';
 	let done = false;
-	let finished = false;
 
 	/** Reports the calls whose deltas are all in, in the order the model made them. */
 	const reportCalls = (): void => {
@@ -106,25 +106,27 @@ export async function streamChat(endpoint: ServerEndpoint, body: unknown, signal
 		if (!isObject(value)) {
 			return false;
 		}
-		const error = isObject(value.error) ? textOf(value.error.message) : undefined;
-		if (error !== undefined && error.length > 0) {
-			onEvent({ type: 'error', message: error });
+		// A turn the server could not finish is one error chunk, no finish and then `[DONE]`: the error is the answer.
+		if (isObject(value.error)) {
+			throw new ServerChatError(textOf(value.error.message) ?? 'The server ended the turn with an error and no words.');
 		}
 		const choice = Array.isArray(value.choices) ? value.choices[0] : undefined;
-		const delta = isObject(choice) && isObject(choice.delta) ? choice.delta : {};
-		if (typeof delta.content === 'string' && delta.content.length > 0) {
-			onEvent({ type: 'text', text: delta.content });
+		if (isObject(choice)) {
+			const delta = isObject(choice.delta) ? choice.delta : {};
+			if (typeof delta.content === 'string' && delta.content.length > 0) {
+				onEvent({ type: 'text', text: delta.content });
+			}
+			if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+				onEvent({ type: 'thought', text: delta.reasoning_content });
+			}
+			if (Array.isArray(delta.tool_calls)) {
+				mergeCalls(pending, delta.tool_calls);
+			}
+			if (typeof choice.finish_reason === 'string') {
+				reportCalls();
+			}
 		}
-		if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
-			onEvent({ type: 'thought', text: delta.reasoning_content });
-		}
-		if (Array.isArray(delta.tool_calls)) {
-			mergeCalls(pending, delta.tool_calls);
-		}
-		if (isObject(choice) && typeof choice.finish_reason === 'string') {
-			finished = true;
-			reportCalls();
-		}
+		// The figures of a turn travel alone, in the final chunk whose choice list is empty.
 		const usage = usageOf(value.usage);
 		if (usage) {
 			onEvent({ type: 'usage', usage });
@@ -163,15 +165,15 @@ export async function streamChat(endpoint: ServerEndpoint, body: unknown, signal
 		if (signal.aborted) {
 			return;
 		}
-		throw unreadable(endpoint, error);
+		// The server's own words for a failed turn, and not a claim that the reply was cut.
+		throw error instanceof ServerChatError ? error : unreadable(endpoint, error);
 	} finally {
 		await release(reader);
 	}
 
-	if (!done && !finished) {
+	if (!done) {
 		throw unreadable(endpoint, undefined);
 	}
-	reportCalls();
 }
 
 function modelsOf(value: unknown): ModelWire[] {
@@ -275,25 +277,11 @@ function argumentsOf(value: string): unknown {
 	return parsed === undefined ? value : parsed;
 }
 
+/** The figures of a turn: the server always sends its counts, and caches only when some of the prompt was cached. */
 function usageOf(value: unknown): WireUsage | undefined {
-	if (!isObject(value)) {
-		return undefined;
-	}
-	const prompt = numberOr(value.prompt_tokens);
-	const completion = numberOr(value.completion_tokens);
-	const details = isObject(value.prompt_tokens_details) ? { prompt_tokens_details: value.prompt_tokens_details } : {};
-	const completionDetails = isObject(value.completion_tokens_details) ? { completion_tokens_details: value.completion_tokens_details } : {};
-	return {
-		prompt_tokens: prompt,
-		completion_tokens: completion,
-		total_tokens: numberOr(value.total_tokens) || prompt + completion,
-		...details,
-		...completionDetails,
-	} as WireUsage;
-}
-
-function numberOr(value: unknown): number {
-	return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+	return isObject(value) && typeof value.prompt_tokens === 'number' && typeof value.completion_tokens === 'number'
+		? value as unknown as WireUsage
+		: undefined;
 }
 
 function parseJson(text: string): unknown {

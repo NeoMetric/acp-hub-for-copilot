@@ -50,7 +50,7 @@ function wireOf(model: ModelChoice = choice, efforts: readonly string[] = ['low'
 		info.effortTitle = EFFORT_TITLE;
 		info.effortDescription = policy.thinkingDescription;
 	}
-	return { id: `claude/${model.value}`, object: 'model', owned_by: 'claude', acp: info };
+	return { id: `claude/${model.value}`, object: 'model', created: 1_700_000_000, owned_by: 'claude', acp: info };
 }
 
 const proposed = (model: vscode.LanguageModelChatInformation) => model as unknown as Configurable;

@@ -89,18 +89,9 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 			if (state.kind !== 'ready') {
 				throw new ServerChatError(`Could not reach the server: ${state.reason}`);
 			}
-			// A server that writes an error into the stream answers the turn with it, not with a broken reply.
-			const failure: { message?: string } = {};
 			await streamChat(state.endpoint, bodyOf(model, this.deps.agentId, messages, options, this.deps.windowFolder()), controller.signal, event => {
-				if (event.type === 'error') {
-					failure.message = event.message;
-					return;
-				}
 				this.report(event, progress);
 			});
-			if (failure.message !== undefined) {
-				throw new ServerChatError(failure.message);
-			}
 		} catch (error) {
 			// A turn the window left is not a failure, and the chat shows nothing for it.
 			if (controller.signal.aborted) {
@@ -235,19 +226,14 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 			case 'usage':
 				progress.report(vscode.LanguageModelDataPart.json(usageReportOf(event.usage), 'usage'));
 				return;
-			case 'error':
-				// The caller turns it into the error the chat shows.
-				return;
 		}
 	}
 }
 
-/** The figures of a turn, in the shape the chat already reads them in. */
+/** The figures of a turn, in the shape the chat already reads them in; a detail the server left out counts as none. */
 function usageReportOf(usage: WireUsage): Record<string, unknown> {
 	return {
-		prompt_tokens: usage.prompt_tokens,
-		completion_tokens: usage.completion_tokens,
-		total_tokens: usage.total_tokens,
+		...usage,
 		prompt_tokens_details: { cached_tokens: usage.prompt_tokens_details?.cached_tokens ?? 0 },
 		completion_tokens_details: { reasoning_tokens: usage.completion_tokens_details?.reasoning_tokens ?? 0 },
 	};

@@ -37,6 +37,7 @@ function modelWire(agentId: string, value: string): ModelWire {
 	return {
 		id: `${agentId}/${value}`,
 		object: 'model',
+		created: 1_700_000_000,
 		owned_by: agentId,
 		acp: {
 			name: `${value} (${agentId})`,
@@ -182,9 +183,18 @@ function recorded() {
 
 const token = () => new vscode.CancellationTokenSource().token;
 
-/** One SSE chunk of a reply, as the server writes it. */
+/** One SSE chunk of a reply, as the server writes it: a choice, then its finish, then the figures alone. */
 function send(response: http.ServerResponse, delta: Record<string, unknown>, finishReason: string | null = null, usage?: unknown): void {
-	response.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finishReason }], ...(usage ? { usage } : {}) })}\n\n`);
+	response.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`);
+	if (usage) {
+		response.write(`data: ${JSON.stringify({ choices: [], usage })}\n\n`);
+	}
+}
+
+/** Ends a reply the way the server does. */
+function end(response: http.ServerResponse): void {
+	response.write('data: [DONE]\n\n');
+	response.end();
 }
 
 describe('ServerProvider models', () => {
@@ -307,7 +317,7 @@ describe('ServerProvider chat', () => {
 				send(response, { content: 'the answer' });
 				send(response, { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } }] });
 				send(response, {}, 'tool_calls', { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15, prompt_tokens_details: { cached_tokens: 4 }, completion_tokens_details: { reasoning_tokens: 2 } });
-				response.end();
+				end(response);
 			});
 		});
 		const provider = providerOf({ link: new FakeLink(() => ready(baseUrl)), windowFolder: 'c:\\window' });
@@ -318,7 +328,8 @@ describe('ServerProvider chat', () => {
 		expect(parts[0]).toBeInstanceOf(LanguageModelThinkingPart);
 		expect((parts[0] as LanguageModelThinkingPart).value).toBe('weighing it');
 		expect(parts[1]).toBeInstanceOf(LanguageModelTextPart);
-		expect(parts[1]).toMatchObject({ value: 'the answer' });		expect(parts[2]).toBeInstanceOf(LanguageModelToolCallPart);
+		expect(parts[1]).toMatchObject({ value: 'the answer' });
+		expect(parts[2]).toBeInstanceOf(LanguageModelToolCallPart);
 		expect(parts[2]).toMatchObject({ callId: 'call_1', name: 'read_file', input: { path: 'a.ts' } });
 		expect(parts[3]).toBeInstanceOf(LanguageModelDataPart);
 		const usage = parts[3] as LanguageModelDataPart;
@@ -340,7 +351,7 @@ describe('ServerProvider chat', () => {
 			response.writeHead(200, { 'content-type': 'text/event-stream' });
 			send(response, { content: 'ok' });
 			send(response, {}, 'stop', { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 });
-			response.end();
+			end(response);
 		});
 		const provider = providerOf({ link: new FakeLink(() => ready(baseUrl)) });
 		const { parts, progress } = recorded();
@@ -352,6 +363,23 @@ describe('ServerProvider chat', () => {
 			prompt_tokens_details: { cached_tokens: 0 },
 			completion_tokens_details: { reasoning_tokens: 0 },
 		});
+	});
+
+	it('turns the error chunk of a failed turn into a LanguageModelError with its words', async () => {
+		const baseUrl = await serverWith([], (_request, response) => {
+			response.writeHead(200, { 'content-type': 'text/event-stream' });
+			response.write(`data: ${JSON.stringify({ error: { message: 'The agent stopped.', type: 'server_error', code: 'engine_error', param: null } })}\n\n`);
+			response.write('data: [DONE]\n\n');
+			response.end();
+		});
+		const provider = providerOf({ link: new FakeLink(() => ready(baseUrl)) });
+
+		const error = await provider
+			.provideLanguageModelChatResponse(modelInfo, messages, options, recorded().progress, token())
+			.then(() => undefined, (failure: unknown) => failure);
+
+		expect(error).toBeInstanceOf(vscode.LanguageModelError);
+		expect((error as Error).message).toBe('The agent stopped.');
 	});
 
 	it('cancellation aborts the request', async () => {

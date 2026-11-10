@@ -11,7 +11,7 @@ ACP Hub runs the agents of your existing Claude, ChatGPT/Codex and Antigravity a
 ## What it is
 
 - **A local server.** It runs the agents, keeps their sessions, settings, sign-ins and usage, and answers on `127.0.0.1` only. Nothing is hosted for you; the agents run on your machine and talk to their own providers.
-- **An OpenAI-compatible API.** `GET /v1/models` lists one model per agent and model (`<agentId>/<modelId>`, for example `claude/sonnet`), and `POST /v1/chat/completions` streams the answer, including tool calls: the client runs its own tools and sends the results back, so its own permission prompts still apply.
+- **An OpenAI-compatible API.** `GET /v1/models` lists one model per agent and model (`<agentId>/<modelId>`, for example `claude/sonnet`), `GET /v1/models/<id>` answers one of them, and `POST /v1/chat/completions` streams the answer, including tool calls: the client runs its own tools and sends the results back, so its own permission prompts still apply. The unversioned `/models` and `/chat/completions` names work too, and an open stream sends a keep-alive comment every 15 seconds.
 - **A control page.** A browser page, served by the same server, to install agents, sign in or add an API key, change their settings, watch plan limits and cache hit rates, and rename the models the pickers show.
 - **Clients.** GitHub Copilot CLI, any OpenAI-compatible client, and an optional VS Code extension that puts the models in Copilot Chat's model picker and shows the control page in a sidebar. The extension is a thin client of the server; it holds no agents of its own.
 
@@ -41,6 +41,7 @@ Open the **Models** view of the control page and press **Sync**. It fetches the 
 - **Authentication:** send the server's token as a bearer token, `Authorization: Bearer <token>`. The token is in `server.token` in the shared store (`~/.acp-hub`, or `ACP_HUB_HOME`), or is the value of `ACP_HUB_TOKEN` when you set it.
 - **Model:** the `id` that `GET /v1/models` returns, in the form `<agentId>/<modelId>`.
 - **Thinking effort:** `reasoning_effort` in the request, with one of the levels the model offers (see **Settings** below for the level used when a request names none).
+- **Request fields:** `tools`, `tool_choice` (including `required`), `response_format` (`json_object` and `json_schema`), `reasoning_effort` and `stream_options.include_usage` are honoured; legacy `functions` work too. The agent owns sampling and length, so `temperature`, `max_tokens`, `stop` and the like are accepted and ignored, and `n` above 1 is refused with a 400. An image that is not an inline `data:` URL, audio and files reach the agent as a note that they were omitted.
 - **Chats and folders:** a client that sends an `x-chat-id` header keeps its conversation in one agent session, and `x-acp-cwd` names the folder that chat works in. A client that sends neither gets a chat named from the folder and the opening words of the conversation.
 
 ### VS Code

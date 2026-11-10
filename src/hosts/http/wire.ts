@@ -62,6 +62,8 @@ export interface ModelInfoWire {
 export interface ModelWire {
 	id: string;
 	object: 'model';
+	/** When the server first published the model, in unix seconds; one stable value per process. */
+	created: number;
 	owned_by: string;
 	acp?: ModelInfoWire;
 }

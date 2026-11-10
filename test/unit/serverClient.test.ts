@@ -32,14 +32,25 @@ function send(response: http.ServerResponse, value: unknown): void {
 	response.write(`data: ${JSON.stringify(value)}\n\n`);
 }
 
-function chunk(delta: Record<string, unknown>, finishReason: string | null = null, usage?: unknown): unknown {
+function chunk(delta: Record<string, unknown>, finishReason: string | null = null): unknown {
 	return {
 		id: 'chatcmpl-1',
 		object: 'chat.completion.chunk',
 		created: 1,
 		model: 'claude/sonnet',
 		choices: [{ index: 0, delta, finish_reason: finishReason }],
-		...(usage ? { usage } : {}),
+	};
+}
+
+/** The final chunk of a turn whose client asked for its figures: no choices, as OpenAI sends it. */
+function usageChunk(usage: unknown): unknown {
+	return {
+		id: 'chatcmpl-1',
+		object: 'chat.completion.chunk',
+		created: 1,
+		model: 'claude/sonnet',
+		choices: [],
+		usage,
 	};
 }
 
@@ -69,13 +80,14 @@ describe('streamChat', () => {
 		]);
 	});
 
-	it('reports thinking apart from the answer, and the usage of the turn', async () => {
+	it('reports thinking apart from the answer, and the usage of a final chunk with no choices', async () => {
 		const endpoint = await serve((_request, response) => {
 			response.writeHead(200, { 'Content-Type': 'text/event-stream' });
 			send(response, chunk({ role: 'assistant' }));
 			send(response, chunk({ reasoning_content: 'weighing it' }));
 			send(response, chunk({ content: 'the answer' }));
-			send(response, chunk({}, 'stop', {
+			send(response, chunk({}, 'stop'));
+			send(response, usageChunk({
 				prompt_tokens: 12,
 				completion_tokens: 3,
 				total_tokens: 15,
@@ -134,7 +146,7 @@ describe('streamChat', () => {
 		expect(message).toMatch(/ended the reply before it finished/);
 	});
 
-	it('rejects when the stream ends without [DONE] or a finish reason', async () => {
+	it('rejects when the stream ends without [DONE]', async () => {
 		const endpoint = await serve((_request, response) => {
 			response.writeHead(200, { 'Content-Type': 'text/event-stream' });
 			send(response, chunk({ content: 'partial' }));
@@ -144,7 +156,7 @@ describe('streamChat', () => {
 		await expect(eventsOf(endpoint)).rejects.toThrow(/ended the reply before it finished/);
 	});
 
-	it('accepts a stream that names its finish reason even without [DONE]', async () => {
+	it('rejects a stream that names its finish reason but is then cut before [DONE]', async () => {
 		const endpoint = await serve((_request, response) => {
 			response.writeHead(200, { 'Content-Type': 'text/event-stream' });
 			send(response, chunk({ content: 'done' }));
@@ -152,7 +164,7 @@ describe('streamChat', () => {
 			response.end();
 		});
 
-		expect(await eventsOf(endpoint)).toEqual([{ type: 'text', text: 'done' }]);
+		await expect(eventsOf(endpoint)).rejects.toThrow(/ended the reply before it finished/);
 	});
 
 	it('names the token, and never prints it, when the server refuses it', async () => {
@@ -171,16 +183,18 @@ describe('streamChat', () => {
 		expect(message).not.toContain('a-secret-token');
 	});
 
-	it('reports an error the server streamed inside the reply', async () => {
+	it('throws the server\'s error when the reply is one error chunk and no finish', async () => {
 		const endpoint = await serve((_request, response) => {
 			response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-			response.write(`data: ${JSON.stringify({ error: { message: 'The agent stopped.', type: 'server_error', code: 'engine_error' } })}\n\n`);
-			send(response, chunk({}, 'error'));
+			send(response, { error: { message: 'The agent stopped.', type: 'server_error', code: 'engine_error', param: null } });
 			response.write('data: [DONE]\n\n');
 			response.end();
 		});
 
-		expect(await eventsOf(endpoint)).toEqual([{ type: 'error', message: 'The agent stopped.' }]);
+		const failure = await eventsOf(endpoint).catch((error: unknown) => error);
+
+		expect(failure).toBeInstanceOf(ServerChatError);
+		expect((failure as Error).message).toBe('The agent stopped.');
 	});
 });
 

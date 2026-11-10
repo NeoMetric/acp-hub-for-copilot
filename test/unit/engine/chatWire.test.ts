@@ -257,17 +257,20 @@ describe('the chat wire', () => {
 		const server = await start();
 		const model = await firstModel(server.url);
 
-		const response = await post(`${server.url}/v1/chat/completions`, { ...chat(model, 'think'), stream: true });
+		const response = await post(`${server.url}/v1/chat/completions`, { ...chat(model, 'think'), stream: true, stream_options: { include_usage: true } });
 
 		expect(response.status).toBe(200);
 		const chunks = payloadsOf(await response.text())
 			.filter(payload => payload !== '[DONE]')
 			.map(payload => JSON.parse(payload));
-		expect(chunks.map(chunk => chunk.choices[0].delta.reasoning_content ?? '').join('')).toBe('pondering');
-		expect(chunks.map(chunk => chunk.choices[0].delta.content ?? '').join('')).toBe('hello');
-		const last = chunks.at(-1);
-		expect(last.choices[0].finish_reason).toBe('stop');
-		expect(last.usage).toMatchObject({ completion_tokens_details: { reasoning_tokens: 7 } });
+		expect(chunks.map(chunk => chunk.choices[0]?.delta?.reasoning_content ?? '').join('')).toBe('pondering');
+		expect(chunks.map(chunk => chunk.choices[0]?.delta?.content ?? '').join('')).toBe('hello');
+		const finish = chunks.at(-2);
+		expect(finish.choices[0].finish_reason).toBe('stop');
+		expect(finish.usage).toBeUndefined();
+		const usage = chunks.at(-1);
+		expect(usage.choices).toEqual([]);
+		expect(usage.usage).toMatchObject({ completion_tokens_details: { reasoning_tokens: 7 } });
 	});
 
 	it('adds the thinking of a whole answer to its message', async () => {

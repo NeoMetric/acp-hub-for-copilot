@@ -48,8 +48,17 @@ const SESSION_COOKIE = 'acp_hub_token';
 /** How long that cookie lives; the token itself outlives server restarts, so the cookie may too. */
 const SESSION_COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
 
+/** The `created` of every model: clients only need it stable, so the moment this process started serving will do. */
+const MODEL_CREATED = Math.floor(Date.now() / 1000);
+
+/** How often an open stream writes a comment, so a proxy or a client's idle timer does not close it. */
+const DEFAULT_KEEP_ALIVE_MS = 15_000;
+
+/** The route prefix of one model by id; the id after it may hold a `/` of its own, as `claude/sonnet` does. */
+const MODEL_ROUTE = '/v1/models/';
+
 /** The finish reasons OpenAI clients understand. */
-type FinishReason = 'stop' | 'tool_calls' | 'length' | 'error';
+type FinishReason = 'stop' | 'tool_calls' | 'length';
 
 /** One tool call a turn asked for, as the client receives it. */
 interface TurnToolCall {
@@ -75,6 +84,16 @@ interface TurnResult {
 	error?: string;
 }
 
+/** What a response does with the reply, beside the model that made it. */
+interface ReplySettings {
+	/** The model id the client sent, echoed in every chunk. */
+	readonly model: string;
+	/** The body asked for JSON, so a markdown fence around the answer comes off the non-stream one. */
+	readonly unwrapJson: boolean;
+	/** The stream's client asked for the usage in a chunk of its own. */
+	readonly includeUsage: boolean;
+}
+
 export interface HttpServerOptions {
 	/** The process's wiring: the host, the agents and their chat use cases. */
 	readonly composition: HeadlessComposition;
@@ -82,6 +101,8 @@ export interface HttpServerOptions {
 	readonly token?: string;
 	/** How long a client may take to return a tool call's result; {@link DEFAULT_TOOL_CALL_WAIT_MS} otherwise. */
 	readonly toolCallWaitMs?: number;
+	/** How often an open stream writes a keep-alive comment; {@link DEFAULT_KEEP_ALIVE_MS} otherwise. */
+	readonly streamKeepAliveMs?: number;
 	/** The control page; without it the server offers the chat surface alone. */
 	readonly page?: ControlPageOptions;
 	/** The Copilot CLI's provider file the Models page writes; `COPILOT_PROVIDERS_CONFIG` or `~/.copilot/providers.json` by default. */
@@ -191,8 +212,17 @@ export function createServer(options: HttpServerOptions): http.Server {
 		packageJson: options.packageJson ?? manifestPath(),
 	});
 	const page = options.page ? openPage(options.page, composition.host.log, models) : undefined;
+	const context: ServerContext = {
+		composition,
+		catalog,
+		token,
+		parking,
+		page,
+		onShutdown: options.onShutdown,
+		keepAliveMs: options.streamKeepAliveMs ?? DEFAULT_KEEP_ALIVE_MS,
+	};
 	const server = http.createServer((request, response) => {
-		void handle(composition, catalog, token, parking, page, options.onShutdown, request, response);
+		void handle(context, request, response);
 	});
 	// A stopped server has no client left to answer a parked call, so its timers
 	// must not re-drive an agent on the way out.
@@ -200,17 +230,41 @@ export function createServer(options: HttpServerOptions): http.Server {
 	return server;
 }
 
-async function handle(composition: HeadlessComposition, catalog: ModelCatalog, token: string | undefined, parking: ToolCallParking, page: OpenPage | undefined, onShutdown: (() => void) | undefined, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+/** What every handler of a request needs from the server that owns it. */
+interface ServerContext {
+	readonly composition: HeadlessComposition;
+	readonly catalog: ModelCatalog;
+	readonly token: string | undefined;
+	readonly parking: ToolCallParking;
+	readonly page: OpenPage | undefined;
+	readonly onShutdown: (() => void) | undefined;
+	/** How often an open stream writes a keep-alive comment. */
+	readonly keepAliveMs: number;
+}
+
+async function handle(context: ServerContext, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+	const { composition, catalog, token, page, onShutdown } = context;
 	try {
 		const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-		const pathname = url.pathname;
+		const pathname = normalisePath(url.pathname);
+		const route = canonicalRoute(pathname);
+		const method = request.method ?? 'GET';
+		// A browser sends no credentials on its preflight, so it is answered before the token is checked.
+		if (method === 'OPTIONS') {
+			sendPreflight(response);
+			return;
+		}
 		// The health probe is what a process manager reads, before it has any token.
-		if (pathname === '/health' && request.method === 'GET') {
+		if (route === '/health' && method === 'GET') {
 			await sendHealth(composition, response);
 			return;
 		}
+		// Every `/v1` answer is readable from any page, since the token, not the origin, is what guards it.
+		if (route.startsWith('/v1')) {
+			allowAnyOrigin(response);
+		}
 		// A browser cannot send the header, so `/?token=...` trades the token for a cookie and drops it from the URL.
-		if (page && token !== undefined && request.method === 'GET' && pathname === '/' && sameToken(url.searchParams.get('token') ?? undefined, token)) {
+		if (page && token !== undefined && method === 'GET' && pathname === '/' && sameToken(url.searchParams.get('token') ?? undefined, token)) {
 			response.writeHead(302, {
 				Location: '/',
 				'Set-Cookie': `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${SESSION_COOKIE_MAX_AGE_S}; HttpOnly; SameSite=Strict`,
@@ -225,29 +279,33 @@ async function handle(composition: HeadlessComposition, catalog: ModelCatalog, t
 			sendError(response, 401, 'A bearer token is required; send it as "Authorization: Bearer <token>".', 'invalid_request_error', 'invalid_api_key');
 			return;
 		}
-		if (onShutdown && request.method === 'POST' && pathname === SHUTDOWN_ROUTE) {
+		// Every `/v1` answer is readable from any page, since the token, not the origin, is what guards it.
+		if (route.startsWith('/v1')) {
+			allowAnyOrigin(response);
+		}
+		if (onShutdown && method === 'POST' && pathname === SHUTDOWN_ROUTE) {
 			// The answer goes out before the server closes, so the caller learns that it was heard.
 			response.once('finish', onShutdown);
 			sendJson(response, 202, { status: 'stopping' });
 			return;
 		}
-		if (page && request.method === 'GET' && pathname === '/') {
+		if (page && method === 'GET' && pathname === '/') {
 			sendPage(response);
 			return;
 		}
-		if (page && request.method === 'GET' && pathname === '/sidebar.js') {
+		if (page && method === 'GET' && pathname === '/sidebar.js') {
 			await sendFile(response, page.bundle, 'text/javascript; charset=utf-8');
 			return;
 		}
-		if (page && request.method === 'GET' && pathname === '/sidebar.css') {
+		if (page && method === 'GET' && pathname === '/sidebar.css') {
 			await sendFile(response, page.style, 'text/css; charset=utf-8');
 			return;
 		}
-		if (pathname === STATE_ROUTE && request.method === 'GET') {
+		if (pathname === STATE_ROUTE && method === 'GET') {
 			sendJson(response, 200, page ? await page.control.state() : { agents: [] });
 			return;
 		}
-		if (pathname === EVENTS_ROUTE && request.method === 'GET') {
+		if (pathname === EVENTS_ROUTE && method === 'GET') {
 			if (page) {
 				streamState(page.control, response);
 			} else {
@@ -255,7 +313,7 @@ async function handle(composition: HeadlessComposition, catalog: ModelCatalog, t
 			}
 			return;
 		}
-		if (pathname === ACTION_ROUTE && request.method === 'POST') {
+		if (pathname === ACTION_ROUTE && method === 'POST') {
 			if (!page) {
 				sendError(response, 404, 'This server has no control page.', 'invalid_request_error', 'not_found');
 				return;
@@ -263,23 +321,116 @@ async function handle(composition: HeadlessComposition, catalog: ModelCatalog, t
 			await runAction(page.control, request, response);
 			return;
 		}
-		if (pathname === '/v1/models' && request.method === 'GET') {
+		if (route === '/v1/models') {
+			if (method !== 'GET') {
+				methodNotAllowed(response, ['GET']);
+				return;
+			}
 			await sendModels(catalog, composition, response);
 			return;
 		}
-		if (pathname === WARM_ROUTE && request.method === 'POST') {
+		if (route.startsWith(MODEL_ROUTE)) {
+			if (method !== 'GET') {
+				methodNotAllowed(response, ['GET']);
+				return;
+			}
+			await sendModel(catalog, composition, route.slice(MODEL_ROUTE.length), response);
+			return;
+		}
+		if (route === WARM_ROUTE) {
+			if (method !== 'POST') {
+				methodNotAllowed(response, ['POST']);
+				return;
+			}
 			await warmAgents(composition, response);
 			return;
 		}
-		if (pathname === '/v1/chat/completions' && request.method === 'POST') {
-			await complete(composition, parking, request, response);
+		if (route === '/v1/chat/completions') {
+			if (method !== 'POST') {
+				methodNotAllowed(response, ['POST']);
+				return;
+			}
+			await complete(context, request, response);
 			return;
 		}
-		sendError(response, 404, `No route for ${request.method ?? 'GET'} ${pathname}.`, 'invalid_request_error', 'not_found');
+		sendUnknownRoute(response, route, { page: page !== undefined, shutdown: onShutdown !== undefined }, `${method} ${pathname}`);
 	} catch (error) {
 		composition.host.log(`An HTTP request failed: ${messageOf(error)}`, 'error');
 		sendError(response, 500, messageOf(error), 'server_error', 'internal_error');
 	}
+}
+
+/** A path without its trailing slashes, so `/v1/models/` is the route `/v1/models`; `/` stays itself. */
+function normalisePath(pathname: string): string {
+	const trimmed = pathname.replace(/\/+$/, '');
+	return trimmed.length > 0 ? trimmed : '/';
+}
+
+/** The canonical route of a path: the unversioned names some clients send mean the `/v1` ones. */
+function canonicalRoute(pathname: string): string {
+	if (pathname === '/models' || pathname.startsWith('/models/')) {
+		return `/v1${pathname}`;
+	}
+	return pathname === '/chat/completions' ? '/v1/chat/completions' : pathname;
+}
+
+/** The CORS answer a browser's preflight needs, so a page on another port may call this server. */
+function sendPreflight(response: http.ServerResponse): void {
+	response.writeHead(204, {
+		'Access-Control-Allow-Origin': '*',
+		'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+		'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Chat-Id, X-Acp-Cwd',
+	});
+	response.end();
+}
+
+/** Lets any origin read a `/v1` answer; the token, not the origin, is what guards those routes. */
+function allowAnyOrigin(response: http.ServerResponse): void {
+	if (!response.headersSent) {
+		response.setHeader('Access-Control-Allow-Origin', '*');
+	}
+}
+
+/** Answers a route this server knows with the method it takes, and any other path with a 404. */
+function sendUnknownRoute(response: http.ServerResponse, route: string, available: { readonly page: boolean; readonly shutdown: boolean }, request: string): void {
+	const allow = methodsOf(route, available);
+	if (allow.length > 0) {
+		methodNotAllowed(response, allow);
+		return;
+	}
+	sendError(response, 404, `No route for ${request}.`, 'invalid_request_error', 'not_found');
+}
+
+/** The methods a canonical route takes, or none when this server does not serve it. */
+function methodsOf(route: string, available: { readonly page: boolean; readonly shutdown: boolean }): readonly string[] {
+	if (route.startsWith(MODEL_ROUTE)) {
+		return ['GET'];
+	}
+	switch (route) {
+		case '/health':
+		case '/v1/models':
+		case STATE_ROUTE:
+		case EVENTS_ROUTE:
+			return ['GET'];
+		case WARM_ROUTE:
+		case ACTION_ROUTE:
+		case '/v1/chat/completions':
+			return ['POST'];
+		case SHUTDOWN_ROUTE:
+			return available.shutdown ? ['POST'] : [];
+		case '/':
+		case '/sidebar.js':
+		case '/sidebar.css':
+			return available.page ? ['GET'] : [];
+		default:
+			return [];
+	}
+}
+
+/** Tells a client that a route it named exists, but not for the method it sent. */
+function methodNotAllowed(response: http.ServerResponse, allow: readonly string[]): void {
+	response.setHeader('Allow', allow.join(', '));
+	sendError(response, 405, `This route takes ${allow.join(' or ')} only.`, 'invalid_request_error', 'method_not_allowed');
 }
 
 /** `GET /`: the shell the page's bundle and stylesheet load into. */
@@ -456,16 +607,51 @@ async function sendHealth(composition: HeadlessComposition, response: http.Serve
 async function sendModels(catalog: ModelCatalog, composition: HeadlessComposition, response: http.ServerResponse): Promise<void> {
 	const data: ModelWire[] = [];
 	for (const adapter of composition.adapters) {
-		const service = composition.serviceOf(adapter.id);
-		// A disabled agent is not offered; asking whether it is installed would start it.
-		if (!service || !service.enabled || !await isInstalled(service, composition)) {
-			continue;
+		if (await offers(adapter, composition)) {
+			data.push(...await publishedModelsOf(adapter, catalog));
 		}
-		const models = await catalog.modelsOf(adapter);
-		// A chat-completions client always sends a model, so an agent whose models cannot be read still has to be reachable.
-		data.push(...models.length > 0 ? models : [{ id: `${adapter.id}/${AGENT_DEFAULT_MODEL}`, object: 'model' as const, owned_by: adapter.id }]);
 	}
 	sendJson(response, 200, { object: 'list', data });
+}
+
+/** `GET /v1/models/{id}`: one model, whose id may carry a `/` of its own, as `claude/sonnet` does. */
+async function sendModel(catalog: ModelCatalog, composition: HeadlessComposition, encodedId: string, response: http.ServerResponse): Promise<void> {
+	const id = decodePath(encodedId);
+	if (id !== undefined) {
+		for (const adapter of composition.adapters) {
+			if (!await offers(adapter, composition)) {
+				continue;
+			}
+			const found = (await publishedModelsOf(adapter, catalog)).find(model => model.id === id);
+			if (found) {
+				sendJson(response, 200, found);
+				return;
+			}
+		}
+	}
+	sendError(response, 404, `There is no model "${id ?? encodedId}".`, 'invalid_request_error', 'model_not_found');
+}
+
+/** Whether the agent is enabled and installed, which is what makes its models offerable. */
+async function offers(adapter: AgentAdapter, composition: HeadlessComposition): Promise<boolean> {
+	// A disabled agent is not offered; asking whether it is installed would start it.
+	const service = composition.serviceOf(adapter.id);
+	return service !== undefined && service.enabled && await isInstalled(service, composition);
+}
+
+/** The models of one agent, or the one entry an agent whose models cannot be read still answers to, since a client always sends a model. */
+async function publishedModelsOf(adapter: AgentAdapter, catalog: ModelCatalog): Promise<ModelWire[]> {
+	const models = await catalog.modelsOf(adapter);
+	return models.length > 0 ? models : [{ id: `${adapter.id}/${AGENT_DEFAULT_MODEL}`, object: 'model', created: MODEL_CREATED, owned_by: adapter.id }];
+}
+
+/** A path segment as its own text, or `undefined` when it is not valid percent-encoding. */
+function decodePath(value: string): string | undefined {
+	try {
+		return decodeURIComponent(value);
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -544,6 +730,7 @@ export class ModelCatalog {
 		return {
 			id: `${agentId}/${entry.value}`,
 			object: 'model',
+			created: MODEL_CREATED,
 			owned_by: agentId,
 			acp: { ...info, name: this.names.modelName(agentId, entry.value, info.name), efforts: Array.isArray(info.efforts) ? info.efforts : [], maxInputTokens: window - info.maxOutputTokens },
 		};
@@ -599,12 +786,20 @@ async function warmAgents(composition: HeadlessComposition, response: http.Serve
 }
 
 /** `POST /v1/chat/completions`, streaming or not, over the agent the model id names. */
-async function complete(composition: HeadlessComposition, parking: ToolCallParking, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+async function complete(context: ServerContext, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+	const { composition, parking } = context;
 	let body: Record<string, unknown>;
 	try {
 		body = await readBody(request);
 	} catch (error) {
 		sendError(response, 400, messageOf(error), 'invalid_request_error', 'invalid_body');
+		return;
+	}
+	// The sampling knobs a client sends — temperature, top_p, max_tokens, stop, seed
+	// and the rest — are accepted and ignored: the agent owns its own sampling.
+	const unsupported = unsupportedOf(body);
+	if (unsupported !== undefined) {
+		sendError(response, 400, unsupported, 'invalid_request_error', 'unsupported_parameter');
 		return;
 	}
 	const model = typeof body.model === 'string' ? body.model.trim() : '';
@@ -649,11 +844,16 @@ async function complete(composition: HeadlessComposition, parking: ToolCallParki
 		toolCall: event => parkTurnToolCall(parking, service, chatRequest, event, composition.host.log),
 		disconnected: () => parking.clear(chatRequest.chatId),
 	};
+	const settings: ReplySettings = {
+		model,
+		unwrapJson: jsonRuleOf(body.response_format) !== undefined,
+		includeUsage: isObject(body.stream_options) && body.stream_options.include_usage === true,
+	};
 	if (body.stream === true) {
-		await stream(service, chatRequest, model, response, client);
+		await stream(service, chatRequest, settings, response, client, context.keepAliveMs);
 		return;
 	}
-	await collect(service, chatRequest, model, response, client);
+	await collect(service, chatRequest, settings, response, client);
 }
 
 /** What a response does when its turn hands it a call, or its client goes away. */
@@ -683,9 +883,7 @@ function chatRequestOf(composition: HeadlessComposition, request: http.IncomingM
 		tools,
 		model: model === AGENT_DEFAULT_MODEL ? undefined : model,
 		effort: effortOf(body.reasoning_effort),
-		// A client that sends no `acp` extras is a stock one: its own system message is the guidance that
-		// tells the model where it works. The extension names its guidance itself, and may send none on purpose.
-		systemGuidance: isObject(body.acp) ? extras.acp?.systemGuidance : systemTextOf(messages),
+		systemGuidance: guidanceOf(body, messages, extras),
 	};
 	rememberExtras(draft, extras);
 	// A stock OpenAI client sends no session key, so the host names the chat by its
@@ -723,6 +921,56 @@ function acpExtrasOf(value: unknown): AcpRequestExtras {
 /** The effort the client picked for the turn, which is the engine's own name for it. */
 function effortOf(value: unknown): string | undefined {
 	return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/**
+ * The guidance the engine is given: the client's own system message, and what
+ * the body's `response_format` and `tool_choice` ask of the reply.
+ */
+function guidanceOf(body: Record<string, unknown>, messages: readonly ChatMessage[], extras: RequestExtras): string | undefined {
+	// A client that sends no `acp` extras is a stock one: its own system message is the guidance that
+	// tells the model where it works. The extension names its guidance itself, and may send none on purpose.
+	const own = isObject(body.acp) ? extras.acp?.systemGuidance : systemTextOf(messages);
+	const text = [...(own ? [own] : []), ...replyRulesOf(body)].join('\n\n').trim();
+	return text.length > 0 ? text : undefined;
+}
+
+/** What the body asks of the reply's shape, as instructions the agent reads with its own guidance. */
+function replyRulesOf(body: Record<string, unknown>): string[] {
+	const rules: string[] = [];
+	const json = jsonRuleOf(body.response_format);
+	if (json !== undefined) {
+		rules.push(json);
+	}
+	if (body.tool_choice === 'required') {
+		rules.push('You must call one of the tools offered in this request before you answer.');
+	}
+	return rules;
+}
+
+/** The instruction that makes a reply JSON only, with the schema when the body names one. */
+function jsonRuleOf(value: unknown): string | undefined {
+	if (!isObject(value)) {
+		return undefined;
+	}
+	const only = 'Reply with ONLY a single valid JSON value: no prose before or after it, and no markdown code fence.';
+	if (value.type === 'json_object') {
+		return only;
+	}
+	if (value.type !== 'json_schema') {
+		return undefined;
+	}
+	const schema = isObject(value.json_schema) ? value.json_schema.schema : undefined;
+	return schema === undefined ? only : `${only} It must conform to this JSON schema:\n${JSON.stringify(schema)}`;
+}
+
+/** The message that refuses a parameter this server cannot honour, or `undefined` when the body asks nothing of the kind. */
+function unsupportedOf(body: Record<string, unknown>): string | undefined {
+	const choices = body.n;
+	if (typeof choices === 'number' && choices > 1) {
+		return `This server answers one choice per request: "n" must be 1, not ${choices}.`;
+	}
+	return undefined;
 }
 
 /**
@@ -788,7 +1036,7 @@ function lateResultText(result: Extract<Part, { type: 'tool-result' }>): string 
 }
 
 /** One JSON body: the turn is followed to its end, or to the tool calls the client has to run. */
-async function collect(service: ChatService, request: ChatRequest, model: string, response: http.ServerResponse, client: TurnClient): Promise<void> {
+async function collect(service: ChatService, request: ChatRequest, settings: ReplySettings, response: http.ServerResponse, client: TurnClient): Promise<void> {
 	const turn = emptyTurn();
 	const controller = new AbortController();
 	const disconnected = (): void => {
@@ -811,11 +1059,23 @@ async function collect(service: ChatService, request: ChatRequest, model: string
 		// a disconnect: the next request continues that turn.
 		response.off('close', disconnected);
 	}
-	sendJson(response, 200, completionOf(turn, model));
+	// A turn that reported an error has no content to hand over: the client is told instead.
+	if (turn.error !== undefined) {
+		sendError(response, 500, turn.error, 'server_error', 'engine_error');
+		return;
+	}
+	if (settings.unwrapJson) {
+		turn.text = stripFence(turn.text);
+	}
+	sendJson(response, 200, completionOf(turn, settings.model));
 }
 
-/** SSE: a role chunk, the deltas of the turn, a chunk that ends the choice, and `[DONE]`. */
-async function stream(service: ChatService, request: ChatRequest, model: string, response: http.ServerResponse, client: TurnClient): Promise<void> {
+/**
+ * SSE: a role chunk, the deltas of the turn, a chunk that ends the choice, and
+ * `[DONE]`. A turn that fails writes its error as one chunk instead of an end,
+ * and a client that asked for the usage gets it after the choice.
+ */
+async function stream(service: ChatService, request: ChatRequest, settings: ReplySettings, response: http.ServerResponse, client: TurnClient, keepAliveMs: number): Promise<void> {
 	response.writeHead(200, {
 		'Content-Type': 'text/event-stream; charset=utf-8',
 		'Cache-Control': 'no-cache',
@@ -823,41 +1083,77 @@ async function stream(service: ChatService, request: ChatRequest, model: string,
 	});
 	const id = `chatcmpl-${randomUUID()}`;
 	const created = Math.floor(Date.now() / 1000);
+	const turn = emptyTurn();
+	const controller = new AbortController();
 	const write = (chunk: unknown): void => {
 		if (!response.writableEnded && !response.destroyed) {
 			response.write(`data: ${JSON.stringify(chunk)}\n\n`);
 		}
 	};
-	write(chunkOf(id, created, model, { role: 'assistant' }, null));
-	const turn = emptyTurn();
-	const controller = new AbortController();
+	const keepAlive = setInterval(() => {
+		if (!response.writableEnded && !response.destroyed) {
+			response.write(': keep-alive\n\n');
+		}
+	}, keepAliveMs);
+	keepAlive.unref();
+	const stopKeepAlive = (): void => clearInterval(keepAlive);
 	const disconnected = (): void => {
 		client.disconnected();
 		controller.abort();
 	};
+	response.on('close', stopKeepAlive);
 	response.on('close', disconnected);
+	write(chunkOf(id, created, settings.model, { role: 'assistant' }, null));
+	let failure: string | undefined;
 	try {
 		await service.respond(request, event => {
 			gather(turn, event);
 			if (event.type === 'text') {
-				write(chunkOf(id, created, model, { content: event.text }, null));
+				write(chunkOf(id, created, settings.model, { content: event.text }, null));
 			} else if (event.type === 'thought') {
-				write(chunkOf(id, created, model, { reasoning_content: event.text }, null));
+				write(chunkOf(id, created, settings.model, { reasoning_content: event.text }, null));
 			} else if (event.type === 'tool-call') {
 				client.toolCall(event);
-				write(chunkOf(id, created, model, { tool_calls: [toolCallDelta(turn.toolCalls.length - 1, event)] }, null));
+				write(chunkOf(id, created, settings.model, { tool_calls: [toolCallDelta(turn.toolCalls.length - 1, event)] }, null));
 			}
 		}, controller.signal);
 	} catch (error) {
-		write({ error: { message: messageOf(error), type: 'server_error', code: 'engine_error' } });
+		failure = messageOf(error);
 	} finally {
 		response.off('close', disconnected);
+		response.off('close', stopKeepAlive);
+		stopKeepAlive();
 	}
-	write(chunkOf(id, created, model, {}, finishOf(turn), turn.usage ? usageOf(turn.usage) : undefined));
+	// A turn that failed leaves no finish behind: the client learns why, and the stream ends.
+	const failed = failure ?? turn.error;
+	if (failed !== undefined) {
+		write(errorEventOf(failed));
+		endStream(response);
+		return;
+	}
+	write(chunkOf(id, created, settings.model, {}, finishOf(turn)));
+	if (settings.includeUsage && turn.usage) {
+		write(usageChunkOf(id, created, settings.model, usageOf(turn.usage)));
+	}
+	endStream(response);
+}
+
+/** Ends an SSE response after its last event; a client that already left has nothing to end. */
+function endStream(response: http.ServerResponse): void {
 	if (!response.writableEnded && !response.destroyed) {
 		response.write('data: [DONE]\n\n');
 		response.end();
 	}
+}
+
+/** The one event a failed stream carries: the body's error shape, with `[DONE]` after it and no finish. */
+function errorEventOf(message: string): unknown {
+	return { error: { message, type: 'server_error', code: 'engine_error', param: null } };
+}
+
+/** The final chunk of a stream whose client asked for the usage: no choices, as OpenAI sends it. */
+function usageChunkOf(id: string, created: number, model: string, usage: unknown): unknown {
+	return { id, object: 'chat.completion.chunk', created, model, choices: [], usage };
 }
 
 /** Keeps a call the response just handed to the client, so its result can be matched. */
@@ -921,15 +1217,19 @@ function gather(turn: TurnResult, event: StreamEvent): void {
 	}
 }
 
+/** The finish reason a client reads: the calls it has to run, a reply the token limit cut short, or a plain stop. */
 function finishOf(turn: TurnResult): FinishReason {
-	if (turn.error !== undefined) {
-		return 'error';
-	}
 	// A turn that parked on a tool call ends its response without a stop reason.
-	if (turn.stopReason === undefined) {
-		return turn.toolCalls.length > 0 ? 'tool_calls' : 'stop';
+	if (turn.toolCalls.length > 0) {
+		return 'tool_calls';
 	}
 	return turn.stopReason === 'max_tokens' ? 'length' : 'stop';
+}
+
+/** The text of a reply a model wrapped in a markdown fence, since a body asked for JSON carries the JSON alone. */
+function stripFence(text: string): string {
+	const match = /^\s*```[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n?```\s*$/.exec(text);
+	return match ? match[1] : text;
 }
 
 function completionOf(turn: TurnResult, model: string): unknown {
@@ -950,14 +1250,13 @@ function completionOf(turn: TurnResult, model: string): unknown {
 	};
 }
 
-function chunkOf(id: string, created: number, model: string, delta: Record<string, unknown>, finishReason: FinishReason | null, usage?: unknown): unknown {
+function chunkOf(id: string, created: number, model: string, delta: Record<string, unknown>, finishReason: FinishReason | null): unknown {
 	return {
 		id,
 		object: 'chat.completion.chunk',
 		created,
 		model,
 		choices: [{ index: 0, delta, finish_reason: finishReason }],
-		...(usage ? { usage } : {}),
 	};
 }
 
@@ -1021,10 +1320,11 @@ function messagesOf(value: unknown): ChatMessage[] {
 }
 
 function roleOf(value: unknown): ChatRole | undefined {
-	// `developer` is OpenAI's newer name for the system message.
+	// `developer` is OpenAI's newer name for the system message, `function` its older name for a tool result.
 	return value === 'system' || value === 'developer' ? 'system'
-		: value === 'user' || value === 'assistant' || value === 'tool' ? value
-			: undefined;
+		: value === 'tool' || value === 'function' ? 'tool'
+			: value === 'user' || value === 'assistant' ? value
+				: undefined;
 }
 
 function partsOf(message: Record<string, unknown>, role: ChatRole): Part[] {
@@ -1055,16 +1355,18 @@ function partsOf(message: Record<string, unknown>, role: ChatRole): Part[] {
 			content.push({ type: 'text', text: '' });
 		}
 		const text = textOfParts(content);
-		parts.push({ type: 'tool-result', callId: typeof message.tool_call_id === 'string' ? message.tool_call_id : '', content, ...(isErrorText(text) ? { isError: true } : {}) });
+		// An older client names the call of a `function` message by the function itself.
+		const callId = typeof message.tool_call_id === 'string' && message.tool_call_id.length > 0 ? message.tool_call_id
+			: typeof message.name === 'string' ? message.name : '';
+		parts.push({ type: 'tool-result', callId, content, ...(isErrorText(text) ? { isError: true } : {}) });
 	}
 	return parts;
 }
 
 /**
  * The parts of a message's content array: its text, and — where a client may
- * send one — each image, as a `data:` URL. A tool's own output keeps both
- * kinds, so a screenshot it returned reaches the agent as an image rather than
- * as a URL the agent cannot open.
+ * send one — each image, as a `data:` URL. A part this server cannot hand the
+ * agent becomes a note saying so, rather than vanishing without trace.
  */
 function contentPartsOf(value: unknown, images: boolean): Part[] {
 	if (typeof value === 'string') {
@@ -1078,16 +1380,26 @@ function contentPartsOf(value: unknown, images: boolean): Part[] {
 		if (!isObject(item)) {
 			continue;
 		}
-		if (item.type === 'text' && typeof item.text === 'string') {
+		const type = typeof item.type === 'string' ? item.type : '';
+		if (type === 'text' && typeof item.text === 'string') {
 			parts.push({ type: 'text', text: item.text });
 			continue;
 		}
 		const image = images ? imageOf(item) : undefined;
 		if (image) {
 			parts.push(image);
+			continue;
+		}
+		if (type === 'image_url' || type === 'input_audio' || type === 'file') {
+			parts.push(omittedPartOf(type));
 		}
 	}
 	return parts;
+}
+
+/** What the agent is told about a part it cannot read, so it knows the user sent something more than the text. */
+function omittedPartOf(type: string): Part {
+	return { type: 'text', text: `[An attachment of type ${type} was omitted: the agent cannot read it.]` };
 }
 
 /** The image of one content part, whose URL a client sends inline as base64. */
@@ -1128,32 +1440,59 @@ function parseArguments(value: unknown): unknown {
 
 /** The tools the body offers, narrowed to the one `tool_choice` names and emptied by `none`. */
 function toolsOf(body: Record<string, unknown>): ToolDef[] {
-	const declared: ToolDef[] = [];
-	if (Array.isArray(body.tools)) {
-		for (const entry of body.tools) {
-			if (!isObject(entry) || !isObject(entry.function)) {
-				continue;
-			}
-			const fn = entry.function;
-			if (typeof fn.name !== 'string' || fn.name.length === 0) {
-				continue;
-			}
-			declared.push({
-				name: fn.name,
-				description: typeof fn.description === 'string' ? fn.description : '',
-				inputSchema: fn.parameters ?? { type: 'object', properties: {} },
-			});
-		}
-	}
-	const choice = body.tool_choice;
-	if (choice === 'none') {
+	const declared = declaredToolsOf(body);
+	const chosen = chosenToolOf(body);
+	if (chosen === 'none') {
 		return [];
 	}
-	if (isObject(choice) && isObject(choice.function) && typeof choice.function.name === 'string') {
-		const chosen = choice.function.name;
-		return declared.filter(tool => tool.name === chosen);
+	return chosen === undefined ? declared : declared.filter(tool => tool.name === chosen);
+}
+
+/** The tool declarations of a body: `tools`, and the `functions` an older client sends in their place. */
+function declaredToolsOf(body: Record<string, unknown>): ToolDef[] {
+	const declared: ToolDef[] = [];
+	for (const entry of arrayOf(body.tools)) {
+		if (isObject(entry) && isObject(entry.function)) {
+			declareTool(declared, entry.function);
+		}
+	}
+	for (const entry of arrayOf(body.functions)) {
+		if (isObject(entry)) {
+			declareTool(declared, entry);
+		}
 	}
 	return declared;
+}
+
+/** One declaration as an agent reads a tool, when it names one. */
+function declareTool(declared: ToolDef[], fn: Record<string, unknown>): void {
+	if (typeof fn.name !== 'string' || fn.name.length === 0) {
+		return;
+	}
+	declared.push({
+		name: fn.name,
+		description: typeof fn.description === 'string' ? fn.description : '',
+		inputSchema: fn.parameters ?? { type: 'object', properties: {} },
+	});
+}
+
+/** The one tool `tool_choice` names, `none`, or nothing for any of them; `function_call` is its older name. */
+function chosenToolOf(body: Record<string, unknown>): string | undefined {
+	const choice = body.tool_choice ?? body.function_call;
+	if (choice === 'none') {
+		return 'none';
+	}
+	if (!isObject(choice)) {
+		return undefined;
+	}
+	if (isObject(choice.function) && typeof choice.function.name === 'string') {
+		return choice.function.name;
+	}
+	return typeof choice.name === 'string' ? choice.name : undefined;
+}
+
+function arrayOf(value: unknown): readonly unknown[] {
+	return Array.isArray(value) ? value : [];
 }
 
 function splitModelId(model: string): { agentId: string; model: string } | undefined {
@@ -1257,7 +1596,7 @@ function sendFailure(response: http.ServerResponse, error: unknown): void {
 	sendError(response, 500, messageOf(error), 'server_error', 'engine_error');
 }
 
-/** The error shape OpenAI clients read: `{ error: { message, type, code } }`. */
+/** The error shape OpenAI clients read: `{ error: { message, type, code, param } }`. */
 function sendError(response: http.ServerResponse, status: number, message: string, type: string, code: string | null): void {
 	if (response.headersSent) {
 		if (!response.writableEnded) {
@@ -1265,7 +1604,7 @@ function sendError(response: http.ServerResponse, status: number, message: strin
 		}
 		return;
 	}
-	sendJson(response, status, { error: { message, type, code } });
+	sendJson(response, status, { error: { message, type, code, param: null } });
 }
 
 function sendJson(response: http.ServerResponse, status: number, value: unknown): void {

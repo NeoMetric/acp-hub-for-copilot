@@ -15,6 +15,7 @@ import { LanguageModelTextPart, LanguageModelToolResultPart } from './vscode-moc
 interface Body {
 	model: string;
 	stream: boolean;
+	stream_options?: { include_usage?: boolean };
 	messages: Array<{ role: string; content?: string | unknown[]; tool_calls?: unknown[]; tool_call_id?: string }>;
 	tools?: unknown[];
 	reasoning_effort?: string;
@@ -51,6 +52,10 @@ describe('bodyOf', () => {
 
 	it('asks the server to stream the turn', () => {
 		expect(bodyFor([user('hi')]).stream).toBe(true);
+	});
+
+	it('asks for the figures of the turn, which only travel when they are asked for', () => {
+		expect(bodyFor([user('hi')]).stream_options).toEqual({ include_usage: true });
 	});
 
 	it('sends the chat id, label, folders, cwd and guidance the host computed before', () => {
@@ -103,7 +108,7 @@ describe('bodyOf', () => {
 			request(),
 		];
 
-		expect(bodyFor(messages).messages).toEqual([{ role: 'user', content: '<userRequest>\nfix the bug\n</userRequest>' }]);
+		expect(bodyFor(messages).messages).toEqual([{ role: 'user', content: [{ type: 'text', text: '<userRequest>\nfix the bug\n</userRequest>' }] }]);
 	});
 
 	it('sends a system message as one, without its host sections', () => {
@@ -140,7 +145,7 @@ describe('bodyOf', () => {
 			user(new LanguageModelToolResultPart('call_1', [new LanguageModelTextPart('the file')])),
 		];
 
-		expect(bodyFor(messages).messages[2]).toEqual({ role: 'tool', tool_call_id: 'call_1', content: 'the file' });
+		expect(bodyFor(messages).messages[2]).toEqual({ role: 'tool', tool_call_id: 'call_1', content: [{ type: 'text', text: 'the file' }] });
 	});
 
 	it('marks a failed tool result the way the server reads a failure: text starting with "error:"', () => {
@@ -148,8 +153,8 @@ describe('bodyOf', () => {
 		const body = bodyFor([user('read it'), assistant(toolCall('call_1', 'read_file')), user(failed)]);
 		const result = body.messages[2];
 
-		expect(result).toEqual({ role: 'tool', tool_call_id: 'call_1', content: 'error: the file is missing' });
-		expect(String(result.content)).toMatch(/^\s*error\s*:/i);
+		expect(result).toEqual({ role: 'tool', tool_call_id: 'call_1', content: [{ type: 'text', text: 'error: the file is missing' }] });
+		expect((result.content as Array<{ type: string; text?: string }>)[0]?.text).toMatch(/^\s*error\s*:/i);
 	});
 
 	it('offers the tools of the request as function tools', () => {

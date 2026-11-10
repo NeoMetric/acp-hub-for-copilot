@@ -159,6 +159,13 @@ describe('continuing a stored conversation', () => {
 		expect(logs.some(line => line.includes('was edited and has no checkpoint to fork from'))).toBe(true);
 	});
 
+	it('answers a chat that is sent again unchanged, as a retry does', async () => {
+		const { send } = service('normal');
+
+		const first = await send('chat-retry', ['hi', 'second']);
+		await expect(send('chat-retry', ['hi', 'second'])).resolves.toBe(first);
+	});
+
 	it('keeps the session of a chat that comes back unchanged', async () => {
 		const created = vi.spyOn(AgentClient.prototype, 'createSession');
 		const fork = vi.spyOn(AgentClient.prototype, 'forkSession');

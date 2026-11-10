@@ -38,6 +38,8 @@ interface WireMessage {
 interface ChatBody {
 	readonly model: string;
 	readonly stream: true;
+	/** The figures of the turn travel as their own final chunk, and only when they are asked for. */
+	readonly stream_options: { readonly include_usage: true };
 	readonly messages: readonly WireMessage[];
 	readonly tools?: readonly unknown[];
 	readonly reasoning_effort?: string;
@@ -64,6 +66,7 @@ export function bodyOf(
 	const body: ChatBody = {
 		model: `${agentId}/${acpModelValue(model.id)}`,
 		stream: true,
+		stream_options: { include_usage: true },
 		messages: messages.flatMap(wireMessagesOf),
 		...(tools.length > 0 ? { tools: tools.map(toolOf) } : {}),
 		...(effort === undefined ? {} : { reasoning_effort: effort }),
@@ -102,7 +105,7 @@ function wireMessagesOf(message: vscode.LanguageModelChatRequestMessage): WireMe
 	let content: WireContent[] = [];
 	const flush = (): void => {
 		if (content.length > 0) {
-			wire.push({ role: 'user', content: collapsed(content) });
+			wire.push({ role: 'user', content });
 		}
 		content = [];
 	};
@@ -166,11 +169,11 @@ function wireResultOf(part: unknown): WireMessage | undefined {
 	}
 	const content = (part.content as readonly unknown[]).flatMap(item => wireContentOf(item) ?? []);
 	const failed = (part as { readonly isError?: boolean }).isError === true;
-	return { role: 'tool', tool_call_id: part.callId, content: failed ? failureOf(content) : collapsed(content) };
+	return { role: 'tool', tool_call_id: part.callId, content: failed ? failureOf(content) : content };
 }
 
 /** A client that ran a tool and failed it says so in the text — `error: …` — which is how the server reads a failure. */
-function failureOf(content: readonly WireContent[]): string | WireContent[] {
+function failureOf(content: readonly WireContent[]): WireContent[] {
 	const first = content.findIndex(item => item.type === 'text');
 	const items = [...content];
 	if (first < 0) {
@@ -179,15 +182,7 @@ function failureOf(content: readonly WireContent[]): string | WireContent[] {
 		const text = items[first];
 		items[first] = { type: 'text', text: text.type === 'text' ? `error: ${text.text}` : 'error:' };
 	}
-	return collapsed(items);
-}
-
-/** Content as the server reads it: one string when it is all text, parts when an image travels with them. */
-function collapsed(content: readonly WireContent[]): string | WireContent[] {
-	if (content.every(item => item.type === 'text')) {
-		return content.map(item => item.type === 'text' ? item.text : '').join('\n');
-	}
-	return [...content];
+	return items;
 }
 
 function toolOf(tool: vscode.LanguageModelChatTool): unknown {
