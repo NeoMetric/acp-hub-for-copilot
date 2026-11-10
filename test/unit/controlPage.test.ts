@@ -4,13 +4,14 @@ import type { InstallState } from '../../src/core/installers';
 import type { ControlSurface } from '../../src/engine/control/ControlService';
 import type { UsageState } from '../../src/engine/chat/usage';
 import { ControlPage } from '../../src/ui/controlPage';
-import type { ControlState, ModelsSurface } from '../../src/ui/messages';
+import type { ControlState, ModelsSurface, UsageHistorySurface, UsageHistoryView } from '../../src/ui/messages';
 
 function fakeAdapter(id: string): AgentAdapter {
 	return {
 		id,
 		displayName: `Agent ${id}`,
 		install: { kind: 'npm' },
+		auth: id === 'a' ? [{ kind: 'api-key', label: 'Key of a', envVar: 'A_KEY', keyPrefix: 'sk-' }] : [],
 		settings: [{ key: 'level', type: 'string', label: 'Level', description: '', default: 'low' }],
 	} as unknown as AgentAdapter;
 }
@@ -29,6 +30,7 @@ function fake(overrides: Partial<ControlSurface> = {}) {
 		isSignedIn: async () => undefined,
 		hasSavedKey: async () => false,
 		signIn: async () => ({ ok: true }),
+		saveApiKey: async () => ({ ok: true }),
 		signOut: async () => { },
 		readSettings: () => ({}),
 		writeSetting: vi.fn(async () => { }),
@@ -49,17 +51,75 @@ function fake(overrides: Partial<ControlSurface> = {}) {
 	return { control, read };
 }
 
-/** A page over the fake surface, with a listener that records every snapshot it publishes. */
-function setup(overrides: Partial<ControlSurface> = {}) {
+/** A page over a fake surface, with a listener that records every snapshot it publishes. */
+function setup(overrides: Partial<ControlSurface> = {}, usage?: UsageHistorySurface) {
 	const surface = fake(overrides);
 	const host = { openExternal: vi.fn(async () => { }), copyToClipboard: vi.fn(async () => { }) };
-	const page = new ControlPage(surface.control, host);
+	const page = new ControlPage(surface.control, host, undefined, usage);
 	const states: ControlState[] = [];
 	page.onState(state => { states.push(state); });
 	const last = (): ControlState => states[states.length - 1];
 	const card = (id: string) => last().agents.find(item => item.id === id)!;
 	return { ...surface, ...host, page, states, last, card };
 }
+
+describe('ControlPage usage history', () => {
+	const sample: UsageHistoryView = {
+		retentionDays: 30,
+		agents: [{ id: 'a', name: 'Agent a' }],
+		workspaces: [{ id: '/repo', name: 'repo' }],
+		days: [{ d: '2026-11-10', w: 0, a: 0, v: [1, 2, 3, 4] }],
+		weeks: [],
+		today: [],
+		empty: false,
+	};
+
+	function history(): UsageHistorySurface {
+		return { view: vi.fn(async () => sample), setRetentionDays: vi.fn(async () => { }) };
+	}
+
+	it('offers no usage view when the host has no ledger', async () => {
+		expect((await setup().page.state()).usage).toBeUndefined();
+	});
+
+	it('carries the usage view in the snapshot', async () => {
+		expect((await setup({}, history()).page.state()).usage).toEqual(sample);
+	});
+
+	it('asks the host for the retention the page chose, then redraws', async () => {
+		const usage = history();
+		const { page } = setup({}, usage);
+		await page.handle({ type: 'setRetentionDays', days: 14 });
+		expect(usage.setRetentionDays).toHaveBeenCalledWith(14);
+		expect(usage.view).toHaveBeenCalled();
+	});
+
+	it('ignores a retention the page asks for when the host keeps no history', async () => {
+		const { page } = setup();
+		await expect(page.handle({ type: 'setRetentionDays', days: 14 })).resolves.toBeUndefined();
+	});
+});
+
+describe('ControlPage API key', () => {
+	it('offers a key field only for an agent that signs in with a key', async () => {
+		const { page } = setup();
+		const state = await page.state();
+		expect(state.agents.find(item => item.id === 'a')?.apiKey).toEqual({ label: 'Key of a', keyPrefix: 'sk-' });
+		expect(state.agents.find(item => item.id === 'b')?.apiKey).toBeUndefined();
+	});
+
+	it('saves the key through the surface and shows a refusal on the card', async () => {
+		const saveApiKey = vi.fn(async (_id: string, key: string) => key ? { ok: true } : { ok: false, message: 'Enter the API key.' });
+		const { page, card } = setup({ saveApiKey });
+
+		await page.handle({ type: 'saveApiKey', agentId: 'a', key: 'sk-1' });
+		expect(saveApiKey).toHaveBeenCalledWith('a', 'sk-1');
+		expect(card('a').error).toBeUndefined();
+
+		await page.handle({ type: 'saveApiKey', agentId: 'a', key: '' });
+		expect(card('a').error).toBe('Enter the API key.');
+	});
+});
 
 describe('ControlPage models', () => {
 	const VIEW = { agents: [{ agentId: 'a', provider: { name: 'Agent a', default: 'Agent a' }, models: [{ value: 'm', name: 'M', default: 'M' }] }] };
@@ -69,7 +129,7 @@ describe('ControlPage models', () => {
 			view: async () => VIEW,
 			setProviderName: vi.fn(async () => 'provider saved'),
 			setModelName: vi.fn(async () => 'model saved'),
-			sync: vi.fn(async () => 'synced'),
+			refresh: vi.fn(async () => 'refreshed'),
 			...overrides,
 		};
 		const host = { openExternal: async () => { }, copyToClipboard: async () => { } };
@@ -93,31 +153,31 @@ describe('ControlPage models', () => {
 		expect(models.setModelName).toHaveBeenCalledWith('a', 'm', 'Mine');
 		expect((await page.state()).notice).toBe('model saved');
 
-		await page.handle({ type: 'syncModels' });
-		expect(models.sync).toHaveBeenCalled();
-		expect((await page.state()).notice).toBe('synced');
+		await page.handle({ type: 'refreshModels' });
+		expect(models.refresh).toHaveBeenCalled();
+		expect((await page.state()).notice).toBe('refreshed');
 	});
 
-	it('reports that it is syncing until the sync ends', async () => {
+	it('reports that it is refreshing until the refresh ends', async () => {
 		let finish: (notice: string) => void = () => undefined;
-		const { page } = withModels({ sync: () => new Promise<string>(resolve => { finish = resolve; }) });
+		const { page } = withModels({ refresh: () => new Promise<string>(resolve => { finish = resolve; }) });
 		const states: ControlState[] = [];
 		page.onState(state => { states.push(state); });
 
-		const running = page.handle({ type: 'syncModels' });
-		await vi.waitFor(() => expect(states.at(-1)?.syncing).toBe(true));
-		expect((await page.state()).syncing).toBe(true);
+		const running = page.handle({ type: 'refreshModels' });
+		await vi.waitFor(() => expect(states.at(-1)?.refreshing).toBe(true));
+		expect((await page.state()).refreshing).toBe(true);
 
 		finish('done');
 		await running;
 
-		expect(states.at(-1)).toMatchObject({ syncing: false, notice: 'done' });
+		expect(states.at(-1)).toMatchObject({ refreshing: false, notice: 'done' });
 	});
 
 	it('shows a failure as the notice', async () => {
-		const { page } = withModels({ sync: async () => { throw new Error('disk full'); } });
+		const { page } = withModels({ refresh: async () => { throw new Error('disk full'); } });
 
-		await page.handle({ type: 'syncModels' });
+		await page.handle({ type: 'refreshModels' });
 
 		expect((await page.state()).notice).toBe('disk full');
 	});

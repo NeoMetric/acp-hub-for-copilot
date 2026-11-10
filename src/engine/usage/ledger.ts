@@ -19,8 +19,6 @@ export interface UsageRecord {
 	/** The folder the chat worked in, when the host knew it. */
 	readonly workspace: string | undefined;
 	readonly usage: AcpTokenUsage | undefined;
-	/** True for a request the host made for its own purposes, such as a chat title. */
-	readonly background: boolean;
 }
 
 /** The agents and workspaces a query keeps; an absent list keeps every one. */
@@ -337,7 +335,7 @@ export class UsageLedger {
 
 	/** Adds one finished turn. In memory only: no write, no await, no listener. */
 	record(record: UsageRecord): void {
-		if (record.background || !record.usage) {
+		if (!record.usage) {
 			return;
 		}
 		const totals = countsOf(record.usage);

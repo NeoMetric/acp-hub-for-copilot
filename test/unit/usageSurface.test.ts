@@ -38,7 +38,7 @@ function surfaceOf(root: string, written: number[] = []): { surface: ReturnType<
 }
 
 function turn(ledger: UsageLedger, workspace: string, input: number, agent = 'claude', hour = 10): void {
-	ledger.record({ at: at(11, 10, hour), agent, workspace, usage: counts(input), background: false });
+	ledger.record({ at: at(11, 10, hour), agent, workspace, usage: counts(input) });
 }
 
 function sumOf(points: ReadonlyArray<{ v: [number, number, number, number] }>): number {

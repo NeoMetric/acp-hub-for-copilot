@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentAdapter, AgentSettings, LaunchContext } from '../core/adapter';
 import { ADAPTERS } from '../core/agents';
@@ -14,6 +15,10 @@ import { ChatService } from '../engine/chat/ChatService';
 import { readTranscriptOptions, type TranscriptOptions } from '../engine/chat/messages';
 import type { ToolBridge } from '../engine/chat/types';
 import { UsageStore } from '../engine/chat/usage';
+import { DEFAULT_RETAIN_DAYS, UsageLedger } from '../engine/usage/ledger';
+import type { UsageHistorySurface } from '../ui/messages';
+import { createUsageHistorySurface } from '../hosts/http/usageSurface';
+import type { ChatRequest } from '../engine/model/chat';
 import { ControlService, type ControlSurface } from '../engine/control/ControlService';
 import { withScope } from '../core/logging';
 import type { HostPort, Log } from '../engine/ports/host';
@@ -55,6 +60,8 @@ export interface HeadlessComposition {
 	serviceOf(agentId: string): ChatService | undefined;
 	/** The context windows an agent reported for its models, which the model list serves; a host that tracks none omits it. */
 	reportedWindowsOf?(agentId: string): ReadonlyMap<string, number>;
+	/** The usage history the page charts; a composition without one simply offers no Usage view. */
+	readonly usageHistory?: UsageHistorySurface;
 	/** Stops every agent and releases the sessions of every chat. */
 	close(): Promise<void>;
 }
@@ -66,10 +73,29 @@ export interface HeadlessGateways extends HeadlessComposition {
 	readonly control: ControlSurface;
 	/** The cache and usage figures the page shows, as the chat services record them. */
 	readonly usage: UsageStore;
+	/** The token usage of finished turns, kept day by day. */
+	readonly ledger: UsageLedger;
+	/** The usage history the page charts. */
+	readonly usageHistory: UsageHistorySurface;
 	/** The transcript settings the services read, from the host's `config.json`. */
 	transcriptOptions(): TranscriptOptions;
 	/** The context windows an agent reported for its models, which the model list serves. */
 	reportedWindowsOf(agentId: string): ReadonlyMap<string, number>;
+}
+
+/** Writes the request as a JSON file in `folder` when the agent's `dumpRequests` setting is on; a failure is logged, never thrown. */
+export function dumpRequest(folder: string, request: ChatRequest, settings: AgentSettings | undefined, log: Log): void {
+	if (settings?.dumpRequests !== true) {
+		return;
+	}
+	try {
+		fs.mkdirSync(folder, { recursive: true });
+		const file = path.join(folder, `${new Date().toISOString().replace(/[:.]/g, '-')}-${request.chatId.replace(/[^\w-]/g, '_').slice(0, 40)}.json`);
+		fs.writeFileSync(file, JSON.stringify(request, undefined, 2), 'utf8');
+		log(`Request written to ${file}`, 'debug');
+	} catch (error) {
+		log(`Could not write the request dump: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+	}
 }
 
 /** The engine wired for a process with no window: the same agents and chats the extension serves. */
@@ -88,6 +114,17 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 		progress: (message: string) => log(message),
 	};
 	const usage = new UsageStore(log);
+	/** The token usage of finished turns, which the page charts; recorded in memory and flushed a couple of seconds later. */
+	const ledger = new UsageLedger({
+		root,
+		retainDays: host.settings.get<number>('usage.retentionDays') ?? DEFAULT_RETAIN_DAYS,
+		log,
+	});
+	const usageHistory = createUsageHistorySurface({
+		ledger,
+		agents: adapters.map(adapter => ({ id: adapter.id, displayName: adapter.displayName })),
+		writeRetention: days => host.writeSetting('usage.retentionDays', days),
+	});
 	/** The context windows each agent reported, which narrow the windows its models are served with. */
 	const reportedWindows = new Map<string, Map<string, number>>();
 	const windowsOf = (agentId: string): Map<string, number> => {
@@ -141,8 +178,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 	for (const adapter of adapters) {
 		// What the extension's provider hands its chat service, mirrored over this host:
 		// the customization prompt, the transcript settings, the cache and usage figures
-		// the page shows, and an expired sign-in. The request dump is the one loss, until
-		// the server has a setting naming the folder it writes to (Task 4).
+		// the page shows, an expired sign-in and the request dump.
 		services.set(adapter.id, new ChatService({
 			adapter,
 			host,
@@ -152,9 +188,11 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 			client: { onSignInUrl: prompt => control.reportSignInUrl(adapter.id, prompt) },
 			buildSessionPrompt: createSessionPrompt(log, adapter.systemPrompt, workspaceOf, options.promptsDir),
 			transcriptOptions,
+			dumpRequest: (request, settings) => dumpRequest(path.join(agentsDir, adapter.id, 'requests'), request, settings, withScope(log, adapter.id)),
 			refineWindow: (model, size) => { windowsOf(adapter.id).set(model, size); },
 			finished: turn => {
 				usage.recordTurn(adapter.id, adapter.reportsCache === false ? undefined : turn.usage, turn.background);
+				ledger.record({ at: Date.now(), agent: adapter.id, workspace: turn.chat?.workspace, usage: turn.usage });
 				if (!turn.background && adapter.usage && !adapter.usage.onDemandOnly) {
 					void control.refreshUsage(adapter.id, false).catch(error => {
 						withScope(log, adapter.id)(`Could not read the usage: ${error instanceof Error ? error.message : String(error)}`, 'warn');
@@ -249,10 +287,14 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 		serviceOf: agentId => services.get(agentId),
 		control,
 		usage,
+		ledger,
+		usageHistory,
 		transcriptOptions,
 		reportedWindowsOf: agentId => windowsOf(agentId),
 		close: async () => {
 			await Promise.all([...services.values()].map(service => service.close()));
+			// The turns of the last couple of seconds are still in memory; they reach the folder before the process goes.
+			await ledger.close();
 		},
 	};
 }

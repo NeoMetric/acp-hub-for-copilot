@@ -76,6 +76,17 @@ describe('headless composition wiring', () => {
 		expect(composition.usage.get('mock').extraWindows).toEqual(composition.control.usage('mock').extraWindows);
 	});
 
+	it('records the tokens of a finished turn in the usage history', async () => {
+		const composition = gateway();
+
+		await composition.serviceOf('mock')!.respond(request('chat-ledger'), () => undefined, new AbortController().signal);
+
+		const view = await composition.usageHistory.view();
+		expect(view.empty).toBe(false);
+		expect(view.days).toHaveLength(1);
+		expect(view.days[0]?.v.some(tokens => tokens > 0)).toBe(true);
+	});
+
 	it('reads the transcript detail from config.json', async () => {
 		const composition = gateway();
 		expect(composition.transcriptOptions().detail).toBe('compact');

@@ -42,7 +42,6 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
 		agent: 'claude',
 		workspace: '/repo/app',
 		usage: counts(100, 900, 40, 300),
-		background: false,
 		...overrides,
 	};
 }
@@ -99,14 +98,6 @@ describe('recording a turn', () => {
 		const ledger = ledgerAt(11, 10);
 		ledger.record(record({ usage: counts(0, 0, 0, 300, 50) }));
 		expect(ledger.daily({}, 1)[0]?.totals.output).toBe(350);
-	});
-
-	it('records nothing for a background request', () => {
-		store();
-		const ledger = ledgerAt(11, 10);
-		ledger.record(record({ background: true }));
-		expect(ledger.daily({}, 1)).toEqual([]);
-		expect(ledger.workspaces()).toEqual([]);
 	});
 
 	it('records nothing for a turn that reported no usage', () => {

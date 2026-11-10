@@ -6,7 +6,6 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import type { HeadlessComposition } from '../../composition/headless';
 import type { AgentAdapter } from '../../core/adapter';
@@ -20,11 +19,11 @@ import type { ChatMessage, ChatRequest, ChatRole, Part, ToolDef } from '../../en
 import type { StreamEvent } from '../../engine/model/stream';
 import type { Log } from '../../engine/ports/host';
 import { ControlPage } from '../../ui/controlPage';
-import type { ControlAction, ControlState, ModelsSurface } from '../../ui/messages';
+import type { ControlAction, ControlState, ModelsSurface, UsageHistorySurface } from '../../ui/messages';
 import { ACTION_ROUTE, EVENTS_ROUTE, STATE_ROUTE } from '../../ui/transport';
 import { rememberExtras, ToolCallParking, type RequestExtras } from './host';
 import { createModelsSurface } from './modelsSurface';
-import { API_VERSION, SERVER_NAME, SHUTDOWN_ROUTE, WARM_ROUTE, type AcpRequestExtras, type HealthWire, type ModelWire } from './wire';
+import { API_VERSION, SERVER_NAME, MODELS_REFRESH_ROUTE, SHUTDOWN_ROUTE, WARM_ROUTE, type AcpRequestExtras, type HealthWire, type ModelWire, type ModelsRefreshWire } from './wire';
 
 /** The package version esbuild bakes into the bundle; it is undefined when the sources run unbundled. */
 declare const __ACP_HUB_VERSION__: string | undefined;
@@ -105,10 +104,6 @@ export interface HttpServerOptions {
 	readonly streamKeepAliveMs?: number;
 	/** The control page; without it the server offers the chat surface alone. */
 	readonly page?: ControlPageOptions;
-	/** The Copilot CLI's provider file the Models page writes; `COPILOT_PROVIDERS_CONFIG` or `~/.copilot/providers.json` by default. */
-	readonly providersFile?: string;
-	/** The extension's `package.json` the Models page writes the provider names into; found beside the bundle by default. */
-	readonly packageJson?: string;
 	/** Stops the server when a client asks, over `POST /shutdown`; without it that route does not exist. */
 	readonly onShutdown?: () => void;
 }
@@ -155,30 +150,16 @@ function pageStylePath(): string {
 	]);
 }
 
-/** The extension's `package.json`, which sits above the server bundle in a build and above `src/` in a checkout. */
-function manifestPath(): string {
-	return firstExisting([
-		path.join(__dirname, '..', 'package.json'),
-		path.join(__dirname, '..', '..', '..', 'package.json'),
-		path.join(process.cwd(), 'package.json'),
-	]);
-}
-
-/** The Copilot CLI's provider file: `COPILOT_PROVIDERS_CONFIG`, or `providers.json` in its folder in the home folder. */
-function copilotProvidersFile(): string {
-	return process.env.COPILOT_PROVIDERS_CONFIG?.trim() || path.join(os.homedir(), '.copilot', 'providers.json');
-}
-
 function firstExisting(candidates: readonly string[]): string {
 	return candidates.find(candidate => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 /** One control page over the operations it drives, with the host parts a server can offer. */
-function openPage(options: ControlPageOptions, log: Log, models: ModelsSurface | undefined): OpenPage {
+function openPage(options: ControlPageOptions, log: Log, models: ModelsSurface | undefined, usage: UsageHistorySurface | undefined): OpenPage {
 	const control = new ControlPage(options.control, {
 		openExternal: options.openExternal ?? (async url => { log(`The page shows this sign-in URL: ${url}`); }),
 		copyToClipboard: options.copyToClipboard ?? (async text => { log(`The page asked to copy: ${text}`); }),
-	}, models);
+	}, models, usage);
 	return { control, bundle: options.bundle ?? pageBundlePath(), style: options.style ?? pageStylePath() };
 }
 
@@ -194,27 +175,16 @@ export function createServer(options: HttpServerOptions): http.Server {
 	const parking = new ToolCallParking(options.toolCallWaitMs, composition.host.log);
 	const names = new ModelNames(composition.host.state);
 	const catalog = new ModelCatalog(composition, names);
-	const models = options.page && createModelsSurface({
-		adapters: composition.adapters,
-		usable: async adapter => {
-			const service = composition.serviceOf(adapter.id);
-			return service !== undefined && service.enabled && await isInstalled(service, composition);
-		},
-		names,
-		state: composition.host.state,
-		source: catalog,
-		token,
-		baseUrl: () => {
-			const address = server.address();
-			return `http://127.0.0.1:${typeof address === 'object' && address !== null ? address.port : 0}/v1`;
-		},
-		providersFile: options.providersFile ?? copilotProvidersFile(),
-		packageJson: options.packageJson ?? manifestPath(),
-	});
-	const page = options.page ? openPage(options.page, composition.host.log, models) : undefined;
+	const usable = async (adapter: AgentAdapter): Promise<boolean> => {
+		const service = composition.serviceOf(adapter.id);
+		return service !== undefined && service.enabled && await isInstalled(service, composition);
+	};
+	const models = options.page && createModelsSurface({ adapters: composition.adapters, usable, names, source: catalog });
+	const page = options.page ? openPage(options.page, composition.host.log, models, composition.usageHistory) : undefined;
 	const context: ServerContext = {
 		composition,
 		catalog,
+		usable,
 		token,
 		parking,
 		page,
@@ -234,6 +204,8 @@ export function createServer(options: HttpServerOptions): http.Server {
 interface ServerContext {
 	readonly composition: HeadlessComposition;
 	readonly catalog: ModelCatalog;
+	/** Whether an agent is enabled and on this machine, which decides that it is offered. */
+	readonly usable: (adapter: AgentAdapter) => Promise<boolean>;
 	readonly token: string | undefined;
 	readonly parking: ToolCallParking;
 	readonly page: OpenPage | undefined;
@@ -243,7 +215,7 @@ interface ServerContext {
 }
 
 async function handle(context: ServerContext, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
-	const { composition, catalog, token, page, onShutdown } = context;
+	const { composition, catalog, usable, token, page, onShutdown } = context;
 	try {
 		const url = new URL(request.url ?? '/', 'http://127.0.0.1');
 		const pathname = normalisePath(url.pathname);
@@ -319,6 +291,14 @@ async function handle(context: ServerContext, request: http.IncomingMessage, res
 				return;
 			}
 			await runAction(page.control, request, response);
+			return;
+		}
+		if (route === MODELS_REFRESH_ROUTE) {
+			if (method !== 'POST') {
+				methodNotAllowed(response, ['POST']);
+				return;
+			}
+			sendJson(response, 200, { refreshed: await catalog.refreshAll(usable) } satisfies ModelsRefreshWire);
 			return;
 		}
 		if (route === '/v1/models') {
@@ -683,6 +663,17 @@ export class ModelCatalog {
 		return this.lookup(adapter);
 	}
 
+	/** Reads the models of every agent `usable` allows again, and answers the agent ids that gave a list. */
+	async refreshAll(usable: (adapter: AgentAdapter) => Promise<boolean>): Promise<string[]> {
+		const refreshed: string[] = [];
+		for (const adapter of this.composition.adapters) {
+			if (await usable(adapter) && (await this.refresh(adapter)).length > 0) {
+				refreshed.push(adapter.id);
+			}
+		}
+		return refreshed;
+	}
+
 	/** The models saved for the agent, in the shape this server publishes them in; reading them never starts the agent. */
 	savedOf(agentId: string): ModelEntry[] {
 		const saved = this.composition.host.state.get<unknown>(modelsStateKey(agentId));
@@ -788,9 +779,11 @@ async function warmAgents(composition: HeadlessComposition, response: http.Serve
 /** `POST /v1/chat/completions`, streaming or not, over the agent the model id names. */
 async function complete(context: ServerContext, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
 	const { composition, parking } = context;
+	const started = Date.now();
 	let body: Record<string, unknown>;
+	let bytes: number;
 	try {
-		body = await readBody(request);
+		({ body, bytes } = await readJsonBody(request));
 	} catch (error) {
 		sendError(response, 400, messageOf(error), 'invalid_request_error', 'invalid_body');
 		return;
@@ -824,6 +817,8 @@ async function complete(context: ServerContext, request: http.IncomingMessage, r
 		return;
 	}
 	const messages = messagesOf(body.messages);
+	// One line to tell how much the window sent and how long reading it took, before the agent is asked.
+	composition.host.log(`Chat request: model ${model}, ${messages.length} message(s), ${(bytes / 1024).toFixed(1)} KB, read in ${Date.now() - started} ms`, 'debug');
 	const chatRequest = chatRequestOf(composition, request, body, messages, toolsOf(body), target.model);
 	// A turn the client continues after a tool call carries that call's result;
 	// a call another chat is running is refused rather than allowed to resume
@@ -1504,6 +1499,11 @@ function splitModelId(model: string): { agentId: string; model: string } | undef
 }
 
 async function readBody(request: http.IncomingMessage): Promise<Record<string, unknown>> {
+	return (await readJsonBody(request)).body;
+}
+
+/** The body a request carries, and how many bytes it was, so a chat request can report what it cost to read. */
+async function readJsonBody(request: http.IncomingMessage): Promise<{ body: Record<string, unknown>; bytes: number }> {
 	const chunks: Buffer[] = [];
 	let size = 0;
 	for await (const chunk of request) {
@@ -1527,7 +1527,7 @@ async function readBody(request: http.IncomingMessage): Promise<Record<string, u
 	if (!isObject(parsed)) {
 		throw new Error('The request body is not a JSON object.');
 	}
-	return parsed;
+	return { body: parsed, bytes: size };
 }
 
 function headerOf(request: http.IncomingMessage, name: string): string | undefined {

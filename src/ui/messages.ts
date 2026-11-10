@@ -134,7 +134,8 @@ export type FromWebview =
 	| { type: 'setSetting'; agentId: string; key: string; value: SettingValue }
 	| { type: 'setProviderName'; agentId: string; name: string }
 	| { type: 'setModelName'; agentId: string; model: string; name: string }
-	| { type: 'refreshModels' };
+	| { type: 'refreshModels' }
+	| { type: 'setRetentionDays'; days: number };
 
 /** Everything the page asks a host to do; the same message travels over either transport. */
 export type ControlAction = FromWebview;

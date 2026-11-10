@@ -6,7 +6,7 @@
 import type { AgentAdapter } from '../core/adapter';
 import { canUninstall } from '../core/installers';
 import type { ControlSurface } from '../engine/control/ControlService';
-import type { AgentCardState, ControlAction, ControlState, ModelsSurface, SettingValue, SettingView } from './messages';
+import type { AgentCardState, ControlAction, ControlState, ModelsSurface, SettingValue, SettingView, UsageHistorySurface } from './messages';
 
 /** What the page asks of the host it runs in; neither part touches a window or a DOM. */
 export interface ControlPageHost {
@@ -69,10 +69,10 @@ export class ControlPage {
 
 	/** What the last Models action did; it stays until the next one. */
 	private notice: string | undefined;
-	private syncing = false;
+	private refreshing = false;
 	private modelsQueue: Promise<void> = Promise.resolve();
 
-	constructor(private readonly control: ControlSurface, private readonly host: ControlPageHost, private readonly models?: ModelsSurface) {
+	constructor(private readonly control: ControlSurface, private readonly host: ControlPageHost, private readonly models?: ModelsSurface, private readonly usage?: UsageHistorySurface) {
 		control.onUsageChange(agentId => {
 			// A read that proves the account makes an earlier sign-in complaint stale.
 			if (control.usage(agentId).signedIn === true) {
@@ -119,8 +119,16 @@ export class ControlPage {
 			return;
 		}
 
-		if (action.type === 'setProviderName' || action.type === 'setModelName' || action.type === 'syncModels') {
+		if (action.type === 'setProviderName' || action.type === 'setModelName' || action.type === 'refreshModels') {
 			await this.runModels(action);
+			return;
+		}
+
+		if (action.type === 'setRetentionDays') {
+			if (this.usage) {
+				await this.usage.setRetentionDays(action.days);
+				await this.publish();
+			}
 			return;
 		}
 
@@ -152,6 +160,14 @@ export class ControlPage {
 				return;
 			case 'signIn':
 				await this.signIn(adapter);
+				return;
+			case 'saveApiKey':
+				await this.runBusy(adapter, 'Saving API key...', async () => {
+					const result = await this.control.saveApiKey(adapter.id, action.key);
+					if (!result.ok) {
+						throw new Error(result.message ?? 'The API key was not saved.');
+					}
+				});
 				return;
 			case 'signOut':
 				await this.runBusy(adapter, 'Signing out...', () => this.control.signOut(adapter.id));
@@ -195,33 +211,38 @@ export class ControlPage {
 			...spec,
 			value: this.control.readGlobalSetting(spec.key) ?? fallback,
 		}));
-		return { agents, globalSettings, ...(this.models ? { models: await this.models.view(), notice: this.notice, syncing: this.syncing } : {}) };
+		return {
+			agents,
+			globalSettings,
+			...(this.models ? { models: await this.models.view(), notice: this.notice, refreshing: this.refreshing } : {}),
+			...(this.usage ? { usage: await this.usage.view() } : {}),
+		};
 	}
 
-	/** Runs the Models actions one after another: a save of several names sends them together, and each one rewrites the same files. */
-	private runModels(action: Extract<ControlAction, { type: 'setProviderName' | 'setModelName' | 'syncModels' }>): Promise<void> {
+	/** Runs the Models actions one after another: a save of several names sends them together, and each one rewrites the same value. */
+	private runModels(action: Extract<ControlAction, { type: 'setProviderName' | 'setModelName' | 'refreshModels' }>): Promise<void> {
 		const run = this.modelsQueue.then(() => this.runModelsNow(action));
 		this.modelsQueue = run.catch(() => undefined);
 		return run;
 	}
 
 	/** Runs one Models action; what it did, or why it failed, becomes the notice. */
-	private async runModelsNow(action: Extract<ControlAction, { type: 'setProviderName' | 'setModelName' | 'syncModels' }>): Promise<void> {
-		if (!this.models || this.syncing) {
+	private async runModelsNow(action: Extract<ControlAction, { type: 'setProviderName' | 'setModelName' | 'refreshModels' }>): Promise<void> {
+		if (!this.models || this.refreshing) {
 			return;
 		}
-		if (action.type === 'syncModels') {
-			this.syncing = true;
+		if (action.type === 'refreshModels') {
+			this.refreshing = true;
 			await this.publish();
 		}
 		try {
 			this.notice = action.type === 'setProviderName' ? await this.models.setProviderName(action.agentId, action.name)
 				: action.type === 'setModelName' ? await this.models.setModelName(action.agentId, action.model, action.name)
-					: await this.models.sync();
+					: await this.models.refresh();
 		} catch (error) {
 			this.notice = errorText(error);
 		}
-		this.syncing = false;
+		this.refreshing = false;
 		await this.publish();
 	}
 
@@ -296,6 +317,7 @@ export class ControlPage {
 		const hasSavedKey = await this.control.hasSavedKey(adapter.id);
 		const usage = this.control.usage(adapter.id);
 		const settings = this.control.readSettings(adapter.id);
+		const keyMethod = adapter.auth.find(method => method.kind === 'api-key');
 
 		const settingViews: SettingView[] = adapter.settings.map(spec => ({
 			key: spec.key,
@@ -314,6 +336,7 @@ export class ControlPage {
 			removable: canUninstall(adapter),
 			signedIn: signedIn === undefined ? 'unknown' : signedIn ? 'yes' : 'no',
 			hasSavedKey,
+			apiKey: keyMethod?.kind === 'api-key' ? { label: keyMethod.label, keyPrefix: keyMethod.keyPrefix } : undefined,
 			enabled: this.control.isEnabled(adapter.id),
 			visible: this.visibleAgents!.has(adapter.id),
 			settings: settingViews,
