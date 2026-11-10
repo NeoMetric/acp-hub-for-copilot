@@ -31,7 +31,11 @@ afterEach(() => {
 	client = undefined;
 	vi.useRealTimers();
 	// A killed agent can hold its working directory for a moment on Windows.
-	fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	try {
+		fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	} catch {
+		// Left to the temp folder's own clean-up.
+	}
 });
 
 function testAdapter(overrides: Partial<AgentAdapter> = {}): AgentAdapter {

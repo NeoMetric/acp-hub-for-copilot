@@ -31,7 +31,7 @@ import { startLaps, type Lap } from './timing';
 import { TurnRunner } from './turns';
 import type { AgentApi, ChatContext, ChatSession, FinishedTurn, Reuse, ToolBridge } from './types';
 import { bridgeServer, WarmSession } from './warmSession';
-import { normalizeRoot, WorkspaceProcesses, workspaceRootOf, type WorkspaceProcess } from './workspaceProcesses';
+import { AgentProcesses, type AgentProcess } from './agentProcess';
 
 /** Per-process nonce, so call ids from an earlier run in a chat's history never match a new call. */
 const TOOL_CALL_ID_PREFIX = `acp-hub-${randomBytes(4).toString('hex')}-`;
@@ -75,12 +75,6 @@ export interface ChatServiceDeps {
 	agentChanged?(change: AgentChange): void;
 	/** Whether the host wants the agent running at all. */
 	isEnabled?(): boolean;
-	/**
-	 * Run one process for every chat, in a folder of the agent's own storage, whatever folders the chats
-	 * belong to. The agent's own tools are off and the host builds the prompt, so the folder it runs in
-	 * decides nothing a chat sees; the chat's real folders reach the model through the prompt.
-	 */
-	readonly sharedProcess?: boolean;
 }
 
 /**
@@ -94,8 +88,8 @@ export class ChatService {
 	private readonly sessions = new Map<string, ChatSession>();
 	private readonly saved: SavedSessionStore;
 	private readonly log: Log;
-	/** The agent processes, one per workspace root a chat asked for. */
-	private readonly processes: WorkspaceProcesses;
+	/** The agent process, which serves every chat. */
+	private readonly processes: AgentProcesses;
 	/** What the agent was last launched with; the settings are read from it. */
 	private launch: LaunchContext | undefined;
 	private readonly warmSession: WarmSession;
@@ -122,8 +116,8 @@ export class ChatService {
 		const log = withScope(host.log, adapter.id);
 		this.log = log;
 		this.saved = new SavedSessionStore(host.state, `acpHub.savedSessions.${adapter.id}`);
-		this.processes = new WorkspaceProcesses({
-			agentId: adapter.id,
+		this.processes = new AgentProcesses({
+			root: () => this.processRoot(),
 			log,
 			create: root => this.createClientIn(root),
 			changed: (entry, change) => this.handleAgentChange(entry, change),
@@ -132,7 +126,7 @@ export class ChatService {
 			adapter,
 			bridge: deps.bridge,
 			agentClient: () => this.defaultClient(),
-			cwd: () => this.sharedRoot() ?? this.defaultRoot ?? this.workspaceFolder,
+			cwd: () => this.processRoot(),
 			opened: () => this.scheduleIdleSweep(),
 		});
 		this.turns = new TurnRunner({
@@ -174,26 +168,18 @@ export class ChatService {
 	}
 
 	/**
-	 * The folder a window last warmed. The model list and the usage reads run in it, so the agent that window
-	 * started serves them too and no process of its own is kept for them; until a window warms one, they run
-	 * in the launch's folder.
+	 * The folder the agent's one process runs in: its own inside the store, so the
+	 * folder a chat belongs to decides nothing the process sees. The chat's real
+	 * folders reach the model through the session prompt.
 	 */
-	private defaultRoot: string | undefined;
-
-	/** The folder every process and session runs in when {@link ChatServiceDeps.sharedProcess} is on; `undefined` otherwise, or before the agent is launched. */
-	private sharedRoot(): string | undefined {
-		const storage = this.deps.sharedProcess ? this.launch?.storageDir : undefined;
+	private processRoot(): string {
+		const storage = this.launch?.storageDir;
 		if (!storage) {
-			return undefined;
+			throw new AdapterNotInstalledError(this.deps.adapter.displayName);
 		}
 		const root = normalizeRoot(path.join(storage, 'workspace'));
 		fs.mkdirSync(root, { recursive: true });
 		return root;
-	}
-
-	/** The folder the agent was launched in, `''` until it is launched; a chat that names no folder this machine has is rooted there. */
-	get workspaceFolder(): string {
-		return this.launch?.workspaceFolder ?? '';
 	}
 
 	/**
@@ -230,15 +216,14 @@ export class ChatService {
 	}
 
 	/**
-	 * The agent process of a workspace root, started on its first chat. A chat in
-	 * another repository gets a process of its own, rooted there; chats of one
-	 * repository share one, and the host's own requests run in the window's folder.
-	 * An agent that is not installed has no launch context, which says so right
-	 * away instead of waiting for a process that will never come.
+	 * The agent process, started on its first ask. Every chat shares it, whatever
+	 * folder the chat belongs to. An agent that is not installed has no launch
+	 * context, which says so right away instead of waiting for a process that will
+	 * never come.
 	 */
-	private async processAt(root: string, ctx?: LaunchContext): Promise<WorkspaceProcess> {
-		const launch = ctx ?? await this.resolveLaunch();
-		const entry = await this.processes.acquire(root === '' ? normalizeRoot(launch.workspaceFolder) : root);
+	private async process(): Promise<AgentProcess> {
+		await this.resolveLaunch();
+		const entry = this.processes.acquire();
 		await entry.client.updateContext(this.launchedFor(entry.root));
 		entry.lastUsed = Date.now();
 		return entry;
@@ -283,15 +268,9 @@ export class ChatService {
 		this.launchCache = undefined;
 	}
 
-	/** The process the host's own requests run in: the window's first folder. */
-	private async defaultProcess(): Promise<WorkspaceProcess> {
-		const ctx = await this.resolveLaunch();
-		return this.processAt(this.sharedRoot() ?? this.defaultRoot ?? normalizeRoot(ctx.workspaceFolder), ctx);
-	}
-
 	/** The client of the process the host's own requests run in, such as the one that lists the models. */
 	private async defaultClient(): Promise<AgentApi> {
-		return (await this.defaultProcess()).client;
+		return (await this.process()).client;
 	}
 
 	/** Opens the client of a new process, rooted in the workspace it will serve. */
@@ -328,11 +307,8 @@ export class ChatService {
 		}
 		const key = request.chatId;
 		const lap = startLaps(this.log, key);
-		// The launch is resolved first, as it always was: the host reads the window's
-		// folder off the launched agent when the request names no folder of its own.
-		const launch = await this.resolveLaunch();
 		const identity = this.deps.host.chatIdentity(request);
-		const entry = await this.processAt(this.sharedRoot() ?? workspaceRootOf(identity), launch);
+		const entry = await this.process();
 		const client = entry.client;
 		lap('agent client ready');
 
@@ -523,42 +499,13 @@ export class ChatService {
 		await this.ensureWarmSession();
 	}
 
-	/** Starts the agent in a folder before its first chat; one that is turned off is left alone, and one that is not installed throws. */
-	async warmFolder(folder: string): Promise<void> {
+	/** Starts the agent's process before its first chat; one that is turned off is left alone, and one that is not installed throws. */
+	async start(): Promise<void> {
 		if (!this.enabled) {
 			return;
 		}
-		const launch = await this.resolveLaunch();
-		const shared = this.sharedRoot();
-		const root = shared ?? normalizeRoot(folder);
-		if (!shared) {
-			this.moveDefaultTo(root, launch);
-		}
-		const entry = await this.processAt(root, launch);
+		const entry = await this.process();
 		await entry.client.ensureStarted();
-	}
-
-	/**
-	 * Has the model and usage reads run in `root` from now on. The process they ran in before is stopped when
-	 * it was only the launch's folder and no chat uses it; the one another window warmed is left for that window.
-	 */
-	private moveDefaultTo(root: string, launch: LaunchContext): void {
-		const launchRoot = normalizeRoot(launch.workspaceFolder);
-		const previous = this.defaultRoot ?? launchRoot;
-		if (previous === root) {
-			return;
-		}
-		this.defaultRoot = root;
-		const warm = this.warmSession.current;
-		if (warm) {
-			const client = this.warmSession.client;
-			this.warmSession.release();
-			void client?.closeSession(warm.sessionId);
-		}
-		const old = previous === launchRoot ? this.processes.get(previous) : undefined;
-		if (old && old.sessions.size === 0) {
-			void old.client.stopWhenIdle();
-		}
 	}
 
 	/** Starts the agent to let its own browser sign-in flow run. */
@@ -573,9 +520,10 @@ export class ChatService {
 		return !agent.requiresSignIn;
 	}
 
-	/** Restarts every agent process; what the host caches about them is reset with it. */
+	/** Restarts the agent process; what the host caches about it is reset with it. */
 	async restart(): Promise<void> {
-		for (const entry of this.processes.list()) {
+		const entry = this.processes.current;
+		if (entry) {
 			await entry.client.restart();
 		}
 	}
@@ -729,27 +677,26 @@ export class ChatService {
 		}
 	}
 
-	/** Stops a process when no chat, release or lookup has needed it for the configured time. */
+	/** Stops the process when no chat, release or lookup has needed it for the configured time. */
 	private stopIdleAgent(): void {
 		const idleMs = agentIdleMs(this.settings);
 		if (idleMs <= 0) {
 			return;
 		}
-		for (const entry of this.processes.list()) {
-			if (!entry.client.isRunning) {
-				continue;
-			}
-			if (entry.sessions.size > 0 || this.closing.size > 0) {
-				continue;
-			}
-			if (this.warmSession.current && this.warmSession.client === entry.client) {
-				continue;
-			}
-			if (Date.now() - entry.lastUsed < idleMs) {
-				continue;
-			}
-			void entry.client.stopWhenIdle();
+		const entry = this.processes.current;
+		if (!entry || !entry.client.isRunning) {
+			return;
 		}
+		if (entry.sessions.size > 0 || this.closing.size > 0) {
+			return;
+		}
+		if (this.warmSession.current && this.warmSession.client === entry.client) {
+			return;
+		}
+		if (Date.now() - entry.lastUsed < idleMs) {
+			return;
+		}
+		void entry.client.stopWhenIdle();
 	}
 
 	private async createChatSession(key: string, agent: AgentApi, owner: string, modelId: string, tools: readonly ToolDef[], context: ChatContext, reuse?: Reuse, effort?: string, lap?: Lap): Promise<ChatSession> {
@@ -780,7 +727,7 @@ export class ChatService {
 				void this.promptArchive().remember(systemPromptAppend);
 			}
 			const options: CreateSessionOptions = {
-				cwd: this.sharedRoot() ?? context.cwd,
+				cwd: this.processRoot(),
 				mcpServers: [bridgeServer(endpoint)],
 				model: acpModelValue(modelId),
 				systemPromptAppend,
@@ -1127,7 +1074,7 @@ export class ChatService {
 		this.log(`Closed the chat session for ${key} (${session.acp.sessionId}).`);
 	}
 
-	private handleAgentChange(entry: WorkspaceProcess, change: AgentChange): void {
+	private handleAgentChange(entry: AgentProcess, change: AgentChange): void {
 		// The sessions lived in the old process in every case. The next request opens
 		// new ones (resuming the stored conversation when it can) and restores the
 		// conversation from the host's history otherwise.
@@ -1155,4 +1102,12 @@ export class ChatService {
 	private promptSignIn(): void {
 		this.deps.signInRequired?.();
 	}
+}
+
+/** A folder in one spelling: no trailing separator, and a lower-case drive letter. */
+function normalizeRoot(folder: string): string {
+	const trimmed = folder.trim();
+	const stripped = trimmed.replace(/[\\/]+$/, '');
+	const root = stripped === '' || /^[A-Za-z]:$/.test(stripped) ? trimmed : stripped;
+	return root.replace(/^[A-Z]:/, drive => drive.toLowerCase());
 }

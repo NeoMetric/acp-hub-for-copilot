@@ -80,7 +80,12 @@ function service(mode = 'normal', deps: Partial<ChatServiceDeps> = {}): ChatServ
 	});
 	cleanups.push(async () => {
 		await created.close();
-		fs.rmSync(storageDir, { recursive: true, force: true });
+		// The agent ran in the store, and a process keeps the folder it runs in until it is gone.
+		try {
+			fs.rmSync(storageDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		} catch {
+			// Left to the temp folder's own clean-up.
+		}
 	});
 	return created;
 }

@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../../../src/core/adapter';
 import { AgentClient } from '../../../src/engine/acp/agentClient';
 import { ChatService } from '../../../src/engine/chat/ChatService';
-import type { WorkspaceProcesses } from '../../../src/engine/chat/workspaceProcesses';
+import type { AgentProcesses } from '../../../src/engine/chat/agentProcess';
 import type { ChatMessage, ChatRequest, ToolDef } from '../../../src/engine/model/chat';
 import type { StreamEvent } from '../../../src/engine/model/stream';
 import type { HostPort } from '../../../src/engine/ports/host';
@@ -85,7 +85,12 @@ function service(mode: string, logs: string[] = []) {
 	});
 	cleanups.push(async () => {
 		await chat.close();
-		fs.rmSync(storageDir, { recursive: true, force: true });
+		// The agent ran in the store, and a process keeps the folder it runs in until it is gone.
+		try {
+			fs.rmSync(storageDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		} catch {
+			// Left to the temp folder's own clean-up.
+		}
 	});
 
 	/** Sends a chat of the given user turns, as the host does, and returns the text the agent replied with. */
@@ -173,8 +178,8 @@ describe('starting an agent again that the idle shutdown stopped', () => {
 		const { chat, send } = service('normal', logs);
 		await send('chat-idle', ['hi']);
 
-		const processes = (chat as unknown as { processes: WorkspaceProcesses }).processes;
-		const client = processes.list()[0]?.client;
+		const processes = (chat as unknown as { processes: AgentProcesses }).processes;
+		const client = processes.current?.client;
 		expect(client, 'the chat opened its agent').toBeDefined();
 		await client!.stopWhenIdle();
 		expect(logs.some(line => line.includes('Nothing has used the Mock agent'))).toBe(true);

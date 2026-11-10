@@ -9,8 +9,8 @@ import { agentsRoot } from '../../src/engine/store/paths';
 /** What the window handed the link to the server, as the test reads it back. */
 interface LinkDeps {
 	root: string;
-	port: number;
-	autoStart: boolean;
+	detached?: boolean;
+	idleMinutes?: number;
 	serverScript: string;
 	extensionDir: string;
 	promptsDir?: string;
@@ -305,8 +305,8 @@ describe('the extension is a client of the server', () => {
 
 		const deps = mocks.linkDeps[0];
 		expect(deps.root).toBe(root);
-		expect(deps.port).toBe(8791);
-		expect(deps.autoStart).toBe(true);
+		expect(deps.detached).toBe(true);
+		expect(deps.idleMinutes).toBe(30);
 		expect(deps.serverScript).toBe(path.join(extensionDir, 'dist', 'server.js'));
 		expect(deps.extensionDir).toBe(extensionDir);
 		expect(deps.promptsDir).toBe(path.join(path.dirname(path.dirname(globalStorage)), 'prompts'));
@@ -314,13 +314,13 @@ describe('the extension is a client of the server', () => {
 		expect(mocks.ensured).toBeGreaterThan(0);
 	});
 
-	it('reads the port and the auto-start switch from its own settings', () => {
-		mocks.config['server.port'] = 9123;
-		mocks.config['server.autoStart'] = false;
+	it('reads how long the server lives and whether it is detached from its own settings', () => {
+		mocks.config['server.idleTimeoutMinutes'] = 5;
+		mocks.config['server.detached'] = false;
 		activateOnce();
 
-		expect(mocks.linkDeps[0].port).toBe(9123);
-		expect(mocks.linkDeps[0].autoStart).toBe(false);
+		expect(mocks.linkDeps[0].idleMinutes).toBe(5);
+		expect(mocks.linkDeps[0].detached).toBe(false);
 	});
 
 	it('writes the reason a server cannot be used to the output channel', () => {

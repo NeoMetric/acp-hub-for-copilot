@@ -145,7 +145,6 @@ function capturing(spawned: ChildProcess[]): ServerLinkDeps['spawn'] {
 
 function makeLink(deps: { root: string; port: number } & Partial<ServerLinkDeps>): ServerLink {
 	const link = new ServerLink({
-		autoStart: true,
 		serverScript: STUB,
 		extensionDir: path.dirname(STUB),
 		log,

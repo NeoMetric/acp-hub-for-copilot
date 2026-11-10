@@ -3,7 +3,10 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, LaunchContext } from '../../../src/core/adapter';
 import type { AgentSession, PromptHandlers } from '../../../src/engine/acp/agentClient';
 import { ChatService } from '../../../src/engine/chat/ChatService';
@@ -103,10 +106,21 @@ const request = (chatId: string, cwd: string): ChatRequest => {
 	return { chatId, cwd, messages, tools: [], model: 'mock-model' };
 };
 
-/** A service over fake agents, created per workspace root. */
+/** A store of the test's own, so the agent process runs in a folder of its own. */
+const storeDir = path.join(os.tmpdir(), `acp-hub-single-process-${process.pid}`);
+
+afterEach(() => {
+	try {
+		fs.rmSync(storeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	} catch {
+		// Left to the temp folder's own clean-up.
+	}
+});
+
+/** A service over one fake agent. */
 function service(options: { folders?: (chatId: string) => readonly string[] } = {}) {
 	const created: FakeAgent[] = [];
-	const launch: LaunchContext = { entryPath: 'fake', installDir: '', storageDir: '', settings: {}, workspaceFolder: '/window' };
+	const launch: LaunchContext = { entryPath: 'fake', installDir: '', storageDir: storeDir, settings: {}, workspaceFolder: '/window' };
 	const chat = new ChatService({
 		adapter,
 		host: hostWithFolders(options.folders),
@@ -128,45 +142,46 @@ function service(options: { folders?: (chatId: string) => readonly string[] } = 
 const respond = (chat: ChatService, chatId: string, cwd: string): Promise<void> =>
 	chat.respond(request(chatId, cwd), (_event: StreamEvent) => undefined, new AbortController().signal);
 
-describe('a process per workspace', () => {
-	it('starts one agent for each folder a chat names, and reuses the agent of a folder', async () => {
+/** The folder the agent runs in, as the service spells it. */
+const workspaceOf = (): string => path.join(storeDir, 'workspace').replace(/^[A-Z]:/, drive => drive.toLowerCase());
+
+describe('one agent process', () => {
+	it('serves chats from different folders, a session each', async () => {
 		const { chat, created } = service();
 		try {
 			await respond(chat, 'chat-a', '/repo-a');
 			await respond(chat, 'chat-b', '/repo-b');
 			await respond(chat, 'chat-c', '/repo-a');
 
-			expect(created.map(agent => agent.root)).toEqual(['/repo-a', '/repo-b']);
-			expect(created[0].sessions).toHaveLength(2);
-			expect(created[1].sessions).toHaveLength(1);
+			expect(created).toHaveLength(1);
+			expect(created[0].sessions).toHaveLength(3);
+			expect(chat.openSessions).toBe(3);
 		} finally {
 			await chat.close();
 		}
 	});
 
-	it('keeps one agent for one repository, however deep in it a chat is', async () => {
+	it('runs in its own folder, so the folder a chat belongs to decides nothing the process sees', async () => {
 		const { chat, created } = service({ folders: () => ['/repo'] });
 		try {
 			await respond(chat, 'chat-a', '/repo/src');
 			await respond(chat, 'chat-b', '/repo/test');
 
-			expect(created.map(agent => agent.root)).toEqual(['/repo']);
+			expect(created.map(agent => agent.root)).toEqual([workspaceOf()]);
+			expect(created[0].updateContext).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceFolder: workspaceOf() }));
 		} finally {
 			await chat.close();
 		}
 	});
 
-	it('keeps an agent for every folder in use, without a bound', async () => {
+	it('starts on the host\'s own reads too, and the model list shares the process of the chats', async () => {
 		const { chat, created } = service();
 		try {
-			const roots = ['/repo-a', '/repo-b', '/repo-c', '/repo-d', '/repo-e', '/repo-f'];
-			for (const [index, root] of roots.entries()) {
-				await respond(chat, `chat-${index}`, root);
-			}
+			await chat.start();
+			await respond(chat, 'chat-a', '/repo-a');
 
-			expect(created.map(agent => agent.root)).toEqual(roots);
-			expect(created.every(agent => !agent.disposed)).toBe(true);
-			expect(chat.openSessions).toBe(roots.length);
+			expect(created).toHaveLength(1);
+			expect(created[0].ensureStarted).toHaveBeenCalledTimes(1);
 		} finally {
 			await chat.close();
 		}

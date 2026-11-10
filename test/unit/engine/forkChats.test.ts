@@ -6,7 +6,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { claudeAdapter } from '../../../src/adapters/claude';
 import { codexAdapter } from '../../../src/adapters/codex';
 import { googleAdapter } from '../../../src/adapters/google';
@@ -132,7 +132,10 @@ function memento() {
 
 const services: ChatService[] = [];
 
-function harness(adapter: AgentAdapter = claudeAdapter, storageDir = '', isEnabled?: () => boolean) {
+/** A store of the test's own, so the agent process runs in a folder that can be removed with the test. */
+const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-fork-store-'));
+
+function harness(adapter: AgentAdapter = claudeAdapter, storageDir = storeDir, isEnabled?: () => boolean) {
 	const agent = new FakeAgent();
 	const state = memento();
 	const logs: string[] = [];
@@ -224,6 +227,14 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 });
 
+afterAll(() => {
+	try {
+		fs.rmSync(storeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	} catch {
+		// Left to the temp folder's own clean-up.
+	}
+});
+
 describe('the usage of an agent that reports no cache', () => {
 	const noCacheAdapter: AgentAdapter = { ...googleAdapter, reportsCache: false };
 
@@ -262,28 +273,20 @@ describe('the usage of an agent that reports no cache', () => {
 });
 
 describe('the folder a chat session is opened in', () => {
-	/** The agent processes are rooted in the folder the host names, with a drive letter of its own choosing. */
+	/** The agent process is rooted in its own workspace, with a drive letter of its own choosing. */
 	const lowerDrive = (folder: string) => folder.replace(/^[A-Z]:/, drive => drive.toLowerCase());
 
-	it('is the window folder the agent was launched in when the request names none', async () => {
-		const { agent, send } = harness();
-
-		await send(chat(1));
-
-		// The host names the launch folder of this harness when the request names none, and never a `file://` URI.
-		expect(agent.createdIn).toEqual([WINDOW]);
-		expect(agent.roots).toEqual([WINDOW]);
-	});
-
-	it('is the folder the request names when this machine has it', async () => {
+	it('is the agent\'s own workspace, whatever folder the request names', async () => {
 		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-cwd-'));
 		try {
 			const { agent, send } = harness();
 
-			await send([user('question 1')], 'c1', ['read'], folder);
+			await send(chat(1), 'c1');
+			await send([user('question 1')], 'c2', ['read'], folder);
 
-			expect(agent.createdIn).toEqual([folder]);
-			expect(agent.roots).toEqual([lowerDrive(path.resolve(folder))]);
+			// The request's own folder reaches the model through the prompt, never through the session's cwd.
+			expect(agent.createdIn).toEqual([lowerDrive(path.resolve(storeDir, 'workspace')), lowerDrive(path.resolve(storeDir, 'workspace'))]);
+			expect(agent.roots).toEqual([lowerDrive(path.resolve(storeDir, 'workspace'))]);
 		} finally {
 			fs.rmSync(folder, { recursive: true, force: true });
 		}

@@ -22,9 +22,6 @@ import { SidebarHost } from './sidebar/host';
 import { SidebarRelay } from './sidebar/relay';
 import type { ControlState } from './ui/messages';
 
-/** The port a window uses when the user names none; the server's own default. */
-const DEFAULT_PORT = 8791;
-
 /** How long a server no window uses stays up, in minutes, when the setting is absent. */
 const DEFAULT_IDLE_MINUTES = 30;
 
@@ -78,10 +75,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	const binding = new ServerLink({
 		root,
-		port: settings.get<number>('server.port') ?? DEFAULT_PORT,
-		autoStart: settings.get<boolean>('server.autoStart') ?? true,
 		detached: settings.get<boolean>('server.detached') ?? true,
-		sharedAgents: settings.get<boolean>('server.sharedAgents') ?? false,
 		idleMinutes: Math.max(0, settings.get<number>('server.idleTimeoutMinutes') ?? DEFAULT_IDLE_MINUTES),
 		version: typeof context.extension.packageJSON?.version === 'string' ? context.extension.packageJSON.version : undefined,
 		serverScript: path.join(extensionDir, 'dist', 'server.js'),
@@ -96,13 +90,10 @@ export function activate(context: vscode.ExtensionContext): void {
 	binding.onDidChange(state => {
 		if (state.kind === 'ready') {
 			log(`The ACP Hub server answers on ${state.endpoint.baseUrl}${state.owned ? ' (this window started it)' : ''}.`, 'debug');
-			const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-			if (folder && (settings.get<boolean>('server.warmAgents') ?? true)) {
-				warmAgents(state.endpoint, folder).then(
-					agents => log(`Starting the ${agents.join(', ') || 'no'} agent(s) in ${folder} ahead of the first chat.`),
-					error => log(`Could not warm the agents in ${folder}: ${messageOf(error)}`, 'warn'),
-				);
-			}
+			warmAgents(state.endpoint).then(
+				agents => log(`Starting the ${agents.join(', ') || 'no'} agent(s) ahead of the first chat.`),
+				error => log(`Could not warm the agents: ${messageOf(error)}`, 'warn'),
+			);
 		} else {
 			log(state.reason, 'warn');
 		}

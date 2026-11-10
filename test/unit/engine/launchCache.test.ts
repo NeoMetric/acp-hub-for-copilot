@@ -3,6 +3,9 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, LaunchContext } from '../../../src/core/adapter';
 import { AdapterNotInstalledError } from '../../../src/engine/acp/agentClient';
@@ -23,7 +26,18 @@ const adapter: AgentAdapter = {
 	systemPrompt: { toolAccess: '', listRequiredArguments: false },
 };
 
-const launch = (workspaceFolder: string): LaunchContext => ({ entryPath: 'fake', installDir: '', storageDir: '', settings: {}, workspaceFolder });
+const launch = (workspaceFolder: string): LaunchContext => ({ entryPath: 'fake', installDir: '', storageDir: storeDir, settings: {}, workspaceFolder });
+
+/** A store of the test's own, so the agent process runs in a folder of its own. */
+const storeDir = path.join(os.tmpdir(), `acp-hub-launch-cache-${process.pid}`);
+
+afterEach(() => {
+	try {
+		fs.rmSync(storeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	} catch {
+		// Left to the temp folder's own clean-up.
+	}
+});
 
 function memoryState() {
 	const values = new Map<string, unknown>();

@@ -7,14 +7,13 @@ import { WARM_ROUTE } from '../http/wire';
 import type { ServerEndpoint } from './serverLink';
 
 /**
- * Asks the server to start its agents in `folder`, so the first chat from it does not wait for them.
+ * Asks the server to start its agents, so the first chat does not wait for them.
  * Returns the agents the server is starting; the server does not wait for them to finish.
  */
-export async function warmAgents(endpoint: ServerEndpoint, folder: string, fetchOf: typeof fetch = fetch): Promise<string[]> {
+export async function warmAgents(endpoint: ServerEndpoint, fetchOf: typeof fetch = fetch): Promise<string[]> {
 	const response = await fetchOf(`${endpoint.baseUrl}${WARM_ROUTE}`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', ...(endpoint.token ? { authorization: `Bearer ${endpoint.token}` } : {}) },
-		body: JSON.stringify({ folder }),
 		signal: AbortSignal.timeout(5_000),
 	});
 	if (!response.ok) {

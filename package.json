@@ -2,7 +2,7 @@
 	"name": "acp-hub-for-copilot",
 	"displayName": "ACP Hub for Copilot",
 	"description": "A local server that serves your Claude, Codex and Antigravity ACP agents as OpenAI-compatible models for Copilot CLI, Copilot Chat in VS Code and any other client, with one page to install, sign in, configure and monitor them.",
-	"version": "0.0.6",
+	"version": "0.0.7",
 	"publisher": "NeoMetric",
 	"license": "MIT",
 	"icon": "media/icon.png",
@@ -122,30 +122,6 @@
 				"acpHub.server.detached": {
 					"order": 1,
 					"description": "Run the ACP Hub server outside VS Code, so it survives closing or reloading a window and shows in Task Manager as its own process tree. Turn it off to tie the server to the window that started it. Its output goes to `server.log` in the ACP Hub store folder. Applies the next time the server starts.",
-					"default": true,
-					"type": "boolean"
-				},
-				"acpHub.server.port": {
-					"order": 2,
-					"description": "The port the ACP Hub server answers on, on `127.0.0.1`. Every window of this machine uses the same port and so shares one server; change it when another program holds the default.",
-					"default": 8791,
-					"type": "number"
-				},
-				"acpHub.server.warmAgents": {
-					"order": 4,
-					"description": "When a window connects to the server, start every enabled agent in the window's first folder, so the first chat does not wait for the agents to start. Each folder keeps its own set of agent processes, which the idle timeout stops when nobody uses them. Turn it off to start agents only when a chat needs them.",
-					"default": true,
-					"type": "boolean"
-				},
-				"acpHub.server.sharedAgents": {
-					"order": 5,
-					"description": "Run one process per agent for every chat and every folder, instead of one per folder. The agents' own tools are off and the prompt names the chat's real folders, so the folder the agent runs in decides nothing a chat sees. Fewer processes, and agents warm for every window and client. Experimental. Applies the next time the server starts: run `ACP Hub: Stop Server` after changing it.",
-					"default": false,
-					"type": "boolean"
-				},
-				"acpHub.server.autoStart": {
-					"order": 3,
-					"description": "Start the ACP Hub server when no server answers on the port. Turn it off to run the server yourself, with `npm run server`.",
 					"default": true,
 					"type": "boolean"
 				}

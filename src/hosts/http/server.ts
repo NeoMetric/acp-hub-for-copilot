@@ -268,7 +268,7 @@ async function handle(composition: HeadlessComposition, catalog: ModelCatalog, t
 			return;
 		}
 		if (pathname === WARM_ROUTE && request.method === 'POST') {
-			await warmAgents(composition, request, response);
+			await warmAgents(composition, response);
 			return;
 		}
 		if (pathname === '/v1/chat/completions' && request.method === 'POST') {
@@ -577,16 +577,11 @@ async function isInstalled(service: ChatService, composition: HeadlessCompositio
 }
 
 /**
- * `POST /v1/warm`: starts every enabled agent in a folder, so the first chat from it does not wait for
- * the process. The answer does not wait for the agents; one that is not installed is left alone.
+ * `POST /v1/warm`: starts every enabled agent's process, so the first chat from
+ * any folder does not wait for it. The answer does not wait for the agents; one
+ * that is not installed is left alone.
  */
-async function warmAgents(composition: HeadlessComposition, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
-	const body = await readBody(request);
-	const folder = typeof body.folder === 'string' ? body.folder.trim() : '';
-	if (!folder || !path.isAbsolute(folder) || !fs.existsSync(folder)) {
-		sendError(response, 400, '"folder" must name a folder that exists, as an absolute path.', 'invalid_request_error', 'invalid_folder');
-		return;
-	}
+async function warmAgents(composition: HeadlessComposition, response: http.ServerResponse): Promise<void> {
 	const agents: string[] = [];
 	for (const adapter of composition.adapters) {
 		const service = composition.serviceOf(adapter.id);
@@ -594,9 +589,9 @@ async function warmAgents(composition: HeadlessComposition, request: http.Incomi
 			continue;
 		}
 		agents.push(adapter.id);
-		void service.warmFolder(folder).catch(error => {
+		void service.start().catch(error => {
 			if (!(error instanceof AdapterNotInstalledError)) {
-				composition.host.log(`Could not start the ${adapter.id} agent in ${folder}: ${messageOf(error)}`, 'warn');
+				composition.host.log(`Could not start the ${adapter.id} agent: ${messageOf(error)}`, 'warn');
 			}
 		});
 	}

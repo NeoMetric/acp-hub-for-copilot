@@ -3,7 +3,10 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, LaunchContext } from '../../../src/core/adapter';
 import type { AgentSession, PromptHandlers } from '../../../src/engine/acp/agentClient';
 import { ChatService } from '../../../src/engine/chat/ChatService';
@@ -11,6 +14,17 @@ import { MAX_CHAT_SESSIONS } from '../../../src/engine/chat/idle';
 import type { AgentApi } from '../../../src/engine/chat/types';
 import type { ChatMessage, ChatRequest, ToolResult } from '../../../src/engine/model/chat';
 import type { HostPort } from '../../../src/engine/ports/host';
+
+/** A store of the test's own, so the agent process runs in a folder of its own. */
+const storeDir = path.join(os.tmpdir(), `acp-hub-session-owners-${process.pid}`);
+
+afterEach(() => {
+	try {
+		fs.rmSync(storeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	} catch {
+		// Left to the temp folder's own clean-up.
+	}
+});
 
 const adapter: AgentAdapter = {
 	id: 'mock',
@@ -115,7 +129,7 @@ const request = (chatId: string, turns = 1): ChatRequest => {
 
 function service() {
 	const agent = new FakeAgent();
-	const launch: LaunchContext = { entryPath: 'fake', installDir: '', storageDir: '', settings: {}, workspaceFolder: '/repo' };
+	const launch: LaunchContext = { entryPath: 'fake', installDir: '', storageDir: storeDir, settings: {}, workspaceFolder: '/repo' };
 	const chat = new ChatService({
 		adapter,
 		host: fakeHost(),

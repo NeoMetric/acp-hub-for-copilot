@@ -99,7 +99,6 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 		promptsDir: env.ACP_HUB_PROMPTS_DIR?.trim() || undefined,
 		// A window names the extension folder it started the server from; a hand-started server reads it from where it runs.
 		extensionDir: env.ACP_HUB_EXTENSION_DIR?.trim() || undefined,
-		sharedAgents: env.ACP_HUB_SHARED_AGENTS?.trim() === '1',
 	});
 	const server = createServer({ composition, token, page: { control: composition.control }, onShutdown: () => stop('SIGTERM') });
 

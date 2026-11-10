@@ -21,7 +21,7 @@ export const API_VERSION = 1;
 /** `POST /shutdown`: asks a server that was given a way to stop to close, agents and all. */
 export const SHUTDOWN_ROUTE = '/shutdown';
 
-/** `POST /v1/warm` with `{ "folder": "<path>" }`: starts every enabled agent in that folder ahead of its first chat. */
+/** `POST /v1/warm`: starts every enabled agent's process ahead of its first chat. */
 export const WARM_ROUTE = '/v1/warm';
 
 /** `GET /health`: who the server is, and what it can drive right now. */

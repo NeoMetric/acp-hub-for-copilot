@@ -26,10 +26,8 @@ export type LinkState =
 export interface ServerLinkDeps {
 	/** The store root both gateways share; the token file lives here. */
 	readonly root: string;
-	/** The port the server listens on. */
-	readonly port: number;
-	/** Whether a window that finds no server may start one. */
-	readonly autoStart: boolean;
+	/** The port the server listens on; every window of this machine uses the same one, and a test names another. */
+	readonly port?: number;
 	/** The built server bundle, `dist/server.js`. */
 	readonly serverScript: string;
 	/** The folder the server runs in, so the store resolves as it does for the extension. */
@@ -46,8 +44,6 @@ export interface ServerLinkDeps {
 	 * editor's executable. `undefined`, or no answer, falls back to the editor's binary.
 	 */
 	readonly nodeCommand?: () => Promise<string | undefined>;
-	/** Run one agent process for every folder instead of one per folder; applies to the next server that starts. */
-	readonly sharedAgents?: boolean;
 	/** How many minutes a detached server may go unused before it closes itself; 0 keeps it running. */
 	readonly idleMinutes?: number;
 	/** The extension's version; a detached server of another version is replaced, so an update takes effect. */
@@ -58,6 +54,9 @@ export interface ServerLinkDeps {
 	/** How long the link waits between two probes of a server that is still starting. */
 	readonly retryMs?: number;
 }
+
+/** The port every window of this machine reaches the server on; the server's own default. */
+const SERVER_PORT = 8791;
 
 /** How long a server this window starts may take to answer. */
 const START_TIMEOUT_MS = 15_000;
@@ -117,6 +116,7 @@ type Probe =
  */
 export class ServerLink {
 	private readonly deps: ServerLinkDeps;
+	private readonly port: number;
 	private readonly baseUrl: string;
 	private readonly retryMs: number;
 	private readonly fetchOf: typeof fetch;
@@ -134,7 +134,8 @@ export class ServerLink {
 
 	constructor(deps: ServerLinkDeps) {
 		this.deps = deps;
-		this.baseUrl = `http://127.0.0.1:${deps.port}`;
+		this.port = deps.port ?? SERVER_PORT;
+		this.baseUrl = `http://127.0.0.1:${this.port}`;
 		this.retryMs = deps.retryMs ?? DEFAULT_RETRY_MS;
 		this.fetchOf = deps.fetch ?? fetch;
 		this.spawnOf = deps.spawn ?? nodeSpawn;
@@ -177,7 +178,7 @@ export class ServerLink {
 			return false;
 		}
 		this.child = undefined;
-		this.publish({ kind: 'unavailable', reason: `The server on port ${this.deps.port} was stopped; it starts again when a chat needs it.` });
+		this.publish({ kind: 'unavailable', reason: `The server on port ${this.port} was stopped; it starts again when a chat needs it.` });
 		return true;
 	}
 
@@ -237,7 +238,7 @@ export class ServerLink {
 		try {
 			// A window that closes must not wait on a process that will never report an exit.
 			if (!await settlesWithin(exited, KILL_AFTER_MS + 1000)) {
-				this.deps.log(`The server on port ${this.deps.port} did not report that it left; the window stops anyway.`, 'warn');
+				this.deps.log(`The server on port ${this.port} did not report that it left; the window stops anyway.`, 'warn');
 			}
 		} finally {
 			clearTimeout(killer);
@@ -251,7 +252,7 @@ export class ServerLink {
 		try {
 			return await this.attachOrStart();
 		} catch (error) {
-			return this.publish({ kind: 'unavailable', reason: `The server on port ${this.deps.port} could not be reached: ${messageOf(error)}` });
+			return this.publish({ kind: 'unavailable', reason: `The server on port ${this.port} could not be reached: ${messageOf(error)}` });
 		}
 	}
 
@@ -266,8 +267,8 @@ export class ServerLink {
 		}
 		if (probe.kind === 'older') {
 			// A server left running by an earlier version would keep serving the old code after an update.
-			this.deps.log(`The server on port ${this.deps.port} is version ${probe.version} and this window is ${this.deps.version}; replacing it.`);
-			if (!this.deps.autoStart || !await this.requestStop()) {
+			this.deps.log(`The server on port ${this.port} is version ${probe.version} and this window is ${this.deps.version}; replacing it.`);
+			if (!await this.requestStop()) {
 				return this.reach(false);
 			}
 			if (this.disposed) {
@@ -276,12 +277,6 @@ export class ServerLink {
 		} else if (probe.kind === 'compatible') {
 			// The server may be one this window started earlier; a watch must not unown it.
 			return this.reach(this.ownsRunning());
-		}
-		if (!this.deps.autoStart) {
-			return this.publish({
-				kind: 'unavailable',
-				reason: `No ACP Hub server answers on port ${this.deps.port}, and this window does not start one.`,
-			});
 		}
 		return this.start();
 	}
@@ -321,7 +316,7 @@ export class ServerLink {
 		}
 
 		ensureToken(this.deps.root);
-		this.deps.log(`Starting the ACP Hub server on port ${this.deps.port}.`);
+		this.deps.log(`Starting the ACP Hub server on port ${this.port}.`);
 		const child = await this.spawnServer();
 		this.child = child;
 		let stderr = '';
@@ -366,7 +361,7 @@ export class ServerLink {
 			}
 		});
 		child.on('exit', (code, signal) => {
-			this.deps.log(`The server on port ${this.deps.port} exited (${signal ?? `code ${code}`}).`, 'warn');
+			this.deps.log(`The server on port ${this.port} exited (${signal ?? `code ${code}`}).`, 'warn');
 		});
 		const giveUp = (): string | undefined => {
 			if (spawnError) {
@@ -375,7 +370,7 @@ export class ServerLink {
 			// Losing the port race to a window that started its server first is not a failure.
 			if (child.exitCode !== null && !stderr.includes('EADDRINUSE')) {
 				const said = lastLine(stderr);
-				return `The ACP Hub server on port ${this.deps.port} exited with code ${child.exitCode}${said ? `: ${said}` : '.'}`;
+				return `The ACP Hub server on port ${this.port} exited with code ${child.exitCode}${said ? `: ${said}` : '.'}`;
 			}
 			return undefined;
 		};
@@ -400,7 +395,7 @@ export class ServerLink {
 			return this.publish({ kind: 'unavailable', reason: stopped });
 		}
 		const reason = stderr.includes('EADDRINUSE')
-			? `Port ${this.deps.port} is held by another process; stop it or change the port this window uses.`
+			? `Port ${this.port} is held by another process; stop it and the next chat starts the server again.`
 			: this.didNotAnswer();
 		return this.publish({ kind: 'unavailable', reason });
 	}
@@ -410,13 +405,10 @@ export class ServerLink {
 			...process.env,
 			// The extension host is Electron, which runs a script as node only when told to.
 			ELECTRON_RUN_AS_NODE: '1',
-			ACP_HUB_PORT: String(this.deps.port),
+			ACP_HUB_PORT: String(this.port),
 		};
 		if (this.deps.promptsDir) {
 			env.ACP_HUB_PROMPTS_DIR = this.deps.promptsDir;
-		}
-		if (this.deps.sharedAgents) {
-			env.ACP_HUB_SHARED_AGENTS = '1';
 		}
 		if (this.deps.detached && this.deps.idleMinutes !== undefined) {
 			env.ACP_HUB_IDLE_MINUTES = String(this.deps.idleMinutes);
@@ -525,11 +517,11 @@ export class ServerLink {
 			});
 			await response.arrayBuffer();
 			if (!response.ok) {
-				this.deps.log(`The server on port ${this.deps.port} would not stop: HTTP ${response.status}. It may be a server this version did not start.`, 'warn');
+				this.deps.log(`The server on port ${this.port} would not stop: HTTP ${response.status}. It may be a server this version did not start.`, 'warn');
 				return false;
 			}
 		} catch (error) {
-			this.deps.log(`The server on port ${this.deps.port} could not be asked to stop: ${messageOf(error)}`, 'warn');
+			this.deps.log(`The server on port ${this.port} could not be asked to stop: ${messageOf(error)}`, 'warn');
 			return false;
 		}
 		const deadline = Date.now() + STOP_TIMEOUT_MS;
@@ -539,7 +531,7 @@ export class ServerLink {
 			}
 			await delay(this.retryMs);
 		}
-		this.deps.log(`The server on port ${this.deps.port} did not release its port within ${STOP_TIMEOUT_MS / 1000} s.`, 'warn');
+		this.deps.log(`The server on port ${this.port} did not release its port within ${STOP_TIMEOUT_MS / 1000} s.`, 'warn');
 		return false;
 	}
 
@@ -590,14 +582,14 @@ export class ServerLink {
 			// A body that is not JSON says nothing about who answers.
 		}
 		if (!response.ok) {
-			return { kind: 'incompatible', reason: `The server on port ${this.deps.port} answered the health check with HTTP ${response.status}; stop that process or change the port this window uses.` };
+			return { kind: 'incompatible', reason: `The server on port ${this.port} answered the health check with HTTP ${response.status}; stop that process.` };
 		}
 		if (health.name !== SERVER_NAME) {
 			const called = typeof health.name === 'string' ? ` (it calls itself "${health.name}")` : '';
-			return { kind: 'incompatible', reason: `The server on port ${this.deps.port} is not ACP Hub${called}; stop that process or change the port this window uses.` };
+			return { kind: 'incompatible', reason: `The server on port ${this.port} is not ACP Hub${called}; stop that process.` };
 		}
 		if (health.apiVersion !== API_VERSION) {
-			return { kind: 'incompatible', reason: `The server on port ${this.deps.port} answers /health with apiVersion ${health.apiVersion ?? 'none'} and this window speaks ${API_VERSION}; update that server.` };
+			return { kind: 'incompatible', reason: `The server on port ${this.port} answers /health with apiVersion ${health.apiVersion ?? 'none'} and this window speaks ${API_VERSION}; update that server.` };
 		}
 		if (this.deps.detached && this.deps.version && typeof health.version === 'string' && isOlder(health.version, this.deps.version)) {
 			return { kind: 'older', version: health.version };
@@ -622,10 +614,10 @@ export class ServerLink {
 			});
 		} catch (error) {
 			if (timedOut(error)) {
-				this.deps.log(`The server on port ${this.deps.port} did not answer the token check within ${PROBE_TIMEOUT_MS} ms; its token is left unchecked.`, 'debug');
+				this.deps.log(`The server on port ${this.port} did not answer the token check within ${PROBE_TIMEOUT_MS} ms; its token is left unchecked.`, 'debug');
 				return undefined;
 			}
-			return `The ACP Hub server on port ${this.deps.port} stopped answering: ${messageOf(error)}`;
+			return `The ACP Hub server on port ${this.port} stopped answering: ${messageOf(error)}`;
 		}
 		try {
 			await response.arrayBuffer();
@@ -633,20 +625,20 @@ export class ServerLink {
 			// The status already said what matters; a body that did not arrive says nothing more.
 		}
 		if (response.status === 401) {
-			return `The ACP Hub server on port ${this.deps.port} rejected the token; check ${tokenFileOf(this.deps.root)}.`;
+			return `The ACP Hub server on port ${this.port} rejected the token; check ${tokenFileOf(this.deps.root)}.`;
 		}
 		if (!response.ok) {
-			return `The ACP Hub server on port ${this.deps.port} answered the state check with HTTP ${response.status}.`;
+			return `The ACP Hub server on port ${this.port} answered the state check with HTTP ${response.status}.`;
 		}
 		return undefined;
 	}
 
 	private didNotAnswer(): string {
-		return `The ACP Hub server on port ${this.deps.port} did not answer within ${START_TIMEOUT_MS / 1000} s.`;
+		return `The ACP Hub server on port ${this.port} did not answer within ${START_TIMEOUT_MS / 1000} s.`;
 	}
 
 	private closed(): LinkState {
-		return this.publish({ kind: 'unavailable', reason: `The link to the server on port ${this.deps.port} is closed.` });
+		return this.publish({ kind: 'unavailable', reason: `The link to the server on port ${this.port} is closed.` });
 	}
 
 	/** Whether the server that answers is one this window started and that still runs. */

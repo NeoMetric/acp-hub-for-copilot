@@ -73,8 +73,6 @@ interface BootOptions {
 	readonly adapter?: AgentAdapter;
 	/** Sees every line the server logs. */
 	readonly log?: (message: string) => void;
-	/** One agent process for every folder. */
-	readonly sharedProcess?: boolean;
 }
 
 /** Starts the server on a free port over the mock agent, with a store root of its own. */
@@ -95,7 +93,6 @@ async function boot(options: BootOptions = {}): Promise<{ url: string; host: Hea
 		resolveLaunch: () => Promise.resolve({ entryPath: MOCK_AGENT, installDir: '', storageDir: path.join(root, 'agent'), workspaceFolder: root, settings: {} }),
 		// The gate the composition hands the engine, read from `config.json` on every call.
 		isEnabled: () => host.settings.get<boolean>(settingKey(agent.id, 'enabled')) !== false,
-		sharedProcess: options.sharedProcess,
 	});
 	const composition: HeadlessComposition = {
 		host,
@@ -112,13 +109,18 @@ async function boot(options: BootOptions = {}): Promise<{ url: string; host: Hea
 		await closed;
 		await composition.close();
 		loopback.dispose();
-		fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		// The agent ran in the store, and a process keeps the folder it runs in until it is gone.
+		try {
+			fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		} catch {
+			// Left to the temp folder's own clean-up.
+		}
 	});
 	return { url: `http://127.0.0.1:${address.port}`, host };
 }
 
-function post(url: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> {
-	return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+function post(url: string, body?: unknown, headers: Record<string, string> = {}): Promise<Response> {
+	return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
 }
 
 /** One OpenAI chat request, as a stock client writes it. */
@@ -279,90 +281,45 @@ describe('the HTTP server', () => {
 		expect(lines.findIndex(line => line.endsWith('Request received'))).toBeLessThan(lines.findIndex(line => line.endsWith('Prompt sent')));
 	});
 
-	it('starts its agents in a folder on request, without waiting for them', async () => {
+	it('starts every enabled agent on request, without waiting for them', async () => {
 		const url = await start();
 
-		const response = await post(`${url}/v1/warm`, { folder: os.tmpdir() });
+		const response = await post(`${url}/v1/warm`);
 
 		expect(response.status).toBe(202);
 		expect(await response.json()).toEqual({ agents: [adapter.id] });
 	});
 
-	it('reads the model list in the folder it warmed, so no second process is kept for it', async () => {
+	it('starts the agent once, in its own folder, whatever folder a chat belongs to', async () => {
 		const lines: string[] = [];
 		const { url } = await boot({ log: message => { lines.push(message); } });
-		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-warm-'));
-		// The agent runs in the folder and may still hold it as its working directory, so removing it is best effort.
+		const model = await firstModel(url);
+		const folders = ['a', 'b'].map(name => fs.mkdtempSync(path.join(os.tmpdir(), `acp-hub-two-${name}-`)));
 		cleanups.push(async () => {
-			try {
-				fs.rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-			} catch {
-				// Left to the temp folder's own clean-up.
-			}
-		});
-		await post(`${url}/v1/warm`, { folder });
-		const started = (): string[] => lines.filter(line => line.includes('Started the agent in'));
-		const deadline = Date.now() + 5_000;
-		while (started().length === 0 && Date.now() < deadline) {
-			await new Promise(resolve => setTimeout(resolve, 25));
-		}
-
-		await firstModel(url);
-
-		expect(started()).toHaveLength(1);
-		expect(started()[0].toLowerCase()).toContain(folder.toLowerCase());
-	});
-
-	describe('chats from two folders', () => {
-		/** Sends one chat from each of two folders, and returns the lines that say a process started. */
-		const startedFor = async (sharedProcess: boolean): Promise<string[]> => {
-			const lines: string[] = [];
-			const { url } = await boot({ sharedProcess, log: message => { lines.push(message); } });
-			const model = await firstModel(url);
-			const folders = ['a', 'b'].map(name => fs.mkdtempSync(path.join(os.tmpdir(), `acp-hub-two-${name}-`)));
-			cleanups.push(async () => {
-				for (const folder of folders) {
-					try {
-						fs.rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-					} catch {
-						// Left to the temp folder's own clean-up.
-					}
+			for (const folder of folders) {
+				try {
+					fs.rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+				} catch {
+					// Left to the temp folder's own clean-up.
 				}
-			});
-			for (const [index, folder] of folders.entries()) {
-				const response = await post(`${url}/v1/chat/completions`, chat(model, `hello from folder ${index}`), { 'x-acp-cwd': folder });
-				expect(response.status).toBe(200);
 			}
-			return lines.filter(line => line.includes('Started the agent in'));
-		};
-
-		it('get a process each by default, beside the one that reads the model list', async () => {
-			expect(await startedFor(false)).toHaveLength(3);
 		});
 
-		it('share one process in the agent\'s own folder when asked to', async () => {
-			const started = await startedFor(true);
-
-			expect(started).toHaveLength(1);
-			expect(started[0].replace(/\\/g, '/')).toContain('/agent/workspace');
-		});
-	});
-
-	it('refuses to warm a folder that is not an existing absolute path', async () => {
-		const url = await start();
-
-		for (const folder of ['relative/folder', path.join(os.tmpdir(), 'acp-hub-no-such-folder'), '', 7]) {
-			const response = await post(`${url}/v1/warm`, { folder });
-
-			expect(response.status, String(folder)).toBe(400);
+		for (const [index, folder] of folders.entries()) {
+			const response = await post(`${url}/v1/chat/completions`, chat(model, `hello from folder ${index}`), { 'x-acp-cwd': folder });
+			expect(response.status).toBe(200);
 		}
+
+		const started = lines.filter(line => line.includes('Started the agent in'));
+		expect(started).toHaveLength(1);
+		expect(started[0].replace(/\\/g, '/')).toContain('/agent/workspace');
 	});
 
 	it('does not warm an agent that is turned off', async () => {
 		const { url, host } = await boot();
 		await host.writeSetting(settingKey(adapter.id, 'enabled'), false);
 
-		const response = await post(`${url}/v1/warm`, { folder: os.tmpdir() });
+		const response = await post(`${url}/v1/warm`);
 
 		expect(await response.json()).toEqual({ agents: [] });
 	});

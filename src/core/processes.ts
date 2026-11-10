@@ -122,14 +122,6 @@ export async function killOrphanedServers(exePath: string): Promise<number[]> {
 	return orphans;
 }
 
-/** Best-effort teardown of every process this extension started. */
-export function killAllChildren(): void {
-	for (const pid of [...children]) {
-		killTreeSync(pid);
-	}
-}
-
-
 /** Calls `onLine` for every non-blank line a stream produces. */
 export function pipeLines(stream: NodeJS.ReadableStream, onLine: (line: string) => void): void {
 	let buffer = '';
