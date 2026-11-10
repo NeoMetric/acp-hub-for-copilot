@@ -6,7 +6,7 @@
 import type { UsageWindow } from '../core/adapter';
 import { formatTokens } from './chart';
 import { escapeHtml } from './html';
-import type { AgentCardState, ModelsView, SettingView, UsageHistoryView } from './messages';
+import type { AgentCardState, ModelsView, SettingView, UsageHistoryView, UsagePoint } from './messages';
 import { renderAreaChart, renderChartLegend } from './chart';
 
 export { escapeHtml };
@@ -228,6 +228,16 @@ const USAGE_RANGES: ReadonlyArray<{ readonly value: UsageRange; readonly label: 
 ];
 
 /**
+ * The points of the last `days` days. The list holds one point per day, workspace
+ * and agent, so a slice by count would cut a range short; the days themselves decide.
+ */
+function withinDays(points: readonly UsagePoint[], days: number): UsagePoint[] {
+	const dates = [...new Set(points.map(point => point.d))].sort();
+	const kept = new Set(dates.slice(-Math.max(1, days)));
+	return points.filter(point => kept.has(point.d));
+}
+
+/**
  * The Usage view: what the turns spent over time, in the four token kinds, with
  * the agents and workspaces left in by hand, and the retention that decides how
  * much history there is at all.
@@ -248,14 +258,22 @@ export function renderUsageView(view: UsageHistoryView, selection: UsageSelectio
 		.join('');
 
 	const chosen = (id: string, set: ReadonlySet<string>): boolean => set.size === 0 || set.has(id);
+	// A selection can outlive the workspace or agent it names, by a fold, a prune or a day leaving the window.
+	// One that no longer exists stops restricting the chart, rather than emptying it with no box left to clear.
+	const pick = (ids: readonly string[], selected: ReadonlySet<string>): ReadonlySet<string> => {
+		const known = new Set(ids);
+		return new Set([...selected].filter(id => known.has(id)));
+	};
+	const selectedAgents = pick(view.agents.map(agent => agent.id), selection.agents);
+	const selectedWorkspaces = pick(view.workspaces.map(workspace => workspace.id), selection.workspaces);
 	const box = (attributes: string, label: string, checked: boolean): string =>
 		`<label class="usage-filter"><input type="checkbox" ${attributes}${checked ? ' checked' : ''}> ${escapeHtml(label)}</label>`;
 
 	const agents = view.agents
-		.map(agent => box(`data-agent-filter="${escapeHtml(agent.id)}"`, agent.name, selection.agents.has(agent.id)))
+		.map(agent => box(`data-agent-filter="${escapeHtml(agent.id)}"`, agent.name, selectedAgents.has(agent.id)))
 		.join('');
 	const workspaces = view.workspaces
-		.map(workspace => box(`data-workspace-filter="${escapeHtml(workspace.id)}"`, workspace.name, selection.workspaces.has(workspace.id)))
+		.map(workspace => box(`data-workspace-filter="${escapeHtml(workspace.id)}"`, workspace.name, selectedWorkspaces.has(workspace.id)))
 		.join('');
 
 	const chosenAgent = (point: { a: number }): string => view.agents[point.a]?.id ?? '';
@@ -264,11 +282,11 @@ export function renderUsageView(view: UsageHistoryView, selection: UsageSelectio
 	const range = USAGE_RANGES.find(item => item.value === selection.range) ?? USAGE_RANGES[2]!;
 	const source = selection.range === 'today' ? view.today
 		: selection.range === 'all' ? view.weeks
-			: view.days.slice(-range.days);
+			: withinDays(view.days, range.days);
 
 	const sums = new Map<string, { label: string; values: [number, number, number, number] }>();
 	for (const point of source) {
-		if (!chosen(chosenAgent(point), selection.agents) || !chosen(chosenWorkspace(point), selection.workspaces)) {
+		if (!chosen(chosenAgent(point), selectedAgents) || !chosen(chosenWorkspace(point), selectedWorkspaces)) {
 			continue;
 		}
 		const sum = sums.get(point.d);

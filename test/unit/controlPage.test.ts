@@ -75,7 +75,7 @@ describe('ControlPage usage history', () => {
 	};
 
 	function history(): UsageHistorySurface {
-		return { view: vi.fn(async () => sample), setRetentionDays: vi.fn(async () => { }) };
+		return { view: vi.fn(async () => sample), setRetentionDays: vi.fn(async () => { }), onDidChange: () => () => { } };
 	}
 
 	it('offers no usage view when the host has no ledger', async () => {
@@ -367,5 +367,25 @@ describe('ControlPage', () => {
 
 		await page.handle({ type: 'signIn', agentId: 'a' });
 		expect(card('a').error).toBe('cancelled');
+	});
+});
+
+describe('ControlPage usage refresh', () => {
+	const sample: UsageHistoryView = {
+		retentionDays: 30, agents: [], workspaces: [], days: [], weeks: [], today: [], empty: true,
+	};
+
+	it('redraws when the ledger says a flush landed', async () => {
+		let fire: (() => void) | undefined;
+		const usage: UsageHistorySurface = {
+			view: async () => sample,
+			setRetentionDays: async () => { },
+			onDidChange: listener => { fire = listener; return () => { }; },
+		};
+		const { page, states } = setup({}, usage);
+		await page.handle({ type: 'ready' });
+		const before = states.length;
+		fire?.();
+		await vi.waitFor(() => expect(states.length).toBeGreaterThan(before));
 	});
 });

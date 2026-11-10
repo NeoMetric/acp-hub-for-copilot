@@ -184,19 +184,28 @@ function parseDay(text: string): UsageRow[] | undefined {
 	return kept;
 }
 
-async function readDay(file: string): Promise<Map<string, UsageRow>> {
+/** The rows a day file holds; a day that is not there yet reads as no rows, one that cannot be read throws. */
+export async function readDay(file: string): Promise<Map<string, UsageRow>> {
 	const rows = new Map<string, UsageRow>();
 	let text: string;
 	try {
 		text = await fs.promises.readFile(file, 'utf8');
-	} catch {
-		// A day that is not there yet is a day with nothing in it.
+} catch (error) {
+	// A day that is not there yet is a day with nothing in it; one that cannot be read is
+	// left alone, so the caller keeps its rows for the next flush instead of overwriting them.
+	if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
 		return rows;
 	}
-	for (const row of parseDay(text) ?? []) {
-		rows.set(rowKey(row), row);
-	}
-	return rows;
+	throw error;
+}
+const parsed = parseDay(text);
+if (!parsed) {
+	throw new Error(`${file} does not hold usage rows`);
+}
+for (const row of parsed) {
+	rows.set(rowKey(row), row);
+}
+return rows;
 }
 
 /** Writes a day through a temp file in the same folder, so a reader sees the old file or the new one, never half. */
@@ -482,6 +491,10 @@ export class UsageLedger {
 				this.deltas.delete(day);
 				continue;
 			}
+			// The rows are taken out of the way before the first await: a turn recorded while this
+			// flush is writing lands in a fresh map and is written next time, instead of vanishing
+			// with the map that is being dropped here.
+			this.deltas.delete(day);
 			const file = dayFile(this.options.root, day);
 			try {
 				await fs.promises.mkdir(path.dirname(file), { recursive: true });
@@ -494,9 +507,11 @@ export class UsageLedger {
 					foldDay(merged);
 					await writeDay(file, day, [...merged.values()]);
 				});
-				this.deltas.delete(day);
 				wrote = true;
 			} catch (error) {
+				for (const row of rows.values()) {
+					this.deltas.set(day, addTo(this.deltas.get(day), row));
+				}
 				this.options.log?.(`Could not write the usage day ${day}: ${messageOf(error)}`, 'warn');
 			}
 		}

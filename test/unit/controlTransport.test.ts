@@ -116,6 +116,7 @@ function adapter(id: string): AgentAdapter {
 		id,
 		displayName: `Agent ${id}`,
 		install: { kind: 'npm' },
+		auth: [],
 		settings: [],
 	} as unknown as AgentAdapter;
 }
@@ -133,6 +134,7 @@ function fakeControl(overrides: Partial<ControlSurface> = {}) {
 		isSignedIn: async () => undefined,
 		hasSavedKey: async () => false,
 		signIn: async () => ({ ok: true }),
+		saveApiKey: async () => ({ ok: true }),
 		signOut: async () => { },
 		readSettings: () => ({}),
 		writeSetting: vi.fn(async () => { }),
@@ -205,7 +207,7 @@ describe('the control transport', () => {
 	});
 
 	it('delivers the Models fields of a snapshot in both hosts', async () => {
-		const withModels: ControlState = { ...SAMPLE, models: { agents: [{ agentId: 'a', provider: { name: 'A', default: 'A' }, models: [] }] }, notice: 'Reload it.', syncing: true };
+		const withModels: ControlState = { ...SAMPLE, models: { agents: [{ agentId: 'a', provider: { name: 'A', default: 'A' }, models: [] }] }, notice: 'Reload it.', refreshing: true };
 
 		const webview = webviewChannel();
 		const fromWebview: ControlState[] = [];
@@ -355,5 +357,24 @@ describe('the control transport', () => {
 		});
 
 		expect(response.status).toBe(400);
+	});
+});
+describe('the webview transport', () => {
+	it('carries the usage view from the message into the page state', () => {
+		let deliver: ((data: unknown) => void) | undefined;
+		const transport = createWebviewTransport({ postMessage: () => { }, onMessage: listener => { deliver = listener; } });
+		const received: ControlState[] = [];
+		transport.onState(state => received.push(state));
+		const usage = {
+			retentionDays: 7,
+			agents: [{ id: 'a', name: 'A' }],
+			workspaces: [],
+			days: [],
+			weeks: [],
+			today: [],
+			empty: true,
+		};
+		deliver?.({ type: 'state', agents: [], usage });
+		expect(received[0]?.usage).toEqual(usage);
 	});
 });

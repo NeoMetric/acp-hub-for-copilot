@@ -226,3 +226,34 @@ describe('the Usage view', () => {
 			.toContain('Recording starts now; usage before this update was never stored.');
 	});
 });
+
+describe('the Usage view ranges', () => {
+	/** Ten days, two workspaces, one agent: twenty points, three tokens a day. */
+	const many: UsageHistoryView = {
+		retentionDays: 30,
+		agents: [{ id: 'claude', name: 'Claude Agent' }],
+		workspaces: [{ id: '/a', name: 'a' }, { id: '/b', name: 'b' }],
+		days: Array.from({ length: 10 }, (_, index) => {
+			const day = `2026-11-${String(index + 1).padStart(2, '0')}`;
+			return [{ d: day, w: 0, a: 0, v: [1, 0, 0, 0] as [number, number, number, number] }, { d: day, w: 1, a: 0, v: [2, 0, 0, 0] as [number, number, number, number] }];
+		}).flat(),
+		weeks: [],
+		today: [],
+		empty: false,
+	};
+
+	const totalShown = (html: string): string => /class="legend-total">Total <strong>([^<]+)<\/strong>/.exec(html)?.[1] ?? '';
+
+	it('keeps the days of the range, not the last rows of it', () => {
+		expect(totalShown(renderUsageView(many, { range: '30', agents: new Set(), workspaces: new Set() }))).toBe('30');
+		expect(totalShown(renderUsageView(many, { range: '7', agents: new Set(), workspaces: new Set() }))).toBe('21');
+	});
+
+	it('leaves out a selected workspace the snapshot no longer has, instead of emptying the chart', () => {
+		expect(totalShown(renderUsageView(many, { range: '30', agents: new Set(), workspaces: new Set(['/gone']) }))).toBe('30');
+	});
+
+	it('still honours a selection the snapshot does have', () => {
+		expect(totalShown(renderUsageView(many, { range: '30', agents: new Set(), workspaces: new Set(['/b']) }))).toBe('20');
+	});
+});

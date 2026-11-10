@@ -24,7 +24,7 @@ export interface WebviewChannel {
 
 /** Keeps the transport's side of a snapshot: the state, without the message that carried it. */
 function stateOf(message: ToWebview): ControlState {
-	return { agents: message.agents, globalSettings: message.globalSettings, models: message.models, notice: message.notice, syncing: message.syncing };
+	return { agents: message.agents, globalSettings: message.globalSettings, models: message.models, usage: message.usage, notice: message.notice, refreshing: message.refreshing };
 }
 
 /** The VS Code transport, over the webview's `postMessage`. */

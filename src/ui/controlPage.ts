@@ -80,6 +80,7 @@ export class ControlPage {
 			}
 			void this.publish();
 		});
+		this.usage?.onDidChange(() => { void this.publish(); });
 		control.onSignInUrl?.((agentId, prompt) => this.showSignInUrl(agentId, prompt));
 	}
 

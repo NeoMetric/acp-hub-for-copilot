@@ -29,8 +29,14 @@ export interface UsageSurfaceDeps {
  */
 export function createUsageHistorySurface(deps: UsageSurfaceDeps): UsageHistorySurface {
 	const { ledger } = deps;
+	const listeners = new Set<() => void>();
 	let cached: UsageHistoryView | undefined;
-	ledger.onDidFlush(() => { cached = undefined; });
+	ledger.onDidFlush(() => {
+		cached = undefined;
+		for (const listener of [...listeners]) {
+			listener();
+		}
+	});
 
 	return {
 		async view(): Promise<UsageHistoryView> {
@@ -44,6 +50,11 @@ export function createUsageHistorySurface(deps: UsageSurfaceDeps): UsageHistoryS
 			await deps.writeRetention(ledger.retainDays());
 			cached = undefined;
 		},
+
+		onDidChange(listener: () => void): () => void {
+			listeners.add(listener);
+			return () => { listeners.delete(listener); };
+		},
 	};
 }
 
@@ -54,7 +65,7 @@ function build(ledger: UsageLedger, known: UsageSurfaceDeps['agents']): UsageHis
 	const hourly = ledger.hourlyToday({});
 
 	const agents = agentList([...daily, ...weekly, ...hourly], known);
-	const workspaces = workspaceList(ledger, [...daily, ...weekly, ...hourly]);
+	const workspaces = workspaceList(ledger);
 
 	return {
 		retentionDays,
@@ -75,12 +86,12 @@ function agentList(buckets: readonly UsageBucket[], known: UsageSurfaceDeps['age
 }
 
 /** The heaviest workspaces the payload names, plus `other` when the rest have to fold into it. */
-function workspaceList(ledger: UsageLedger, buckets: readonly UsageBucket[]): Array<{ id: string; name: string }> {
+function workspaceList(ledger: UsageLedger): Array<{ id: string; name: string }> {
 	const heaviest = ledger.workspaces();
-	const recognised = new Set(heaviest);
-	const folds = buckets.some(bucket => !recognised.has(bucket.workspace)) || heaviest.length > MAX_VIEW_WORKSPACES;
-	// `other` takes one of the slots rather than being an extra, so the payload never names more than the cap.
-	const kept = folds ? heaviest.slice(0, MAX_VIEW_WORKSPACES - 1) : heaviest;
+	// `other` is a slot of its own, never one of the named ones, so the list can never name it twice.
+	const named = heaviest.filter(id => id !== FOLDED_WORKSPACE);
+	const folds = heaviest.length > named.length || named.length > MAX_VIEW_WORKSPACES;
+	const kept = named.slice(0, folds ? MAX_VIEW_WORKSPACES - 1 : MAX_VIEW_WORKSPACES);
 	const ids = folds ? [...kept, FOLDED_WORKSPACE] : kept;
 	return ids.map(id => ({ id, name: nameOfWorkspace(id) }));
 }

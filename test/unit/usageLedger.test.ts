@@ -8,7 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AcpTokenUsage } from '../../src/engine/acp/protocol';
-import { MAX_WORKSPACES_PER_DAY, UsageLedger, type UsageRecord } from '../../src/engine/usage/ledger';
+import { MAX_WORKSPACES_PER_DAY, readDay, UsageLedger, type UsageRecord } from '../../src/engine/usage/ledger';
 import { usageRoot } from '../../src/engine/store/paths';
 
 const roots: string[] = [];
@@ -374,5 +374,34 @@ describe('the workspace cap of a day', () => {
 		const reloaded = ledgerAt(11, 10);
 		expect(reloaded.workspaces()).toHaveLength(MAX_WORKSPACES_PER_DAY);
 		expect(reloaded.daily({}, 1).reduce((sum, bucket) => sum + bucket.totals.input, 0)).toBe(1530);
+	});
+});
+
+describe('a flush and a turn at the same time', () => {
+	it('keeps a turn recorded while a flush is in flight', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record({ usage: counts(1, 0, 0, 0) }));
+		const flushing = ledger.flush();
+		for (let turn = 0; turn < 20; turn += 1) {
+			await new Promise(resolve => setImmediate(resolve));
+			ledger.record(record({ usage: counts(1, 0, 0, 0) }));
+		}
+		await flushing;
+		await ledger.flush();
+		expect(rowsOf('2026-11-10').reduce((sum, row) => sum + row.in, 0)).toBe(21);
+	});
+});
+
+describe('reading a day file', () => {
+	it('treats a day that is not there yet as no rows', async () => {
+		store();
+		await expect(readDay(fileOf('2026-11-10'))).resolves.toEqual(new Map());
+	});
+
+	it('refuses to treat a day it cannot read as an empty one', async () => {
+		store();
+		fs.mkdirSync(fileOf('2026-11-10'), { recursive: true });
+		await expect(readDay(fileOf('2026-11-10'))).rejects.toBeTruthy();
 	});
 });

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AcpTokenUsage } from '../../src/engine/acp/protocol';
 import { UsageLedger } from '../../src/engine/usage/ledger';
 import { createUsageHistorySurface, type UsageSurfaceDeps } from '../../src/hosts/http/usageSurface';
+import { usageRoot as usageRootOf } from '../../src/engine/store/paths';
 
 const roots: string[] = [];
 
@@ -119,5 +120,23 @@ describe('the usage history view', () => {
 		const { surface } = surfaceOf(store(), written);
 		await surface.setRetentionDays(0);
 		expect(written).toEqual([1]);
+	});
+});
+
+describe('the workspace list of the view', () => {
+	it('names other once, even when the stored days already hold it', async () => {
+		const root = store();
+		fs.mkdirSync(usageRootOf(root), { recursive: true });
+		const rows = [
+			{ h: 9, w: 'other', a: 'claude', in: 1000, cr: 0, cw: 0, out: 0 },
+			...Array.from({ length: 9 }, (_, index) => ({ h: 9, w: `/repo/${index}`, a: 'claude', in: 1, cr: 0, cw: 0, out: 0 })),
+		];
+		fs.writeFileSync(path.join(usageRootOf(root), '2026-11-10.json'), JSON.stringify({ version: 1, day: '2026-11-10', rows }));
+
+		const { surface } = surfaceOf(root);
+		const view = await surface.view();
+		expect(view.workspaces.filter(workspace => workspace.id === 'other')).toHaveLength(1);
+		expect(view.workspaces).toHaveLength(8);
+		expect(sumOf(view.days)).toBe(1009);
 	});
 });

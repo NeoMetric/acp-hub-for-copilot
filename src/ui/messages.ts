@@ -106,6 +106,8 @@ export interface UsageHistoryView {
 export interface UsageHistorySurface {
 	view(): Promise<UsageHistoryView>;
 	setRetentionDays(days: number): Promise<void>;
+	/** Told when the history moved, so the page can draw it again; returns a function that unsubscribes. */
+	onDidChange(listener: () => void): () => void;
 }
 
 /** Everything the page draws, in one snapshot that names no host. */
