@@ -5,7 +5,7 @@
 
 import type { AgentSettings } from '../../core/adapter';
 
-/** Chat sessions kept alive at once; the least recently used idle one is closed beyond this. */
+/** Chat sessions kept alive at once per owner unless set; the least recently used idle one is closed beyond this. */
 export const MAX_CHAT_SESSIONS = 8;
 
 /**
@@ -32,6 +32,11 @@ function numberOr(settings: AgentSettings | undefined, key: string, fallback: nu
 /** How long a chat session may sit unused before it is released; 0 means never. */
 export function idleTimeoutMs(settings: AgentSettings | undefined): number {
 	return numberOr(settings, 'idleTimeoutSeconds', DEFAULT_IDLE_TIMEOUT_SECONDS) * 1000;
+}
+
+/** How many chat sessions an owner may keep alive at once; at least 1. */
+export function maxChatSessions(settings: AgentSettings | undefined): number {
+	return Math.max(1, Math.floor(numberOr(settings, 'maxChatSessions', MAX_CHAT_SESSIONS)));
 }
 
 /** How long the agent process may sit unused before it is stopped; 0 means never. */

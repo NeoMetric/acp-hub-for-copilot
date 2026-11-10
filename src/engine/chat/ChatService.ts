@@ -19,7 +19,7 @@ import type { RequestMeasurement } from './cache';
 import { ChatError } from './ChatError';
 import { countsOf } from './checkpoints';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './heldCalls';
-import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESSION_IDLE_MS } from './idle';
+import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, maxChatSessions, WARM_SESSION_IDLE_MS } from './idle';
 import { describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, toolChangeOf, toolsDiffer } from './keys';
 import { carriesToolResults, DEFAULT_TRANSCRIPT_OPTIONS, diverged, lastUserMessageIndex, persistentFingerprints, skillContextAfterReply, userWordsAfterReply, type TranscriptOptions } from './messages';
 import { acpModelValue, effortFor } from './modelOptions';
@@ -981,12 +981,13 @@ export class ChatService {
 	private evictIdleSessions(keep: string): void {
 		// The cap is per owner, so one client's burst of chats cannot close another's.
 		const counts = new Map<string, number>();
+		const cap = maxChatSessions(this.settings);
 		for (const session of this.sessions.values()) {
 			counts.set(session.owner, (counts.get(session.owner) ?? 0) + 1);
 		}
 		for (const [key, session] of this.sessions) {
 			const count = counts.get(session.owner) ?? 0;
-			if (count <= MAX_CHAT_SESSIONS || key === keep || session.turn) {
+			if (count <= cap || key === keep || session.turn) {
 				continue;
 			}
 			counts.set(session.owner, count - 1);

@@ -32,7 +32,7 @@ describe('claudeAdapter', () => {
 			manifestDirectory: 'adapters/claude',
 		});
 		expect(claudeAdapter.usage).toBe(claudeUsage);
-		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'toolSearch', 'defaultEffort', 'showThinking', 'replaceSystemPrompt']);
+		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'toolSearch', 'defaultEffort', 'showThinking', 'replaceSystemPrompt', 'maxChatSessions']);
 	});
 
 	it('lists its sign-in methods', () => {

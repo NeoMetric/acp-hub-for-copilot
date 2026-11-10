@@ -127,9 +127,9 @@ const request = (chatId: string, turns = 1): ChatRequest => {
 	return { chatId, cwd: '/repo', messages, tools: [], model: 'mock-model' };
 };
 
-function service() {
+function service(settings: LaunchContext['settings'] = {}) {
 	const agent = new FakeAgent();
-	const launch: LaunchContext = { entryPath: 'fake', installDir: '', storageDir: storeDir, settings: {}, workspaceFolder: '/repo' };
+	const launch: LaunchContext = { entryPath: 'fake', installDir: '', storageDir: storeDir, settings, workspaceFolder: '/repo' };
 	const chat = new ChatService({
 		adapter,
 		host: fakeHost(),
@@ -166,6 +166,20 @@ describe('the sessions an owner may keep', () => {
 			await respond(chat, 'b1', 2);
 			expect(agent.sessions).toHaveLength(MAX_CHAT_SESSIONS + 3);
 			expect(agent.prompts.at(-1)).toBe(bSession);
+		} finally {
+			await chat.close();
+		}
+	});
+
+	it('keeps as many sessions as the maxChatSessions setting says', async () => {
+		const { chat, agent } = service({ maxChatSessions: 2 });
+		try {
+			for (let index = 1; index <= 4; index++) {
+				await respond(chat, `a${index}`);
+			}
+
+			expect(agent.closed).toEqual([agent.sessions[0], agent.sessions[1]]);
+			expect(chat.openSessions).toBe(2);
 		} finally {
 			await chat.close();
 		}
