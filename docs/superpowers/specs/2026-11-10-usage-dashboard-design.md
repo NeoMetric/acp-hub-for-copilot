@@ -157,7 +157,7 @@ ledger.record({ at: Date.now(), agent: adapter.id, workspace: turn.chat?.cwd, us
 
 ### 5. Retention setting
 
-`usage.retentionDays`, integer, minimum 1, maximum 365, default 30. Added to the control page's global-setting allowlist so `setGlobalSetting` accepts it, and rendered only on the Usage view. The ledger's own copy is updated through `UsageSurface`.
+`usage.retentionDays`, integer, minimum 1, maximum 365, default 30. Stored in `config.json` as `acpHub.usage.retentionDays` through the same settings writer the page's global settings already use, but written by its own `setRetentionDays` action rather than by the generic `setGlobalSetting` handler: the field is rendered only on the Usage view, and it has to prune the ledger as well as store a number.
 
 ### 6. Costs, documented so nobody re-derives them
 
