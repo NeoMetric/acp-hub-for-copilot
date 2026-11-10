@@ -612,7 +612,7 @@ export class AgentClient implements Disposable {
 		if (this.busyOperations > 0 || this.disposed || !this.rpc) {
 			return;
 		}
-		const minutes = numberSetting(this.ctx.settings, 'idleShutdownMinutes', 30);
+		const minutes = numberSetting(this.ctx.settings, 'idleShutdownMinutes', 120);
 		if (minutes <= 0) {
 			return;
 		}

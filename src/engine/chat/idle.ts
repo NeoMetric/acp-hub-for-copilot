@@ -13,7 +13,7 @@ export const MAX_CHAT_SESSIONS = 8;
  * The conversation stays on disk and the next message resumes it. Settable;
  * 0 keeps sessions until evicted.
  */
-export const DEFAULT_IDLE_TIMEOUT_SECONDS = 120;
+export const DEFAULT_IDLE_TIMEOUT_SECONDS = 1800;
 /** How long the session that reads the models lives after its last use. */
 export const WARM_SESSION_IDLE_MS = 30_000;
 export const IDLE_SWEEP_MS = 15_000;
@@ -22,7 +22,7 @@ export const IDLE_SWEEP_MS = 15_000;
  * which also takes down the helper processes it started per session. The next
  * request starts it again. Settable; 0 keeps the agent for the whole window.
  */
-export const DEFAULT_AGENT_IDLE_MINUTES = 30;
+export const DEFAULT_AGENT_IDLE_MINUTES = 120;
 
 function numberOr(settings: AgentSettings | undefined, key: string, fallback: number): number {
 	const value = settings?.[key];
