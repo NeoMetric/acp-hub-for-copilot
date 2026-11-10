@@ -452,6 +452,50 @@ describe('a server that runs on its own', () => {
 		expect(fs.readFileSync(path.join(root, 'server.log'), 'utf8')).toContain('stub-server listening');
 	});
 
+	it('runs on the Node it is given, not on the editor\'s binary', async () => {
+		const port = await freePort();
+		let command: string | undefined;
+		const real = capturing([]) as unknown as (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+		const spawn = ((file: string, args: readonly string[], options: SpawnOptions) => {
+			command = file;
+			// The test's own Node stands in for the one found; the file name is what is checked.
+			return real(process.execPath, args, options);
+		}) as unknown as ServerLinkDeps['spawn'];
+		const link = makeLink({ root: storeRoot(), port, detached: true, spawn, nodeCommand: async () => 'C:\\tools\\node.exe' });
+
+		readyOf(await link.ensure());
+
+		expect(command).toBe('C:\\tools\\node.exe');
+	});
+
+	it('falls back to the editor\'s binary when no Node is found', async () => {
+		const port = await freePort();
+		let command: string | undefined;
+		const real = capturing([]) as unknown as (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+		const spawn = ((file: string, args: readonly string[], options: SpawnOptions) => {
+			command = file;
+			return real(file, args, options);
+		}) as unknown as ServerLinkDeps['spawn'];
+		const link = makeLink({ root: storeRoot(), port, detached: true, spawn, nodeCommand: async () => undefined });
+
+		readyOf(await link.ensure());
+
+		expect(command).toBe(process.execPath);
+	});
+
+	it('shows a running server\'s later log lines in the channel, also in a window that did not start it', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		readyOf(await makeLink({ root, port, detached: true }).ensure());
+		const lines: string[] = [];
+		const watcher = makeLink({ root, port, detached: true, log: (message: string) => { lines.push(message); } });
+
+		expect(readyOf(await watcher.ensure()).owned).toBe(false);
+		fs.appendFileSync(path.join(root, 'server.log'), `${new Date().toISOString()} INFO [claude] a chat started\n`);
+
+		await waitUntil(async () => lines.some(line => line.includes('a chat started')), 'the log line in the channel', 3_000);
+	});
+
 	it('stops the server on request and leaves it stopped until it is asked for again', async () => {
 		const port = await freePort();
 		const root = storeRoot();

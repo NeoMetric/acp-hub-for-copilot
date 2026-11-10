@@ -6,6 +6,7 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { scopedLog } from './core/logging';
+import { resolveNode } from './core/nodeRuntime';
 import { REGISTRY } from './core/registry';
 import { migrateSecretsOnce } from './core/secretsMigration';
 import { migrateInstallsOnce, migrateState, openSharedStore } from './core/sharedStore';
@@ -82,6 +83,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		idleMinutes: Math.max(0, settings.get<number>('server.idleTimeoutMinutes') ?? DEFAULT_IDLE_MINUTES),
 		version: typeof context.extension.packageJSON?.version === 'string' ? context.extension.packageJSON.version : undefined,
 		serverScript: path.join(extensionDir, 'dist', 'server.js'),
+		nodeCommand: () => resolveNode({ root, log }),
 		extensionDir,
 		// The prompts the server composes from, kept where the extension always kept them.
 		promptsDir: path.join(path.dirname(path.dirname(globalStorageDir)), 'prompts'),

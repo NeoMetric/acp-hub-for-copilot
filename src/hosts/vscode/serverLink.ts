@@ -41,6 +41,11 @@ export interface ServerLinkDeps {
 	 * every other window keeps using it. Its output goes to `server.log` in the store root.
 	 */
 	readonly detached?: boolean;
+	/**
+	 * The Node a detached server runs on, so it is a process of its own and not another copy of the
+	 * editor's executable. `undefined`, or no answer, falls back to the editor's binary.
+	 */
+	readonly nodeCommand?: () => Promise<string | undefined>;
 	/** How many minutes a detached server may go unused before it closes itself; 0 keeps it running. */
 	readonly idleMinutes?: number;
 	/** The extension's version; a detached server of another version is replaced, so an update takes effect. */
@@ -86,6 +91,9 @@ const SERVER_LOG = 'server.log';
 /** A log this large is started over, so a server that runs for months does not fill the disk. */
 const SERVER_LOG_LIMIT_BYTES = 2 * 1024 * 1024;
 
+/** How often the server's log file is read for new lines once the server is up. */
+const FOLLOW_INTERVAL_MS = 500;
+
 /** How long a server asked to stop gets to release its port. */
 const STOP_TIMEOUT_MS = 10_000;
 
@@ -114,6 +122,7 @@ export class ServerLink {
 	private readonly listeners = new Set<(state: LinkState) => void>();
 	private child: ChildProcess | undefined;
 	private tail: LogTail | undefined;
+	private follower: NodeJS.Timeout | undefined;
 	/** Set by a stop the user asked for, so the watch does not start the server again behind their back. */
 	private paused = false;
 	private current: LinkState | undefined;
@@ -184,6 +193,10 @@ export class ServerLink {
 		if (this.watcher) {
 			clearInterval(this.watcher);
 			this.watcher = undefined;
+		}
+		if (this.follower) {
+			clearInterval(this.follower);
+			this.follower = undefined;
 		}
 		this.listeners.clear();
 		const child = this.child;
@@ -274,6 +287,7 @@ export class ServerLink {
 			return this.publish({ kind: 'unavailable', reason: refused });
 		}
 		this.watch();
+		this.followAttached();
 		return this.publish({
 			kind: 'ready',
 			endpoint: { baseUrl: this.baseUrl, token: readToken(this.deps.root, process.env) },
@@ -299,7 +313,7 @@ export class ServerLink {
 
 		ensureToken(this.deps.root);
 		this.deps.log(`Starting the ACP Hub server on port ${this.deps.port}.`);
-		const child = this.spawnServer();
+		const child = await this.spawnServer();
 		this.child = child;
 		let stderr = '';
 		const hear = (text: string): void => {
@@ -322,6 +336,8 @@ export class ServerLink {
 			setTimeout(() => {
 				clearInterval(poll);
 				hear(tail.read());
+				// The server goes on writing for as long as it runs, and the channel keeps showing it.
+				this.follow(tail);
 			}, START_TIMEOUT_MS + 1000).unref();
 		}
 		// A dispose() that slipped in before the spawn owns no child, so the link must end this one,
@@ -380,7 +396,7 @@ export class ServerLink {
 		return this.publish({ kind: 'unavailable', reason });
 	}
 
-	private spawnServer(): ChildProcess {
+	private async spawnServer(): Promise<ChildProcess> {
 		const env: NodeJS.ProcessEnv = {
 			...process.env,
 			// The extension host is Electron, which runs a script as node only when told to.
@@ -399,7 +415,7 @@ export class ServerLink {
 		// extension could not replace it while the server it started was running.
 		env.ACP_HUB_EXTENSION_DIR = this.deps.extensionDir;
 		if (this.deps.detached) {
-			return this.spawnDetached(env);
+			return this.spawnDetached(env, await this.nodeOf());
 		}
 		return this.spawnOf(process.execPath, [this.deps.serverScript, EXIT_WITH_PARENT_FLAG], {
 			cwd: this.deps.root,
@@ -409,18 +425,68 @@ export class ServerLink {
 		});
 	}
 
+	/** The Node the detached server runs on; the editor's own binary when no other is found. */
+	private async nodeOf(): Promise<string> {
+		try {
+			const node = await this.deps.nodeCommand?.();
+			if (node) {
+				this.deps.log(`The server runs on ${node}.`, 'debug');
+				return node;
+			}
+		} catch (error) {
+			this.deps.log(`Could not find a Node.js for the server: ${messageOf(error)}`, 'warn');
+		}
+		return process.execPath;
+	}
+
+	/** Shows what a server writes to its log in this window's channel, from now on. */
+	private follow(tail: LogTail): void {
+		if (this.disposed || this.follower) {
+			return;
+		}
+		this.follower = setInterval(() => {
+			for (const line of tail.read().split(/\r?\n/)) {
+				const said = line.trim();
+				if (said) {
+					const { level, message } = parseServerLine(said);
+					this.deps.log(message, level);
+				}
+			}
+		}, FOLLOW_INTERVAL_MS);
+		this.follower.unref();
+	}
+
+	/** A window that attached to a server it did not start follows that server's log from its end. */
+	private followAttached(): void {
+		if (!this.deps.detached || this.follower || this.tail) {
+			return;
+		}
+		const file = path.join(this.deps.root, SERVER_LOG);
+		try {
+			this.tail = new LogTail(file, fs.statSync(file).size);
+		} catch {
+			return;
+		}
+		this.follow(this.tail);
+	}
+
 	/**
 	 * The server as a process of its own: no pipe to this window that a closing window would break, and
 	 * its output in a file, which the window reads while the server starts.
 	 */
-	private spawnDetached(env: NodeJS.ProcessEnv): ChildProcess {
+	private spawnDetached(env: NodeJS.ProcessEnv, node: string): ChildProcess {
 		const file = path.join(this.deps.root, SERVER_LOG);
 		fs.mkdirSync(this.deps.root, { recursive: true });
 		const startOver = fs.existsSync(file) && fs.statSync(file).size > SERVER_LOG_LIMIT_BYTES;
 		const descriptor = fs.openSync(file, startOver ? 'w' : 'a');
+		if (this.follower) {
+			// The start-up reads the new server's log itself, and follows it once the server is up.
+			clearInterval(this.follower);
+			this.follower = undefined;
+		}
 		this.tail = new LogTail(file, fs.fstatSync(descriptor).size);
 		try {
-			const child = this.spawnOf(process.execPath, [this.deps.serverScript, DETACHED_FLAG], {
+			const child = this.spawnOf(node, [this.deps.serverScript, DETACHED_FLAG], {
 				cwd: this.deps.root,
 				env,
 				stdio: ['ignore', descriptor, descriptor],
@@ -668,6 +734,10 @@ class LogTail {
 	read(): string {
 		try {
 			const size = fs.statSync(this.file).size;
+			if (size < this.offset) {
+				// The log was started over, so what it holds now is all new.
+				this.offset = 0;
+			}
 			if (size <= this.offset) {
 				return '';
 			}
