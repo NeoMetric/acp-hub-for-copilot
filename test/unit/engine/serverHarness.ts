@@ -164,7 +164,11 @@ export async function start(agents: HarnessAgent[] = [{ adapter: mockAdapter() }
 		await closed;
 		await composition.close();
 		loopback.dispose();
-		fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		try {
+			fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		} catch {
+			// A mock agent still shutting down can hold the folder on Windows; it is left to the temp folder's own clean-up.
+		}
 	});
 	return {
 		url: `http://127.0.0.1:${address.port}`,

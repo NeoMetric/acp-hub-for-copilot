@@ -294,8 +294,13 @@ describe('ServerProvider models', () => {
 
 		release();
 		await waitUntil(() => fired > 0, 'the live list to be reported');
-		const live = await provider.provideLanguageModelChatInformation(modelsOptions, token());
-		expect(live.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent', 'opus', 'opus::agent']);
+		// The server coming up reports a change of its own before the list arrives, so wait for the list itself.
+		let live: string[] = [];
+		await waitUntil(() => {
+			void provider.provideLanguageModelChatInformation(modelsOptions, token()).then(offered => { live = offered.map(model => model.id); });
+			return live.length === 4;
+		}, 'the live list to be offered');
+		expect(live).toEqual(['sonnet', 'sonnet::agent', 'opus', 'opus::agent']);
 		expect(state.get(modelsStateKey('claude'))).toEqual([savedEntry('claude', 'sonnet')]);
 	});
 
