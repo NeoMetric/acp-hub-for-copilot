@@ -66,13 +66,19 @@ export interface ForkPoint {
 	readonly messageOccurrence: number;
 }
 
-/** Token counts of one turn, as reported by the agent. */
+/**
+ * Token counts of one turn, normalized: the four counts never overlap, so
+ * `inputTokens + cachedReadTokens + cachedWriteTokens` is the whole prompt and
+ * `outputTokens` is everything generated, thinking included.
+ */
 export interface AcpTokenUsage {
+	/** Fresh prompt tokens only: neither served from the cache nor written to it. */
 	readonly inputTokens: number;
 	readonly outputTokens: number;
 	readonly cachedReadTokens: number;
 	readonly cachedWriteTokens: number;
 	readonly totalTokens: number;
+	/** The part of `outputTokens` that was thinking; informational. */
 	readonly reasoningOutputTokens?: number;
 }
 

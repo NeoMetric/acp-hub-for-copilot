@@ -990,13 +990,20 @@ export function readTokenUsage(response: AcpPromptResponse): AcpTokenUsage | und
 	// and `cachedWriteTokens`.
 	const cachedReadTokens = count(quota?.cachedInputTokens ?? usage.cachedReadTokens);
 	const cachedWriteTokens = count(quota?.cacheWriteInputTokens ?? usage.cachedWriteTokens);
+	const reasoningOutputTokens = typeof usage.reasoningOutputTokens === 'number' ? usage.reasoningOutputTokens : typeof thoughtTokens === 'number' ? thoughtTokens : undefined;
+
+	const parts = inputTokens + outputTokens + cachedReadTokens + cachedWriteTokens;
+	const reportedTotal = count(usage.totalTokens);
+	// Some agents count thinking inside the output and others beside it; the agent's own total tells
+	// which, so `outputTokens` is the whole of what was generated either way.
+	const thinkingBesideOutput = (reasoningOutputTokens ?? 0) > 0 && (reportedTotal === 0 || reportedTotal >= parts + (reasoningOutputTokens ?? 0));
 
 	return {
 		inputTokens,
-		outputTokens,
+		outputTokens: thinkingBesideOutput ? outputTokens + (reasoningOutputTokens ?? 0) : outputTokens,
 		cachedReadTokens,
 		cachedWriteTokens,
-		totalTokens: count(usage.totalTokens) || inputTokens + outputTokens + cachedReadTokens + cachedWriteTokens,
-		reasoningOutputTokens: typeof usage.reasoningOutputTokens === 'number' ? usage.reasoningOutputTokens : typeof thoughtTokens === 'number' ? thoughtTokens : undefined,
+		totalTokens: reportedTotal || parts + (thinkingBesideOutput ? reasoningOutputTokens ?? 0 : 0),
+		reasoningOutputTokens,
 	};
 }

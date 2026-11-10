@@ -313,6 +313,7 @@ export function renderUsageView(view: UsageHistoryView, selection: UsageSelectio
 		+ `<div class="usage-filter-group"><span class="setting-label">Workspaces</span>${workspaces}</div></div>`
 		+ renderAreaChart(points)
 		+ renderChartLegend(totals)
+		+ '<div class="note">Cache write is reported only by Claude; Codex and Google never report it, so it stays at 0 for them.</div>'
 		+ '</div>';
 }
 

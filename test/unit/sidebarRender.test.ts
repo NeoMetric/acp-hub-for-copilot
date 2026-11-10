@@ -208,6 +208,11 @@ describe('the Usage view', () => {
 		expect(html).toContain('<svg');
 	});
 
+	it('says that only Claude reports cache writes', () => {
+		const html = renderUsageView(view, { range: '7', agents: new Set(), workspaces: new Set() });
+		expect(html).toContain('Codex and Google never report it');
+	});
+
 	it('sums only the selected agent and workspace into the chart', () => {
 		expect(totalShown(renderUsageView(view, { range: '7', agents: new Set(), workspaces: new Set() }))).toBe('190');
 		expect(totalShown(renderUsageView(view, { range: '7', agents: new Set(['claude']), workspaces: new Set() }))).toBe('180');

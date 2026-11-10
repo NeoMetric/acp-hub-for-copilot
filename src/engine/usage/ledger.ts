@@ -80,8 +80,8 @@ function countsOf(usage: AcpTokenUsage): TokenTotals {
 		input: usage.inputTokens,
 		cacheRead: usage.cachedReadTokens,
 		cacheWrite: usage.cachedWriteTokens,
-		// Reasoning is billed as output, and an agent that reports it adds it on top.
-		output: usage.outputTokens + (usage.reasoningOutputTokens ?? 0),
+		// `outputTokens` already includes any reasoning (see `AcpTokenUsage`).
+		output: usage.outputTokens,
 	};
 }
 

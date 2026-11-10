@@ -378,7 +378,13 @@ describe('readTokenUsage', () => {
 	it('reads the usage the Antigravity server puts in the prompt result, with its thinking tokens', () => {
 		const usage = readTokenUsage({ usage: { inputTokens: 120, outputTokens: 30, thoughtTokens: 45, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195 } as never });
 
-		expect(usage).toEqual({ inputTokens: 120, outputTokens: 30, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195, reasoningOutputTokens: 45 });
+		expect(usage).toEqual({ inputTokens: 120, outputTokens: 75, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195, reasoningOutputTokens: 45 });
+	});
+
+	it('leaves the output alone when the agent already counts thinking in it', () => {
+		const usage = readTokenUsage({ usage: { inputTokens: 20, outputTokens: 80, thoughtTokens: 50, cachedReadTokens: 100, cachedWriteTokens: 0, totalTokens: 200 } as never });
+
+		expect(usage).toEqual({ inputTokens: 20, outputTokens: 80, cachedReadTokens: 100, cachedWriteTokens: 0, totalTokens: 200, reasoningOutputTokens: 50 });
 	});
 
 	it('returns undefined without any usage', () => {

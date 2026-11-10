@@ -93,11 +93,11 @@ describe('recording a turn', () => {
 		}]);
 	});
 
-	it('adds reasoning tokens to the output of a turn', () => {
+	it('counts the output of a turn once, however much of it was thinking', () => {
 		store();
 		const ledger = ledgerAt(11, 10);
 		ledger.record(record({ usage: counts(0, 0, 0, 300, 50) }));
-		expect(ledger.daily({}, 1)[0]?.totals.output).toBe(350);
+		expect(ledger.daily({}, 1)[0]?.totals.output).toBe(300);
 	});
 
 	it('records nothing for a turn that reported no usage', () => {
