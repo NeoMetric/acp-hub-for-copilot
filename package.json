@@ -131,6 +131,12 @@
 					"default": 8791,
 					"type": "number"
 				},
+				"acpHub.server.warmAgents": {
+					"order": 4,
+					"description": "When a window connects to the server, start every enabled agent in the window's first folder, so the first chat does not wait for the agents to start. Each folder keeps its own set of agent processes, which the idle timeout stops when nobody uses them. Turn it off to start agents only when a chat needs them.",
+					"default": true,
+					"type": "boolean"
+				},
 				"acpHub.server.autoStart": {
 					"order": 3,
 					"description": "Start the ACP Hub server when no server answers on the port. Turn it off to run the server yourself, with `npm run server`.",

@@ -47,7 +47,7 @@ describe('vendors', () => {
 	it('contributes only the settings the extension itself reads', () => {
 		const properties = packageJson.contributes.configuration.properties as Record<string, Record<string, unknown>>;
 		// The design: the extension keeps only its own settings — the server's port, whether and how it starts one, and when it closes.
-		expect(Object.keys(properties).sort()).toEqual(['acpHub.server.autoStart', 'acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes', 'acpHub.server.port']);
+		expect(Object.keys(properties).sort()).toEqual(['acpHub.server.autoStart', 'acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes', 'acpHub.server.port', 'acpHub.server.warmAgents']);
 		expect(properties['acpHub.server.port']).toMatchObject({ type: 'number', default: 8791 });
 		expect(properties['acpHub.server.autoStart']).toMatchObject({ type: 'boolean', default: true });
 		expect(properties['acpHub.server.detached']).toMatchObject({ type: 'boolean', default: true });

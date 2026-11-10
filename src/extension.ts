@@ -16,6 +16,7 @@ import { vendorOf } from './core/vendors';
 import { agentsRoot, storageRoot } from './engine/store/paths';
 import { ServerLink } from './hosts/vscode/serverLink';
 import { ServerProvider } from './hosts/vscode/serverProvider';
+import { warmAgents } from './hosts/vscode/warmAgents';
 import { changedAgents } from './sidebar/agentChanges';
 import { SidebarHost } from './sidebar/host';
 import { SidebarRelay } from './sidebar/relay';
@@ -94,6 +95,13 @@ export function activate(context: vscode.ExtensionContext): void {
 	binding.onDidChange(state => {
 		if (state.kind === 'ready') {
 			log(`The ACP Hub server answers on ${state.endpoint.baseUrl}${state.owned ? ' (this window started it)' : ''}.`, 'debug');
+			const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+			if (folder && (settings.get<boolean>('server.warmAgents') ?? true)) {
+				warmAgents(state.endpoint, folder).then(
+					agents => log(`Starting the ${agents.join(', ') || 'no'} agent(s) in ${folder} ahead of the first chat.`),
+					error => log(`Could not warm the agents in ${folder}: ${messageOf(error)}`, 'warn'),
+				);
+			}
 		} else {
 			log(state.reason, 'warn');
 		}

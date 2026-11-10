@@ -24,7 +24,7 @@ import type { ControlAction, ControlState, ModelsSurface } from '../../ui/messag
 import { ACTION_ROUTE, EVENTS_ROUTE, STATE_ROUTE } from '../../ui/transport';
 import { rememberExtras, ToolCallParking, type RequestExtras } from './host';
 import { createModelsSurface } from './modelsSurface';
-import { API_VERSION, SERVER_NAME, SHUTDOWN_ROUTE, type AcpRequestExtras, type HealthWire, type ModelWire } from './wire';
+import { API_VERSION, SERVER_NAME, SHUTDOWN_ROUTE, WARM_ROUTE, type AcpRequestExtras, type HealthWire, type ModelWire } from './wire';
 
 /** The package version esbuild bakes into the bundle; it is undefined when the sources run unbundled. */
 declare const __ACP_HUB_VERSION__: string | undefined;
@@ -265,6 +265,10 @@ async function handle(composition: HeadlessComposition, catalog: ModelCatalog, t
 		}
 		if (pathname === '/v1/models' && request.method === 'GET') {
 			await sendModels(catalog, composition, response);
+			return;
+		}
+		if (pathname === WARM_ROUTE && request.method === 'POST') {
+			await warmAgents(composition, request, response);
 			return;
 		}
 		if (pathname === '/v1/chat/completions' && request.method === 'POST') {
@@ -570,6 +574,33 @@ async function isInstalled(service: ChatService, composition: HeadlessCompositio
 		}
 		return false;
 	}
+}
+
+/**
+ * `POST /v1/warm`: starts every enabled agent in a folder, so the first chat from it does not wait for
+ * the process. The answer does not wait for the agents; one that is not installed is left alone.
+ */
+async function warmAgents(composition: HeadlessComposition, request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+	const body = await readBody(request);
+	const folder = typeof body.folder === 'string' ? body.folder.trim() : '';
+	if (!folder || !path.isAbsolute(folder) || !fs.existsSync(folder)) {
+		sendError(response, 400, '"folder" must name a folder that exists, as an absolute path.', 'invalid_request_error', 'invalid_folder');
+		return;
+	}
+	const agents: string[] = [];
+	for (const adapter of composition.adapters) {
+		const service = composition.serviceOf(adapter.id);
+		if (!service?.enabled) {
+			continue;
+		}
+		agents.push(adapter.id);
+		void service.warmFolder(folder).catch(error => {
+			if (!(error instanceof AdapterNotInstalledError)) {
+				composition.host.log(`Could not start the ${adapter.id} agent in ${folder}: ${messageOf(error)}`, 'warn');
+			}
+		});
+	}
+	sendJson(response, 202, { agents });
 }
 
 /** `POST /v1/chat/completions`, streaming or not, over the agent the model id names. */

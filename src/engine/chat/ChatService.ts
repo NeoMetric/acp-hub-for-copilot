@@ -493,6 +493,16 @@ export class ChatService {
 		await this.ensureWarmSession();
 	}
 
+	/** Starts the agent in a folder before its first chat; one that is turned off is left alone, and one that is not installed throws. */
+	async warmFolder(folder: string): Promise<void> {
+		if (!this.enabled) {
+			return;
+		}
+		const launch = await this.resolveLaunch();
+		const entry = await this.processAt(normalizeRoot(folder), launch);
+		await entry.client.ensureStarted();
+	}
+
 	/** Starts the agent to let its own browser sign-in flow run. */
 	async startForSignIn(methodId?: string): Promise<boolean> {
 		const agent = await this.defaultClient();

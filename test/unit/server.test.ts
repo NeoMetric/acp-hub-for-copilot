@@ -261,6 +261,34 @@ describe('the HTTP server', () => {
 		expect(body.openSessions).toBe(0);
 	});
 
+	it('starts its agents in a folder on request, without waiting for them', async () => {
+		const url = await start();
+
+		const response = await post(`${url}/v1/warm`, { folder: os.tmpdir() });
+
+		expect(response.status).toBe(202);
+		expect(await response.json()).toEqual({ agents: [adapter.id] });
+	});
+
+	it('refuses to warm a folder that is not an existing absolute path', async () => {
+		const url = await start();
+
+		for (const folder of ['relative/folder', path.join(os.tmpdir(), 'acp-hub-no-such-folder'), '', 7]) {
+			const response = await post(`${url}/v1/warm`, { folder });
+
+			expect(response.status, String(folder)).toBe(400);
+		}
+	});
+
+	it('does not warm an agent that is turned off', async () => {
+		const { url, host } = await boot();
+		await host.writeSetting(settingKey(adapter.id, 'enabled'), false);
+
+		const response = await post(`${url}/v1/warm`, { folder: os.tmpdir() });
+
+		expect(await response.json()).toEqual({ agents: [] });
+	});
+
 	it('ends the response on the tool call the client has to run', async () => {
 		const url = await start();
 		const model = await firstModel(url);
