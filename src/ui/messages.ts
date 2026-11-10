@@ -40,6 +40,8 @@ export interface AgentCardState {
 	removable: boolean;
 	signedIn: SignedInView;
 	hasSavedKey: boolean;
+	/** Present when the agent can sign in with an API key; the page then offers a field for one. */
+	apiKey?: { label: string; keyPrefix?: string };
 	enabled: boolean;
 	visible: boolean;
 	settings: SettingView[];
@@ -67,8 +69,43 @@ export interface ModelsSurface {
 	view(): Promise<ModelsView>;
 	setProviderName(agentId: string, name: string): Promise<string>;
 	setModelName(agentId: string, model: string, name: string): Promise<string>;
-	/** Fetches the agents' current models, then applies the names. */
-	sync(): Promise<string>;
+	/** Reads the agents' models again, and answers what it refreshed. */
+	refresh(): Promise<string>;
+}
+
+/**
+ * One point of the usage chart: a day, a week or an hour, and the four token kinds
+ * that point spent. `w` and `a` index the workspaces and agents of the view, and
+ * `v` is positional, so a month of history stays small on the wire.
+ */
+export interface UsagePoint {
+	/** `YYYY-MM-DD` for a day or the week's Monday, `HH` for an hour. */
+	d: string;
+	w: number;
+	a: number;
+	/** Fresh input, cache read, cache write, output. */
+	v: [number, number, number, number];
+}
+
+/** The usage history the page draws, in the three grids its ranges need. */
+export interface UsageHistoryView {
+	retentionDays: number;
+	agents: Array<{ id: string; name: string }>;
+	workspaces: Array<{ id: string; name: string }>;
+	/** At most 30 days of daily points. */
+	days: UsagePoint[];
+	/** The whole retention window, one point per week. */
+	weeks: UsagePoint[];
+	/** At most 24 hours of today. */
+	today: UsagePoint[];
+	/** True when nothing has ever been recorded. */
+	empty: boolean;
+}
+
+/** What the Usage view asks of the host. Range and filters stay on the page; only retention travels. */
+export interface UsageHistorySurface {
+	view(): Promise<UsageHistoryView>;
+	setRetentionDays(days: number): Promise<void>;
 }
 
 /** Everything the page draws, in one snapshot that names no host. */
@@ -77,10 +114,12 @@ export interface ControlState {
 	globalSettings?: SettingView[];
 	/** Present when the host can rename providers and models. */
 	models?: ModelsView;
-	/** What the last Models action did, and what the user has to reload for it to show. */
+	/** Present when the host keeps a history of what the turns spent. */
+	usage?: UsageHistoryView;
+	/** What the last Models action did. */
 	notice?: string;
-	/** Whether the models are being fetched from the agents now. */
-	syncing?: boolean;
+	/** Whether the models are being read from the agents now. */
+	refreshing?: boolean;
 }
 
 export type ToWebview = { type: 'state' } & ControlState;
@@ -90,11 +129,12 @@ export type FromWebview =
 	| { type: 'setGlobalSetting'; key: string; value: SettingValue }
 	| { type: 'install' | 'uninstall' | 'signIn' | 'signOut' | 'refreshUsage' | 'copySignInUrl' | 'openSignInUrl'; agentId: string }
 	| { type: 'addAgent' | 'removeAgent'; agentId: string }
+	| { type: 'saveApiKey'; agentId: string; key: string }
 	| { type: 'setEnabled'; agentId: string; enabled: boolean }
 	| { type: 'setSetting'; agentId: string; key: string; value: SettingValue }
 	| { type: 'setProviderName'; agentId: string; name: string }
 	| { type: 'setModelName'; agentId: string; model: string; name: string }
-	| { type: 'syncModels' };
+	| { type: 'refreshModels' };
 
 /** Everything the page asks a host to do; the same message travels over either transport. */
 export type ControlAction = FromWebview;
