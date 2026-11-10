@@ -304,3 +304,51 @@ describe('retention', () => {
 		expect(ledger.daily({}, 7).map(bucket => bucket.key)).toEqual(['2026-11-04']);
 	});
 });
+
+describe('the week, hour and workspace views', () => {
+	it('sums a week into one bucket keyed by its Monday', () => {
+		store();
+		const ledger = ledgerAt(11, 12);
+		ledger.record(record({ at: at(11, 10, 9), usage: counts(1, 0, 0, 0) }));
+		ledger.record(record({ at: at(11, 12, 9), usage: counts(2, 0, 0, 0) }));
+		expect(ledger.weekly({}, 30)).toEqual([{
+			key: '2026-11-09',
+			workspace: '/repo/app',
+			agent: 'claude',
+			totals: { input: 3, cacheRead: 0, cacheWrite: 0, output: 0 },
+		}]);
+	});
+
+	it('splits today into the hours that were used', () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record({ at: at(11, 10, 9, 15) }));
+		ledger.record(record({ at: at(11, 10, 13, 30) }));
+		expect(ledger.hourlyToday({}).map(bucket => bucket.key)).toEqual(['09', '13']);
+	});
+
+	it('leaves yesterday out of the hour view', () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record({ at: at(11, 9, 9), usage: counts(1, 0, 0, 0) }));
+		expect(ledger.hourlyToday({})).toEqual([]);
+	});
+
+	it('honours the filter in the week and hour views too', () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record({ agent: 'claude', workspace: '/a' }));
+		ledger.record(record({ agent: 'codex', workspace: '/b' }));
+		expect(ledger.weekly({ workspaces: ['/b'] }, 30).every(bucket => bucket.workspace === '/b')).toBe(true);
+		expect(ledger.hourlyToday({ agents: ['codex'] }).every(bucket => bucket.agent === 'codex')).toBe(true);
+	});
+
+	it('orders the workspaces by the tokens they spent, and takes as many as asked', () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record({ workspace: '/light', usage: counts(1, 0, 0, 0) }));
+		ledger.record(record({ workspace: '/heavy', usage: counts(100, 0, 0, 0) }));
+		expect(ledger.workspaces()).toEqual(['/heavy', '/light']);
+		expect(ledger.workspaces(1)).toEqual(['/heavy']);
+	});
+});

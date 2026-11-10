@@ -9,7 +9,7 @@ import type { AcpTokenUsage } from '../acp/protocol';
 import type { Log } from '../ports/host';
 import { usageRoot } from '../store/paths';
 import { withLock } from '../store/fileStore';
-import { addTotals, isZero, localDayKey, localHour, UNKNOWN_WORKSPACE, type TokenTotals } from './totals';
+import { addTotals, isZero, localDayKey, localHour, UNKNOWN_WORKSPACE, weekStartOf, type TokenTotals } from './totals';
 
 /** One finished turn, as the chat service reports it. */
 export interface UsageRecord {
@@ -332,9 +332,52 @@ export class UsageLedger {
 		return this.distinct(row => row.agent);
 	}
 
-	/** Every workspace that has spent anything inside the days still kept. */
-	workspaces(): string[] {
-		return this.distinct(row => row.workspace);
+	/** Every workspace that has spent anything inside the days still kept, the heaviest first. */
+	workspaces(limit?: number): string[] {
+		const spent = new Map<string, number>();
+		for (const rows of this.days.values()) {
+			for (const row of rows.values()) {
+				const total = row.totals.input + row.totals.cacheRead + row.totals.cacheWrite + row.totals.output;
+				spent.set(row.workspace, (spent.get(row.workspace) ?? 0) + total);
+			}
+		}
+		const ordered = [...spent.entries()]
+			.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+			.map(([workspace]) => workspace);
+		return limit === undefined ? ordered : ordered.slice(0, limit);
+	}
+
+	/** The totals of each week of the last `days` local days, keyed by the week's Monday. */
+	weekly(query: UsageQuery, days: number): UsageBucket[] {
+		const weeks = new Map<string, UsageBucket>();
+		for (const bucket of this.daily(query, days)) {
+			const key = weekStartOf(bucket.key);
+			const at = `${key}\u0000${bucket.workspace}\u0000${bucket.agent}`;
+			const sum = weeks.get(at);
+			weeks.set(at, {
+				key,
+				workspace: bucket.workspace,
+				agent: bucket.agent,
+				totals: sum ? addTotals(sum.totals, bucket.totals) : bucket.totals,
+			});
+		}
+		return [...weeks.values()].sort(orderOf);
+	}
+
+	/** The totals of each hour of today that anything was spent in. */
+	hourlyToday(query: UsageQuery): UsageBucket[] {
+		const rows = this.days.get(localDayKey(this.now()));
+		if (!rows) {
+			return [];
+		}
+		const buckets: UsageBucket[] = [];
+		for (const row of rows.values()) {
+			if (!keeps(query, row.workspace, row.agent) || isZero(row.totals)) {
+				continue;
+			}
+			buckets.push({ key: String(row.hour).padStart(2, '0'), workspace: row.workspace, agent: row.agent, totals: row.totals });
+		}
+		return buckets.sort(orderOf);
 	}
 
 	/** The whole-day totals of each of the last `days` local days, filtered. */
