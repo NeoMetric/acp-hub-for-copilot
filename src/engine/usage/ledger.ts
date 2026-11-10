@@ -115,26 +115,26 @@ function dayFile(root: string, day: string): string {
 	return path.join(usageRoot(root), `${day}.json`);
 }
 
-/** The rows a day file holds; a file that does not parse, or holds rows of the wrong shape, reads as no rows. */
-function parseDay(text: string): UsageRow[] {
+/** The rows a day file holds, or `undefined` when it does not parse or holds rows of the wrong shape. */
+function parseDay(text: string): UsageRow[] | undefined {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(text);
 	} catch {
-		return [];
+		return undefined;
 	}
 	const rows = (parsed as { rows?: unknown } | null)?.rows;
 	if (!Array.isArray(rows)) {
-		return [];
+		return undefined;
 	}
 	const kept: UsageRow[] = [];
 	for (const row of rows as WireRow[]) {
 		if (!row || typeof row !== 'object') {
-			return [];
+			return undefined;
 		}
 		const { h, w, a, in: input, cr, cw, out } = row;
 		if (!Number.isInteger(h) || h < 0 || h > 23 || typeof w !== 'string' || typeof a !== 'string' || ![input, cr, cw, out].every(Number.isFinite)) {
-			return [];
+			return undefined;
 		}
 		kept.push({ hour: h, workspace: w, agent: a, totals: { input, cacheRead: cr, cacheWrite: cw, output: out } });
 	}
@@ -150,7 +150,7 @@ async function readDay(file: string): Promise<Map<string, UsageRow>> {
 		// A day that is not there yet is a day with nothing in it.
 		return rows;
 	}
-	for (const row of parseDay(text)) {
+	for (const row of parseDay(text) ?? []) {
 		rows.set(rowKey(row), row);
 	}
 	return rows;
@@ -195,7 +195,56 @@ export class UsageLedger {
 	/** Flushes run one after another, so two of them never write the same day at once. */
 	private writing: Promise<void> = Promise.resolve();
 
-	constructor(private readonly options: UsageLedgerOptions) { }
+	constructor(private readonly options: UsageLedgerOptions) {
+		this.load();
+	}
+
+	/** Reads the days still inside the window, so a restart continues where the last one stopped. */
+	private load(): void {
+		const folder = usageRoot(this.options.root);
+		let names: string[];
+		try {
+			names = fs.readdirSync(folder);
+		} catch {
+			// No folder yet: nothing has ever been flushed.
+			return;
+		}
+		const oldest = this.oldestDay();
+		for (const name of names) {
+			const match = /^(\d{4}-\d{2}-\d{2})\.json$/.exec(name);
+			const day = match?.[1];
+			if (!day || day < oldest) {
+				continue;
+			}
+			const file = path.join(folder, name);
+			const rows = this.rowsOfFile(file);
+			if (!rows) {
+				this.options.log?.(`The usage day ${file} could not be read; it is skipped until the next flush.`, 'warn');
+				continue;
+			}
+			const map = new Map<string, UsageRow>();
+			for (const row of rows) {
+				map.set(rowKey(row), row);
+			}
+			this.days.set(day, map);
+		}
+	}
+
+	/** The rows a day file holds, or `undefined` when it cannot be read at all. */
+	private rowsOfFile(file: string): UsageRow[] | undefined {
+		try {
+			return parseDay(fs.readFileSync(file, 'utf8'));
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** The first day still kept, as `YYYY-MM-DD`. */
+	private oldestDay(): string {
+		const today = new Date(this.now());
+		const back = Math.max(1, this.options.retainDays) - 1;
+		return localDayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - back).getTime());
+	}
 
 	/** Adds one finished turn. In memory only: no write, no await, no listener. */
 	record(record: UsageRecord): void {

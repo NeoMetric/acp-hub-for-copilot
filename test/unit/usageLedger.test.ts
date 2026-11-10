@@ -227,3 +227,47 @@ describe('flushing a day', () => {
 		expect(rowsOf('2026-11-10')).toHaveLength(1);
 	});
 });
+
+describe('reading the store at startup', () => {
+	const one = (hour = 13): WireRow[] => [{ h: hour, w: '/repo/app', a: 'claude', in: 100, cr: 900, cw: 40, out: 300 }];
+
+	it('keeps the totals readable after a reload', async () => {
+		store();
+		const ledger = ledgerAt(11, 10);
+		ledger.record(record());
+		await ledger.flush();
+		expect(ledgerAt(11, 10).daily({}, 1)).toEqual([{
+			key: '2026-11-10',
+			workspace: '/repo/app',
+			agent: 'claude',
+			totals: { input: 100, cacheRead: 900, cacheWrite: 40, output: 300 },
+		}]);
+	});
+
+	it('reads the days inside the window at startup and ignores the ones outside it', () => {
+		store();
+		writeDayFile('2026-11-10', one());
+		writeDayFile('2026-01-01', one());
+		expect(ledgerAt(11, 10).daily({}, 365).map(bucket => bucket.key)).toEqual(['2026-11-10']);
+	});
+
+	it('starts with the other days when one file is corrupt', () => {
+		store();
+		fs.mkdirSync(usageRoot(root), { recursive: true });
+		fs.writeFileSync(fileOf('2026-11-10'), '{"version":1,"day":"2026-11-10","rows":[{');
+		writeDayFile('2026-11-09', one());
+		expect(ledgerAt(11, 10).daily({}, 30).map(bucket => bucket.key)).toEqual(['2026-11-09']);
+	});
+
+	it('skips a day file whose rows are not the expected shape', () => {
+		store();
+		fs.mkdirSync(usageRoot(root), { recursive: true });
+		fs.writeFileSync(fileOf('2026-11-10'), JSON.stringify({ version: 1, day: '2026-11-10', rows: [{ h: 'x' }] }));
+		expect(ledgerAt(11, 10).daily({}, 30)).toEqual([]);
+	});
+
+	it('reads no folder at all rather than failing when the store has none', () => {
+		store();
+		expect(ledgerAt(11, 10).daily({}, 30)).toEqual([]);
+	});
+});
