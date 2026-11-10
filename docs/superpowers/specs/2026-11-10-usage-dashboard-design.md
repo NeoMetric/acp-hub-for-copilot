@@ -112,10 +112,11 @@ A week bucket is the host's own grouping of its daily rows, not a second stored 
 In `createHeadlessComposition`, the existing `finished: turn => …` hook gains one call, after `usage.recordTurn`:
 
 ```ts
-ledger.record({ at: Date.now(), agent: adapter.id, workspace: turn.chat?.cwd, usage: turn.usage, background: turn.background });
+ledger.record({ at: Date.now(), agent: adapter.id, workspace: turn.chat?.workspace, usage: turn.usage });
 ```
 
-- Skipped when `turn.usage` is undefined, and skipped for background requests (the host's own calls, such as a chat title), matching how the existing cache figures already treat them. Tokens spent on titles are therefore not charted; this is recorded in the design so a builder does not "fix" it by accident.
+- Skipped when `turn.usage` is undefined or every count is zero.
+- **Every turn is recorded, including the host's own requests.** The design first skipped what the code marks `background`, but that flag is `session.toolCount === 0`: it covers a chat title *and* any client that calls the gateway without tool definitions. Skipping it would hide a whole class of real usage, so the ledger records whatever reported tokens. The cost is that chat titles are charted, a few hundred tokens per titled chat.
 - `record` is in-memory only. Nothing is awaited and nothing is written on this call.
 
 ### 3. Wiring to the page
