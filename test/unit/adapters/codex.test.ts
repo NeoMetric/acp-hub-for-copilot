@@ -40,7 +40,7 @@ describe('codexAdapter', () => {
 			version: '2.3.0',
 			manifestDirectory: 'adapters/codex',
 		});
-		expect(codexAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'maxContextWindow', 'replaceSystemPrompt']);
+		expect(codexAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'maxContextWindow', 'defaultEffort', 'replaceSystemPrompt']);
 		expect(codexAdapter.defaultSessionMode).toBe('agent-full-access');
 	});
 

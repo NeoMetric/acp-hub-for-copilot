@@ -8,7 +8,8 @@ import * as path from 'path';
 import type { AgentAdapter, AgentSettings, ConversationForker, LaunchContext } from '../../core/adapter';
 import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentClientDeps, type AgentSession, type CreateSessionOptions, type ForkPoint, type SignInUrlPrompt } from '../acp/agentClient';
 import { isAuthRequiredError } from '../acp/rpc';
-import { policyOf, type SessionPolicy } from '../../core/sessionPolicy';
+import { withScope } from '../../core/logging';
+import { effectiveToolWaitMs, policyOf, type SessionPolicy } from '../../core/sessionPolicy';
 import type { ChatRequest, ToolDef, ToolResult } from '../model/chat';
 import type { StreamEvent } from '../model/stream';
 import { DEFAULT_CHAT_OWNER, type Log, type HostPort } from '../ports/host';
@@ -20,7 +21,7 @@ import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOver
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, MAX_CHAT_SESSIONS, WARM_SESSION_IDLE_MS } from './idle';
 import { describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, toolChangeOf, toolsDiffer } from './keys';
 import { carriesToolResults, DEFAULT_TRANSCRIPT_OPTIONS, diverged, lastUserMessageIndex, persistentFingerprints, skillContextAfterReply, userWordsAfterReply, type TranscriptOptions } from './messages';
-import { acpModelValue } from './modelOptions';
+import { acpModelValue, effortFor } from './modelOptions';
 import { PromptArchive } from './promptArchive';
 import { findEditFork, findReusable, promptHashOf } from './reuse';
 import { applyEffort, applyModel, describe, switchModelInPlace } from './sessionOptions';
@@ -73,8 +74,6 @@ export interface ChatServiceDeps {
 	agentChanged?(change: AgentChange): void;
 	/** Whether the host wants the agent running at all. */
 	isEnabled?(): boolean;
-	/** How many workspace processes one agent keeps; four when absent. */
-	readonly maxWorkspaceProcesses?: number;
 }
 
 /**
@@ -113,14 +112,13 @@ export class ChatService {
 
 	constructor(private readonly deps: ChatServiceDeps) {
 		const { adapter, host } = deps;
-		this.log = host.log;
+		const log = withScope(host.log, adapter.id);
+		this.log = log;
 		this.saved = new SavedSessionStore(host.state, `acpHub.savedSessions.${adapter.id}`);
 		this.processes = new WorkspaceProcesses({
 			agentId: adapter.id,
-			capacity: deps.maxWorkspaceProcesses,
-			log: host.log,
+			log,
 			create: root => this.createClientIn(root),
-			close: entry => this.closeProcess(entry),
 			changed: (entry, change) => this.handleAgentChange(entry, change),
 		});
 		this.warmSession = new WarmSession({
@@ -132,7 +130,7 @@ export class ChatService {
 		});
 		this.turns = new TurnRunner({
 			adapter,
-			log: host.log,
+			log,
 			saved: this.saved,
 			policy: () => this.policy,
 			settings: () => this.settings,
@@ -184,6 +182,16 @@ export class ChatService {
 
 	private get settings(): AgentSettings | undefined {
 		return this.launch?.settings;
+	}
+
+	/**
+	 * How long a tool call of this agent may wait for the host's result, from the
+	 * adapter's policy; `Infinity` waits for as long as the agent does. A host that
+	 * holds calls outside the engine gives them this wait, so a call takes as long
+	 * as it does in the sidebar rather than as long as the host likes.
+	 */
+	get toolWaitMs(): number {
+		return effectiveToolWaitMs(this.policy, this.settings ?? {});
 	}
 
 	/** The session policy the service asks: the adapter's own, or the native default it inherits. */
@@ -302,7 +310,7 @@ export class ChatService {
 		const tools = request.tools;
 		const context: ChatContext = { folders: identity.workspaceFolders.length > 0 ? identity.workspaceFolders : undefined, cwd: identity.cwd, guidance: this.deps.host.guidanceOf(request) };
 		this.deps.dumpRequest?.(request, this.settings);
-		const effort = request.effort;
+		const effort = effortFor(request.effort, this.settings);
 		const toolNames = tools.map(tool => tool.name);
 		this.log(`Request: model ${request.model ?? 'default'}, ${request.messages.length} message(s), ${tools.length} tool(s): ${toolNames.join(', ') || 'none'}`, 'debug');
 		// A session released a moment ago must be gone from the agent before it is resumed.
@@ -1065,13 +1073,6 @@ export class ChatService {
 			this.warmSession.release();
 		}
 		this.deps.agentChanged?.(change);
-	}
-
-	/** Lets go of the chats of a process that is being stopped to stay within the bound. */
-	private async closeProcess(entry: WorkspaceProcess): Promise<void> {
-		for (const key of [...entry.sessions]) {
-			await this.destroySession(key);
-		}
 	}
 
 	private isSignInRequired(error: unknown): boolean {

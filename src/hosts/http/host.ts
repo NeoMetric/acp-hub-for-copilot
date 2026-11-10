@@ -20,14 +20,6 @@ export const CHAT_ID_HEADER = 'x-chat-id';
 /** The header a client names the folder its chat works in with. */
 export const CWD_HEADER = 'x-acp-cwd';
 
-/**
- * How long a chat's client has to return the result of a tool call. An agent
- * whose adapter names no wait leaves the engine's own wait unbounded, so a
- * client that never comes back would park the call for as long as the process
- * lives.
- */
-export const DEFAULT_TOOL_CALL_WAIT_MS = 120_000;
-
 /** Writes one message to the server's stderr, which is where a headless host tells what it does. */
 export const stderrLog: Log = (message, level = 'info') => {
 	process.stderr.write(`${new Date().toISOString()} ${level.toUpperCase()} ${message}\n`);
@@ -220,24 +212,37 @@ export interface ParkedToolCall {
  * call, and has the client waited too long? A call is filed under its chat as
  * well as its id, so two chats cannot settle each other's calls, and one the
  * client never answers is failed instead of staying parked in the engine.
+ *
+ * The wait is the agent's own, as the engine applies it in the sidebar: a tool
+ * that waits for a person, like a question to the user, may take minutes, and
+ * cutting it off would end the turn under the client's feet. Only a wait the
+ * server was given explicitly replaces it.
  */
 export class ToolCallParking {
 
-	/** The timers of each chat's calls, by call id. */
-	private readonly chats = new Map<string, Map<string, NodeJS.Timeout>>();
+	/** The calls of each chat, by call id, with the timer that will fail them when their wait is bounded. */
+	private readonly chats = new Map<string, Map<string, NodeJS.Timeout | undefined>>();
 
-	constructor(private readonly waitMs: number, private readonly log: Log) { }
+	/** @param override A wait for every call, whatever the agent's policy says; absent, each call gets its own. */
+	constructor(private readonly override: number | undefined, private readonly log: Log) { }
 
-	/** Keeps `call` until the client returns its result; `fail` runs if it does not in time. */
-	park(chatId: string, call: ParkedToolCall, fail: () => void): void {
+	/** Keeps `call` until the client returns its result; `fail` runs if it does not in `waitMs`. */
+	park(chatId: string, call: ParkedToolCall, fail: () => void, waitMs: number): void {
 		this.forget(chatId, call.callId);
-		const calls = this.chats.get(chatId) ?? new Map<string, NodeJS.Timeout>();
+		const calls = this.chats.get(chatId) ?? new Map<string, NodeJS.Timeout | undefined>();
 		this.chats.set(chatId, calls);
+		const wait = this.override ?? waitMs;
+		if (!Number.isFinite(wait)) {
+			// The agent itself waits for as long as its own turn allows, so the call is
+			// held until a request settles it or the chat goes away.
+			calls.set(call.callId, undefined);
+			return;
+		}
 		const timer = setTimeout(() => {
 			this.forget(chatId, call.callId);
-			this.log(`Chat ${chatId} did not answer tool ${call.name} (${call.callId}) within ${Math.round(this.waitMs / 1000)}s; failing the call.`, 'warn');
+			this.log(`Chat ${chatId} did not answer tool ${call.name} (${call.callId}) within ${Math.round(wait / 1000)}s; failing the call.`, 'warn');
 			fail();
-		}, this.waitMs);
+		}, wait);
 		timer.unref();
 		calls.set(call.callId, timer);
 	}
@@ -245,6 +250,16 @@ export class ToolCallParking {
 	/** Whether the chat still holds the call, so a result for it may be taken. */
 	has(chatId: string, callId: string): boolean {
 		return this.chats.get(chatId)?.has(callId) === true;
+	}
+
+	/** Whether another chat holds the call, so this one may not settle it. */
+	heldElsewhere(chatId: string, callId: string): boolean {
+		for (const [owner, calls] of this.chats) {
+			if (owner !== chatId && calls.has(callId)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Takes the call a request answers, so its timer cannot fail a call already settled. */
@@ -276,11 +291,10 @@ export class ToolCallParking {
 
 	private forget(chatId: string, callId: string): boolean {
 		const calls = this.chats.get(chatId);
-		const timer = calls?.get(callId);
-		if (!calls || timer === undefined) {
+		if (!calls?.has(callId)) {
 			return false;
 		}
-		clearTimeout(timer);
+		clearTimeout(calls.get(callId));
 		calls.delete(callId);
 		if (calls.size === 0) {
 			this.chats.delete(chatId);

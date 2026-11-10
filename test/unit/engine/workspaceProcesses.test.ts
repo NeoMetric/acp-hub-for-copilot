@@ -8,7 +8,6 @@ import type { AgentAdapter, LaunchContext } from '../../../src/core/adapter';
 import type { AgentSession, PromptHandlers } from '../../../src/engine/acp/agentClient';
 import { ChatService } from '../../../src/engine/chat/ChatService';
 import type { AgentApi } from '../../../src/engine/chat/types';
-import { WorkspaceProcesses } from '../../../src/engine/chat/workspaceProcesses';
 import type { ChatMessage, ChatRequest, ToolResult } from '../../../src/engine/model/chat';
 import type { StreamEvent } from '../../../src/engine/model/stream';
 import type { HostPort } from '../../../src/engine/ports/host';
@@ -105,7 +104,7 @@ const request = (chatId: string, cwd: string): ChatRequest => {
 };
 
 /** A service over fake agents, created per workspace root. */
-function service(options: { capacity?: number; folders?: (chatId: string) => readonly string[] } = {}) {
+function service(options: { folders?: (chatId: string) => readonly string[] } = {}) {
 	const created: FakeAgent[] = [];
 	const launch: LaunchContext = { entryPath: 'fake', installDir: '', storageDir: '', settings: {}, workspaceFolder: '/window' };
 	const chat = new ChatService({
@@ -117,7 +116,6 @@ function service(options: { capacity?: number; folders?: (chatId: string) => rea
 			unregisterSession: () => undefined,
 		},
 		resolveLaunch: () => Promise.resolve(launch),
-		maxWorkspaceProcesses: options.capacity,
 		createClient: (_adapter, ctx) => {
 			const agent = new FakeAgent(ctx.workspaceFolder);
 			created.push(agent);
@@ -158,48 +156,19 @@ describe('a process per workspace', () => {
 		}
 	});
 
-	it('stops the least recently used agent when the bound is passed', async () => {
-		const { chat, created } = service({ capacity: 2 });
+	it('keeps an agent for every folder in use, without a bound', async () => {
+		const { chat, created } = service();
 		try {
-			await respond(chat, 'chat-a', '/repo-a');
-			await respond(chat, 'chat-b', '/repo-b');
-			// Using /repo-a again makes /repo-b the least recently used one.
-			await respond(chat, 'chat-c', '/repo-a');
-			await respond(chat, 'chat-d', '/repo-c');
+			const roots = ['/repo-a', '/repo-b', '/repo-c', '/repo-d', '/repo-e', '/repo-f'];
+			for (const [index, root] of roots.entries()) {
+				await respond(chat, `chat-${index}`, root);
+			}
 
-			expect(created.map(agent => agent.root)).toEqual(['/repo-a', '/repo-b', '/repo-c']);
-			expect(created[1].disposed).toBe(true);
-			expect(created[1].closed).toEqual(created[1].sessions);
-			expect(created[0].disposed).toBe(false);
-			// The two chats of /repo-a keep their sessions; only the evicted repo lost its one.
-			expect(chat.openSessions).toBe(3);
+			expect(created.map(agent => agent.root)).toEqual(roots);
+			expect(created.every(agent => !agent.disposed)).toBe(true);
+			expect(chat.openSessions).toBe(roots.length);
 		} finally {
 			await chat.close();
 		}
-	});
-
-	it('lets go of the chats of a process before stopping it', async () => {
-		const closed: string[] = [];
-		const agents = ['a', 'b', 'c'].map(root => new FakeAgent(root));
-		let next = 0;
-		const processes = new WorkspaceProcesses({
-			agentId: 'mock',
-			log: () => undefined,
-			capacity: 2,
-			create: () => agents[next++] as unknown as AgentApi,
-			close: entry => {
-				closed.push(...entry.sessions);
-				entry.sessions.clear();
-			},
-		});
-
-		await processes.acquire('/repo-a');
-		await processes.acquire('/repo-b');
-		processes.own(agents[0] as unknown as AgentApi, 'chat-a');
-		await processes.acquire('/repo-c');
-
-		expect(closed).toEqual(['chat-a']);
-		expect(agents[0].disposed).toBe(true);
-		expect(processes.size).toBe(2);
 	});
 });

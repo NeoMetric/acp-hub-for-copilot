@@ -233,8 +233,8 @@ describe('the usage of an agent that reports no cache', () => {
 
 		const events = await send(chat(1));
 
-		expect(logs).toContain('Turn tokens: 120 in, 30 out.');
-		expect(logs.some(line => line.startsWith('Turn cache'))).toBe(false);
+		expect(logs).toContain(`[${noCacheAdapter.id}] Turn tokens: 120 in, 30 out.`);
+		expect(logs.some(line => line.startsWith(`[${noCacheAdapter.id}] Turn cache`))).toBe(false);
 		expect(logs.some(line => line.includes('NOT served from the cache') || line.includes('cache served'))).toBe(false);
 		const usage = events.find(event => event.type === 'usage');
 		expect(usage).toEqual({ type: 'usage', promptTokens: 120, cachedTokens: 0, outputTokens: 30, reasoningTokens: 0 });
@@ -246,7 +246,7 @@ describe('the usage of an agent that reports no cache', () => {
 		await send(chat(1));
 
 		expect(agent.prompts).toHaveLength(1);
-		expect(logs.some(line => line.startsWith('Turn tokens'))).toBe(false);
+		expect(logs.some(line => line.includes('Turn tokens'))).toBe(false);
 	});
 
 	it('leaves session/fork to Claude; Google forks through its CLI instead', async () => {

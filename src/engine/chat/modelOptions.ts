@@ -24,6 +24,20 @@ export function findEffortOption(policy: ModelPolicy, configOptions: readonly Ac
 		?? configOptions.find(option => option.category === EFFORT_CATEGORY && option.type === 'select');
 }
 
+/**
+ * The effort a request runs with. A request that names none, such as a subagent
+ * started by the task tool, or that names the agent's own `default`, takes the
+ * agent's `defaultEffort` setting when one is set, because the agent's own
+ * choice can be the most expensive level.
+ */
+export function effortFor(requested: string | undefined, settings: { readonly [key: string]: unknown } | undefined): string | undefined {
+	const configured = settings?.defaultEffort;
+	if (typeof configured !== 'string' || configured === '' || configured === 'default') {
+		return requested;
+	}
+	return requested === undefined || requested === 'default' ? configured : requested;
+}
+
 /** Maps a provider model id back to the model value the ACP agent understands. */
 export function acpModelValue(modelId: string): string {
 	return modelId.endsWith(AGENT_MODEL_ID_SUFFIX)
