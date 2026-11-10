@@ -15,6 +15,7 @@ import { readTranscriptOptions, type TranscriptOptions } from '../engine/chat/me
 import type { ToolBridge } from '../engine/chat/types';
 import { UsageStore } from '../engine/chat/usage';
 import { ControlService, type ControlSurface } from '../engine/control/ControlService';
+import { withScope } from '../core/logging';
 import type { HostPort, Log } from '../engine/ports/host';
 import { agentsRoot } from '../engine/store/paths';
 import { defaultWorkspaceOf } from '../hosts/http/config';
@@ -110,7 +111,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 	const settingsOf = (adapter: AgentAdapter): AgentSettings => {
 		const result = readAgentSettings(adapter, host.settings);
 		for (const warning of result.warnings) {
-			log(`${adapter.id}: ${warning}`, 'warn');
+			withScope(log, adapter.id)(warning, 'warn');
 		}
 		return result.values;
 	};
@@ -156,7 +157,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 				usage.recordTurn(adapter.id, adapter.reportsCache === false ? undefined : turn.usage, turn.background);
 				if (!turn.background && adapter.usage && !adapter.usage.onDemandOnly) {
 					void control.refreshUsage(adapter.id, false).catch(error => {
-						log(`Could not read the usage of ${adapter.id}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+						withScope(log, adapter.id)(`Could not read the usage: ${error instanceof Error ? error.message : String(error)}`, 'warn');
 					});
 				}
 			},
@@ -166,7 +167,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 				void host.state.update(`signedIn.${adapter.id}`, false)
 					.then(() => control.refresh(adapter.id))
 					.catch(error => {
-						log(`Could not record the expired sign-in of ${adapter.id}: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+						withScope(log, adapter.id)(`Could not record the expired sign-in: ${error instanceof Error ? error.message : String(error)}`, 'warn');
 					});
 			},
 			agentChanged: change => {

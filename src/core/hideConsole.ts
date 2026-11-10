@@ -9,19 +9,32 @@ import { join } from 'node:path';
 
 const PRELOAD = `'use strict';
 const cp = require('node:child_process');
+const { promisify } = require('node:util');
+const hidden = (args) => {
+	const index = args.findIndex((arg, at) => at > 0 && arg && typeof arg === 'object' && !Array.isArray(arg));
+	if (index >= 0) {
+		args[index] = { windowsHide: true, ...args[index] };
+	} else if (typeof args[args.length - 1] === 'function') {
+		args.splice(args.length - 1, 0, { windowsHide: true });
+	} else {
+		args.push({ windowsHide: true });
+	}
+	return args;
+};
 for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync']) {
 	const original = cp[name];
-	cp[name] = function (...args) {
-		const index = args.findIndex((arg, at) => at > 0 && arg && typeof arg === 'object' && !Array.isArray(arg));
-		if (index >= 0) {
-			args[index] = { windowsHide: true, ...args[index] };
-		} else if (typeof args[args.length - 1] === 'function') {
-			args.splice(args.length - 1, 0, { windowsHide: true });
-		} else {
-			args.push({ windowsHide: true });
-		}
-		return original.apply(this, args);
+	const wrapped = function (...args) {
+		return original.apply(this, hidden(args));
 	};
+	// promisify(execFile) resolves to { stdout, stderr } only through this symbol; without it the
+	// agent gets the bare stdout string and reads every command's output as missing.
+	const custom = original[promisify.custom];
+	if (custom) {
+		wrapped[promisify.custom] = function (...args) {
+			return custom.apply(this, hidden(args));
+		};
+	}
+	cp[name] = wrapped;
 }
 `;
 
