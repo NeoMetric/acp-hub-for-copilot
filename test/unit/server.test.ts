@@ -71,6 +71,8 @@ interface BootOptions {
 	readonly token?: string;
 	readonly toolCallWaitMs?: number;
 	readonly adapter?: AgentAdapter;
+	/** Sees every line the server logs. */
+	readonly log?: (message: string) => void;
 }
 
 /** Starts the server on a free port over the mock agent, with a store root of its own. */
@@ -81,7 +83,7 @@ async function start(options: BootOptions = {}): Promise<string> {
 /** Starts the server and hands its host back too, so a test can change what the control page would. */
 async function boot(options: BootOptions = {}): Promise<{ url: string; host: HeadlessHost }> {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-server-'));
-	const host = createHeadlessHost({ root, log: NO_LOG });
+	const host = createHeadlessHost({ root, log: options.log ?? NO_LOG });
 	const loopback = new McpBridge(NO_LOG);
 	const agent = options.adapter ?? adapter;
 	const service = new ChatService({
@@ -259,6 +261,19 @@ describe('the HTTP server', () => {
 		const body = await response.json() as any;
 		expect(body.agents).toEqual([expect.objectContaining({ id: adapter.id, installed: true, openSessions: 0 })]);
 		expect(body.openSessions).toBe(0);
+	});
+
+	it('logs when a request arrives and when its prompt goes to the agent, once per request', async () => {
+		const lines: string[] = [];
+		const { url } = await boot({ log: message => { lines.push(message); } });
+		const model = await firstModel(url);
+
+		const response = await post(`${url}/v1/chat/completions`, chat(model));
+
+		expect(response.status).toBe(200);
+		expect(lines.filter(line => line.endsWith('Request received'))).toHaveLength(1);
+		expect(lines.filter(line => line.endsWith('Prompt sent'))).toHaveLength(1);
+		expect(lines.findIndex(line => line.endsWith('Request received'))).toBeLessThan(lines.findIndex(line => line.endsWith('Prompt sent')));
 	});
 
 	it('starts its agents in a folder on request, without waiting for them', async () => {

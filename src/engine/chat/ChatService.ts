@@ -297,6 +297,10 @@ export class ChatService {
 		if (!this.enabled) {
 			throw new ChatError(`The ${this.deps.adapter.displayName} agent is disabled; enable it from the ACP Hub sidebar.`);
 		}
+		// The results of a tool the host ran continue a turn; only a new message is a request worth a line.
+		if (!carriesToolResults(request.messages)) {
+			this.log('Request received');
+		}
 		const key = request.chatId;
 		const lap = startLaps(this.log, key);
 		// The launch is resolved first, as it always was: the host reads the window's
@@ -448,6 +452,7 @@ export class ChatService {
 		session.chat ??= { id: identity.id, label: identity.label ?? 'Chat', workspace: session.context.cwd };
 		session.turn = this.turns.start(session, sink, signal, blocks);
 		lap('prompt sent to the agent');
+		this.log('Prompt sent');
 		await this.turns.drive(key, session, sink, signal, fingerprints, lastUser);
 	}
 
