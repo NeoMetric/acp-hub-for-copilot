@@ -125,7 +125,7 @@ export class ChatService {
 			adapter,
 			bridge: deps.bridge,
 			agentClient: () => this.defaultClient(),
-			cwd: () => this.workspaceFolder,
+			cwd: () => this.defaultRoot ?? this.workspaceFolder,
 			opened: () => this.scheduleIdleSweep(),
 		});
 		this.turns = new TurnRunner({
@@ -165,6 +165,13 @@ export class ChatService {
 	get openSessions(): number {
 		return this.sessions.size;
 	}
+
+	/**
+	 * The folder a window last warmed. The model list and the usage reads run in it, so the agent that window
+	 * started serves them too and no process of its own is kept for them; until a window warms one, they run
+	 * in the launch's folder.
+	 */
+	private defaultRoot: string | undefined;
 
 	/** The folder the agent was launched in, `''` until it is launched; a chat that names no folder this machine has is rooted there. */
 	get workspaceFolder(): string {
@@ -261,7 +268,7 @@ export class ChatService {
 	/** The process the host's own requests run in: the window's first folder. */
 	private async defaultProcess(): Promise<WorkspaceProcess> {
 		const ctx = await this.resolveLaunch();
-		return this.processAt(normalizeRoot(ctx.workspaceFolder), ctx);
+		return this.processAt(this.defaultRoot ?? normalizeRoot(ctx.workspaceFolder), ctx);
 	}
 
 	/** The client of the process the host's own requests run in, such as the one that lists the models. */
@@ -504,8 +511,33 @@ export class ChatService {
 			return;
 		}
 		const launch = await this.resolveLaunch();
-		const entry = await this.processAt(normalizeRoot(folder), launch);
+		const root = normalizeRoot(folder);
+		this.moveDefaultTo(root, launch);
+		const entry = await this.processAt(root, launch);
 		await entry.client.ensureStarted();
+	}
+
+	/**
+	 * Has the model and usage reads run in `root` from now on. The process they ran in before is stopped when
+	 * it was only the launch's folder and no chat uses it; the one another window warmed is left for that window.
+	 */
+	private moveDefaultTo(root: string, launch: LaunchContext): void {
+		const launchRoot = normalizeRoot(launch.workspaceFolder);
+		const previous = this.defaultRoot ?? launchRoot;
+		if (previous === root) {
+			return;
+		}
+		this.defaultRoot = root;
+		const warm = this.warmSession.current;
+		if (warm) {
+			const client = this.warmSession.client;
+			this.warmSession.release();
+			void client?.closeSession(warm.sessionId);
+		}
+		const old = previous === launchRoot ? this.processes.get(previous) : undefined;
+		if (old && old.sessions.size === 0) {
+			void old.client.stopWhenIdle();
+		}
 	}
 
 	/** Starts the agent to let its own browser sign-in flow run. */

@@ -285,6 +285,31 @@ describe('the HTTP server', () => {
 		expect(await response.json()).toEqual({ agents: [adapter.id] });
 	});
 
+	it('reads the model list in the folder it warmed, so no second process is kept for it', async () => {
+		const lines: string[] = [];
+		const { url } = await boot({ log: message => { lines.push(message); } });
+		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-warm-'));
+		// The agent runs in the folder and may still hold it as its working directory, so removing it is best effort.
+		cleanups.push(async () => {
+			try {
+				fs.rmSync(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+			} catch {
+				// Left to the temp folder's own clean-up.
+			}
+		});
+		await post(`${url}/v1/warm`, { folder });
+		const started = (): string[] => lines.filter(line => line.includes('Started the agent in'));
+		const deadline = Date.now() + 5_000;
+		while (started().length === 0 && Date.now() < deadline) {
+			await new Promise(resolve => setTimeout(resolve, 25));
+		}
+
+		await firstModel(url);
+
+		expect(started()).toHaveLength(1);
+		expect(started()[0].toLowerCase()).toContain(folder.toLowerCase());
+	});
+
 	it('refuses to warm a folder that is not an existing absolute path', async () => {
 		const url = await start();
 
