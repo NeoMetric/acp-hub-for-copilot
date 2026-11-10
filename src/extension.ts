@@ -23,6 +23,9 @@ import type { ControlState } from './ui/messages';
 /** The port a window uses when the user names none; the server's own default. */
 const DEFAULT_PORT = 8791;
 
+/** How long a server no window uses stays up, in minutes, when the setting is absent. */
+const DEFAULT_IDLE_MINUTES = 30;
+
 /** The link this window owns, so `deactivate` stops the server this window started. */
 let link: ServerLink | undefined;
 
@@ -75,6 +78,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		root,
 		port: settings.get<number>('server.port') ?? DEFAULT_PORT,
 		autoStart: settings.get<boolean>('server.autoStart') ?? true,
+		detached: settings.get<boolean>('server.detached') ?? true,
+		idleMinutes: Math.max(0, settings.get<number>('server.idleTimeoutMinutes') ?? DEFAULT_IDLE_MINUTES),
+		version: typeof context.extension.packageJSON?.version === 'string' ? context.extension.packageJSON.version : undefined,
 		serverScript: path.join(extensionDir, 'dist', 'server.js'),
 		extensionDir,
 		// The prompts the server composes from, kept where the extension always kept them.
@@ -147,6 +153,13 @@ export function activate(context: vscode.ExtensionContext): void {
 		{ dispose: unsubscribeCards },
 		vscode.window.registerWebviewViewProvider('acpHub.agents', sidebar),
 		vscode.commands.registerCommand('acpHub.showLogs', () => output.show()),
+		vscode.commands.registerCommand('acpHub.stopServer', async () => {
+			if (await binding.stopServer()) {
+				void vscode.window.showInformationMessage('The ACP Hub server and its agents were stopped. They start again when a chat needs them.');
+			} else {
+				void vscode.window.showWarningMessage('The ACP Hub server could not be stopped. See the ACP Hub log for the reason.');
+			}
+		}),
 		vscode.commands.registerCommand('acpHub.signIn', async () => {
 			const picked = await vscode.window.showQuickPick(
 				REGISTRY.agents.map(agent => ({ label: agent.displayName, id: agent.id })),

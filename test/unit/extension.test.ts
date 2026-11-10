@@ -383,7 +383,7 @@ describe('the extension is a client of the server', () => {
 		mocks.pick = 1;
 		activateOnce();
 
-		expect([...mocks.commands.keys()].sort()).toEqual(['acpHub.install', 'acpHub.refreshUsage', 'acpHub.showLogs', 'acpHub.signIn']);
+		expect([...mocks.commands.keys()].sort()).toEqual(['acpHub.install', 'acpHub.refreshUsage', 'acpHub.showLogs', 'acpHub.signIn', 'acpHub.stopServer']);
 
 		mocks.commands.get('acpHub.showLogs')?.();
 		expect(mocks.shown).toBe(1);

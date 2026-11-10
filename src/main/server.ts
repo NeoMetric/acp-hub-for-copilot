@@ -11,6 +11,7 @@ import type { Part } from '../engine/model/chat';
 import { storageRoot } from '../engine/store/paths';
 import { ownerOfToken, stderrLog } from '../hosts/http/host';
 import { createServer } from '../hosts/http/server';
+import { idleMsOf, watchIdle } from './idle';
 import { exitWithParent } from './parent';
 import { serverToken } from './token';
 
@@ -22,6 +23,9 @@ const SHUTDOWN_GRACE_MS = 5_000;
 
 /** The flag a window adds when the server must not outlive it. */
 const EXIT_WITH_PARENT_FLAG = '--exit-with-parent';
+
+/** The flag a window adds when the server runs on its own, outside the window's process tree. */
+const DETACHED_FLAG = '--detached';
 
 /**
  * The loopback bridge as the engine sees it. The tools and the results are
@@ -93,13 +97,19 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 		log: stderrLog,
 		owner: ownerOfToken(token),
 		promptsDir: env.ACP_HUB_PROMPTS_DIR?.trim() || undefined,
+		// A window names the extension folder it started the server from; a hand-started server reads it from where it runs.
+		extensionDir: env.ACP_HUB_EXTENSION_DIR?.trim() || undefined,
 	});
-	const server = createServer({ composition, token, page: { control: composition.control } });
+	const server = createServer({ composition, token, page: { control: composition.control }, onShutdown: () => stop('SIGTERM') });
 
 	server.listen(port, '127.0.0.1', () => {
 		const address = server.address();
 		const bound = typeof address === 'object' && address !== null ? address.port : port;
 		stderrLog(`ACP Hub server listening on http://127.0.0.1:${bound} with a bearer token.`);
+		// A window that started this server reads its output or its log file; the token stays out of both.
+		if (!process.argv.includes(EXIT_WITH_PARENT_FLAG) && !process.argv.includes(DETACHED_FLAG)) {
+			stderrLog(`Open the control page in a browser (it keeps you signed in): http://127.0.0.1:${bound}/?token=${encodeURIComponent(token)}`);
+		}
 	});
 	server.on('error', error => {
 		stderrLog(`The server stopped: ${error.message}`, 'error');
@@ -130,6 +140,16 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 	};
 	process.on('SIGINT', stop);
 	process.on('SIGTERM', stop);
+	const idleMs = idleMsOf(env.ACP_HUB_IDLE_MINUTES);
+	if (idleMs > 0) {
+		watchIdle(server, {
+			idleMs,
+			onIdle: () => {
+				stderrLog(`No window used the server for ${idleMs / 60_000} minute(s); closing it.`);
+				stop('SIGTERM');
+			},
+		});
+	}
 	// A window keeps this server's stdin open; when it closes, the window is gone.
 	if (process.argv.includes(EXIT_WITH_PARENT_FLAG)) {
 		process.stdin.resume();

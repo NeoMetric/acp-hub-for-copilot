@@ -1,7 +1,7 @@
 {
 	"name": "acp-hub-for-copilot",
 	"displayName": "ACP Hub for Copilot",
-	"description": "Use Claude, Codex and Antigravity ACP agents in GitHub Copilot Chat, with one sidebar to install, sign in, configure and monitor them.",
+	"description": "A local server that serves your Claude, Codex and Antigravity ACP agents as OpenAI-compatible models for Copilot CLI, Copilot Chat in VS Code and any other client, with one page to install, sign in, configure and monitor them.",
 	"version": "0.0.6",
 	"publisher": "NeoMetric",
 	"license": "MIT",
@@ -28,7 +28,11 @@
 		"antigravity",
 		"gemini",
 		"ai agent",
-		"language model"
+		"language model",
+		"openai-compatible",
+		"local server",
+		"copilot cli",
+		"llm gateway"
 	],
 	"engines": {
 		"vscode": "^1.105.0"
@@ -67,6 +71,10 @@
 			{
 				"command": "acpHub.refreshUsage",
 				"title": "ACP Hub: Refresh Usage"
+			},
+			{
+				"command": "acpHub.stopServer",
+				"title": "ACP Hub: Stop Server"
 			}
 		],
 		"viewsContainers": {
@@ -104,12 +112,27 @@
 		"configuration": {
 			"title": "ACP Hub",
 			"properties": {
+				"acpHub.server.idleTimeoutMinutes": {
+					"order": 0,
+					"description": "How many minutes the ACP Hub server may go unused before it closes itself and its agents. Any open window counts as use, so this only applies once every window is closed. `0` keeps it running until you run `ACP Hub: Stop Server`. Applies the next time the server starts.",
+					"default": 30,
+					"minimum": 0,
+					"type": "number"
+				},
+				"acpHub.server.detached": {
+					"order": 1,
+					"description": "Run the ACP Hub server outside VS Code, so it survives closing or reloading a window and shows in Task Manager as its own process tree. Turn it off to tie the server to the window that started it. Its output goes to `server.log` in the ACP Hub store folder. Applies the next time the server starts.",
+					"default": true,
+					"type": "boolean"
+				},
 				"acpHub.server.port": {
+					"order": 2,
 					"description": "The port the ACP Hub server answers on, on `127.0.0.1`. Every window of this machine uses the same port and so shares one server; change it when another program holds the default.",
 					"default": 8791,
 					"type": "number"
 				},
 				"acpHub.server.autoStart": {
+					"order": 3,
 					"description": "Start the ACP Hub server when no server answers on the port. Turn it off to run the server yourself, with `npm run server`.",
 					"default": true,
 					"type": "boolean"

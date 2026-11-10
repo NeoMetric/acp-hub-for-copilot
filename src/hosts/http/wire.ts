@@ -18,6 +18,9 @@ export const SERVER_NAME = 'acp-hub';
  */
 export const API_VERSION = 1;
 
+/** `POST /shutdown`: asks a server that was given a way to stop to close, agents and all. */
+export const SHUTDOWN_ROUTE = '/shutdown';
+
 /** `GET /health`: who the server is, and what it can drive right now. */
 export interface HealthWire {
 	status: 'ok';

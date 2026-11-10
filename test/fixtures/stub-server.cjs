@@ -11,6 +11,8 @@
 //   ACP_HUB_TOKEN           the bearer token to require, when set
 //   ACP_HUB_SLOW_MODELS_MS  how long `/v1/models` takes, standing in for a cold
 //                           server that wakes every agent before it answers
+//   ACP_HUB_VERSION         the version `/health` names, '0.0.0-stub' by default
+// `POST /shutdown` closes it, as on the real server.
 
 const http = require('node:http');
 
@@ -20,7 +22,7 @@ const TOKEN = process.env.ACP_HUB_TOKEN ? process.env.ACP_HUB_TOKEN.trim() : und
 const SLOW_MODELS_MS = Number(process.env.ACP_HUB_SLOW_MODELS_MS || 0);
 const EXIT_WITH_PARENT = process.argv.indexOf('--exit-with-parent') !== -1;
 
-const HEALTH = { status: 'ok', name: NAME, version: '0.0.0-stub', apiVersion: API_VERSION, openSessions: 0, agents: [] };
+const HEALTH = { status: 'ok', name: NAME, version: process.env.ACP_HUB_VERSION || '0.0.0-stub', apiVersion: API_VERSION, openSessions: 0, agents: [] };
 
 function send(response, status, body) {
 	response.writeHead(status, { 'content-type': 'application/json' });
@@ -42,6 +44,11 @@ const server = http.createServer((request, response) => {
 	}
 	if (TOKEN !== undefined && request.headers.authorization !== `Bearer ${TOKEN}`) {
 		send(response, 401, { error: { message: 'invalid api key', type: 'invalid_request_error', code: 'invalid_api_key' } });
+		return;
+	}
+	if (path === '/shutdown' && request.method === 'POST') {
+		response.once('finish', quit);
+		send(response, 202, { status: 'stopping' });
 		return;
 	}
 	if (path === '/api/state' && request.method === 'GET') {

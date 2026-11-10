@@ -173,7 +173,10 @@ afterEach(async () => {
 	}
 	for (const child of children.splice(0)) {
 		if (child.exitCode === null && child.signalCode === null) {
+			const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
 			child.kill();
+			// A process keeps the folder it runs in from being deleted until it is gone.
+			await within(exited, 3_000);
 		}
 	}
 	for (const server of servers.splice(0)) {
@@ -212,6 +215,27 @@ describe('the link to the server', () => {
 		expect(readyOf(state).owned).toBe(true);
 		await waitForHealth(port);
 		expect(fs.existsSync(tokenFileOf(root)), 'the server it starts shares the stored token').toBe(true);
+	});
+
+	it('starts the server from the store, not from the extension folder, so an update can replace that folder', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		const extensionDir = path.dirname(STUB);
+		let seen: { command: string; args: readonly string[]; options: SpawnOptions } | undefined;
+		const spawn = ((command: string, args: readonly string[], options: SpawnOptions) => {
+			seen = { command, args, options };
+			const child = new EventEmitter() as unknown as ChildProcess;
+			Object.assign(child, { pid: undefined, exitCode: null, signalCode: null, stdin: null, stdout: null, stderr: null, kill: () => false });
+			setTimeout(() => child.emit('error', Object.assign(new Error('spawn acp-hub-server ENOENT'), { code: 'ENOENT' })), 0);
+			return child;
+		}) as unknown as ServerLinkDeps['spawn'];
+		const link = makeLink({ root, port, extensionDir, spawn });
+
+		reasonOf(await link.ensure());
+
+		expect(seen?.options.cwd, 'a process whose working directory is the extension folder blocks its own update').toBe(root);
+		expect((seen?.options.env as NodeJS.ProcessEnv).ACP_HUB_EXTENSION_DIR).toBe(extensionDir);
+		expect(seen?.args).toContain('--exit-with-parent');
 	});
 
 	it('two links race on one port: both end ready, exactly one owns', async () => {
@@ -396,5 +420,80 @@ describe('the link to the server', () => {
 		child.stdin?.destroy();
 
 		expect(await within(exited, 3_000), 'the server exits when its parent goes').toBe('done');
+	});
+});
+
+describe('a server that runs on its own', () => {
+	it('is started apart from the window, with its idle limit, and is left running when the window closes', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		const spawned: ChildProcess[] = [];
+		let seen: SpawnOptions | undefined;
+		let seenArgs: readonly string[] = [];
+		const real = capturing(spawned) as unknown as (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+		const spawn = ((command: string, args: readonly string[], options: SpawnOptions) => {
+			seen = options;
+			seenArgs = args;
+			return real(command, args, options);
+		}) as unknown as ServerLinkDeps['spawn'];
+		const link = makeLink({ root, port, detached: true, idleMinutes: 7, spawn });
+
+		const ready = readyOf(await link.ensure());
+		await link.dispose();
+
+		expect(ready.owned).toBe(true);
+		expect(seen?.detached).toBe(true);
+		expect(seen?.stdio, 'no pipe to the window that a closing window would break').toEqual(['ignore', expect.any(Number), expect.any(Number)]);
+		expect(seenArgs).toContain('--detached');
+		expect(seenArgs).not.toContain('--exit-with-parent');
+		expect(seen?.env?.ACP_HUB_IDLE_MINUTES).toBe('7');
+		await delay(300);
+		expect(await answers(port), 'closing the window leaves the server it started').toBe(true);
+		expect(fs.readFileSync(path.join(root, 'server.log'), 'utf8')).toContain('stub-server listening');
+	});
+
+	it('stops the server on request and leaves it stopped until it is asked for again', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		const link = makeLink({ root, port, detached: true });
+		readyOf(await link.ensure());
+
+		expect(await link.stopServer()).toBe(true);
+
+		await waitForPortClosed(port);
+		expect(reasonOf(link.state!)).toContain('was stopped');
+		readyOf(await link.ensure());
+		await waitForHealth(port);
+	});
+
+	it('replaces a server of an older version, so an update takes effect', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		vi.stubEnv('ACP_HUB_VERSION', '0.0.2');
+		try {
+			startStub({ port, env: { ACP_HUB_VERSION: '0.0.1' } });
+			await waitForHealth(port);
+			const link = makeLink({ root, port, detached: true, version: '0.0.2' });
+
+			readyOf(await link.ensure());
+
+			const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json() as { version: string };
+			expect(health.version).toBe('0.0.2');
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it('keeps a server of a newer version, which another window may have started', async () => {
+		const port = await freePort();
+		startStub({ port, env: { ACP_HUB_VERSION: '0.0.3' } });
+		await waitForHealth(port);
+		const spawn = vi.fn();
+		const link = makeLink({ root: storeRoot(), port, detached: true, version: '0.0.2', spawn: spawn as unknown as ServerLinkDeps['spawn'] });
+
+		const ready = readyOf(await link.ensure());
+
+		expect(ready.owned).toBe(false);
+		expect(spawn).not.toHaveBeenCalled();
 	});
 });

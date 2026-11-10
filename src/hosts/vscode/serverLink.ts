@@ -4,10 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
-import type { Log, LogLevel } from '../../engine/ports/host';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { parseServerLine } from '../../core/logging';
+import type { Log } from '../../engine/ports/host';
 import { ensureToken, readToken, tokenFileOf } from '../../main/token';
 import { STATE_ROUTE } from '../../ui/transport';
-import { API_VERSION, SERVER_NAME, type HealthWire } from '../http/wire';
+import { API_VERSION, SERVER_NAME, SHUTDOWN_ROUTE, type HealthWire } from '../http/wire';
 
 /** What a client needs to reach the server: where it answers, and the token it wants. */
 export type ServerEndpoint = { readonly baseUrl: string; readonly token?: string };
@@ -33,6 +36,15 @@ export interface ServerLinkDeps {
 	readonly extensionDir: string;
 	/** The prompts folder the server composes from, when the extension has one. */
 	readonly promptsDir?: string;
+	/**
+	 * Start the server on its own, outside this window's process tree, so it outlives the window and
+	 * every other window keeps using it. Its output goes to `server.log` in the store root.
+	 */
+	readonly detached?: boolean;
+	/** How many minutes a detached server may go unused before it closes itself; 0 keeps it running. */
+	readonly idleMinutes?: number;
+	/** The extension's version; a detached server of another version is replaced, so an update takes effect. */
+	readonly version?: string;
 	readonly log: Log;
 	readonly spawn?: typeof nodeSpawn;
 	readonly fetch?: typeof fetch;
@@ -65,10 +77,23 @@ const DEFAULT_RETRY_MS = 200;
 /** The flag that makes the server exit when its stdin closes. */
 const EXIT_WITH_PARENT_FLAG = '--exit-with-parent';
 
+/** The flag that tells a server it runs on its own, so it keeps the sign-in link out of its log. */
+const DETACHED_FLAG = '--detached';
+
+/** The file a detached server writes its output to, in the store root. */
+const SERVER_LOG = 'server.log';
+
+/** A log this large is started over, so a server that runs for months does not fill the disk. */
+const SERVER_LOG_LIMIT_BYTES = 2 * 1024 * 1024;
+
+/** How long a server asked to stop gets to release its port. */
+const STOP_TIMEOUT_MS = 10_000;
+
 /** What one probe of the port found. */
 type Probe =
 	| { readonly kind: 'absent' }
 	| { readonly kind: 'compatible' }
+	| { readonly kind: 'older'; readonly version: string }
 	| { readonly kind: 'incompatible'; readonly reason: string };
 
 /**
@@ -88,6 +113,9 @@ export class ServerLink {
 	private readonly spawnOf: typeof nodeSpawn;
 	private readonly listeners = new Set<(state: LinkState) => void>();
 	private child: ChildProcess | undefined;
+	private tail: LogTail | undefined;
+	/** Set by a stop the user asked for, so the watch does not start the server again behind their back. */
+	private paused = false;
 	private current: LinkState | undefined;
 	private pending: Promise<LinkState> | undefined;
 	private watcher: NodeJS.Timeout | undefined;
@@ -116,6 +144,26 @@ export class ServerLink {
 
 	/** Attaches to the server, or starts one; concurrent and repeated calls share one answer. */
 	async ensure(): Promise<LinkState> {
+		this.paused = false;
+		return this.settle();
+	}
+
+	/**
+	 * Asks the server to close, agents and all, whichever window started it, and waits until its port is
+	 * free. The link then leaves it stopped until something asks for the server again. `false` when the
+	 * server could not be asked or did not leave.
+	 */
+	async stopServer(): Promise<boolean> {
+		this.paused = true;
+		if (!await this.requestStop()) {
+			return false;
+		}
+		this.child = undefined;
+		this.publish({ kind: 'unavailable', reason: `The server on port ${this.deps.port} was stopped; it starts again when a chat needs it.` });
+		return true;
+	}
+
+	private async settle(): Promise<LinkState> {
 		if (this.pending) {
 			return this.pending;
 		}
@@ -140,7 +188,8 @@ export class ServerLink {
 		this.listeners.clear();
 		const child = this.child;
 		this.child = undefined;
-		if (!child || gone(child)) {
+		// A detached server belongs to no window: it stays for the others and closes itself when idle.
+		if (!child || gone(child) || this.deps.detached) {
 			return;
 		}
 		const exited = new Promise<void>(resolve => {
@@ -193,7 +242,16 @@ export class ServerLink {
 		if (probe.kind === 'incompatible') {
 			return this.publish({ kind: 'unavailable', reason: probe.reason });
 		}
-		if (probe.kind === 'compatible') {
+		if (probe.kind === 'older') {
+			// A server left running by an earlier version would keep serving the old code after an update.
+			this.deps.log(`The server on port ${this.deps.port} is version ${probe.version} and this window is ${this.deps.version}; replacing it.`);
+			if (!this.deps.autoStart || !await this.requestStop()) {
+				return this.reach(false);
+			}
+			if (this.disposed) {
+				return this.closed();
+			}
+		} else if (probe.kind === 'compatible') {
 			// The server may be one this window started earlier; a watch must not unown it.
 			return this.reach(this.ownsRunning());
 		}
@@ -244,19 +302,34 @@ export class ServerLink {
 		const child = this.spawnServer();
 		this.child = child;
 		let stderr = '';
-		child.stderr?.setEncoding('utf8');
-		child.stderr?.on('data', (text: string) => {
+		const hear = (text: string): void => {
 			stderr += text;
 			for (const line of text.split(/\r?\n/)) {
 				const said = line.trim();
 				if (said) {
-					this.deps.log(said, levelOf(said));
+					const { level, message } = parseServerLine(said);
+					this.deps.log(message, level);
 				}
 			}
-		});
-		// A dispose() that slipped in before the spawn owns no child, so the link must end this one.
+		};
+		child.stderr?.setEncoding('utf8');
+		child.stderr?.on('data', hear);
+		const tail = this.tail;
+		if (tail) {
+			// A detached server writes to its log file, which is the only place its start-up can be read.
+			const poll = setInterval(() => hear(tail.read()), Math.min(this.retryMs, 100));
+			poll.unref();
+			setTimeout(() => {
+				clearInterval(poll);
+				hear(tail.read());
+			}, START_TIMEOUT_MS + 1000).unref();
+		}
+		// A dispose() that slipped in before the spawn owns no child, so the link must end this one,
+		// unless it is detached and meant to be left running.
 		if (this.disposed) {
-			stopChild(child);
+			if (!this.deps.detached) {
+				stopChild(child);
+			}
 			return this.closed();
 		}
 		let spawnError: string | undefined;
@@ -317,12 +390,79 @@ export class ServerLink {
 		if (this.deps.promptsDir) {
 			env.ACP_HUB_PROMPTS_DIR = this.deps.promptsDir;
 		}
+		if (this.deps.detached && this.deps.idleMinutes !== undefined) {
+			env.ACP_HUB_IDLE_MINUTES = String(this.deps.idleMinutes);
+		}
+		// The server finds its vendored adapters and prompt files from this folder. It is passed
+		// rather than taken from the child's working directory, because a process whose working
+		// directory is a folder keeps Windows from renaming that folder: an update of the
+		// extension could not replace it while the server it started was running.
+		env.ACP_HUB_EXTENSION_DIR = this.deps.extensionDir;
+		if (this.deps.detached) {
+			return this.spawnDetached(env);
+		}
 		return this.spawnOf(process.execPath, [this.deps.serverScript, EXIT_WITH_PARENT_FLAG], {
-			cwd: this.deps.extensionDir,
+			cwd: this.deps.root,
 			env,
 			stdio: ['pipe', 'ignore', 'pipe'],
 			windowsHide: true,
 		});
+	}
+
+	/**
+	 * The server as a process of its own: no pipe to this window that a closing window would break, and
+	 * its output in a file, which the window reads while the server starts.
+	 */
+	private spawnDetached(env: NodeJS.ProcessEnv): ChildProcess {
+		const file = path.join(this.deps.root, SERVER_LOG);
+		fs.mkdirSync(this.deps.root, { recursive: true });
+		const startOver = fs.existsSync(file) && fs.statSync(file).size > SERVER_LOG_LIMIT_BYTES;
+		const descriptor = fs.openSync(file, startOver ? 'w' : 'a');
+		this.tail = new LogTail(file, fs.fstatSync(descriptor).size);
+		try {
+			const child = this.spawnOf(process.execPath, [this.deps.serverScript, DETACHED_FLAG], {
+				cwd: this.deps.root,
+				env,
+				stdio: ['ignore', descriptor, descriptor],
+				windowsHide: true,
+				detached: true,
+			});
+			// The window neither waits for this process nor keeps its own from closing on its account.
+			child.unref();
+			return child;
+		} finally {
+			// The child holds its own handle to the file.
+			fs.closeSync(descriptor);
+		}
+	}
+
+	/** Asks the server to close and waits for its port to go quiet; `false` when it would not. */
+	private async requestStop(): Promise<boolean> {
+		const token = readToken(this.deps.root, process.env);
+		try {
+			const response = await this.fetchOf(`${this.baseUrl}${SHUTDOWN_ROUTE}`, {
+				method: 'POST',
+				headers: token ? { authorization: `Bearer ${token}` } : {},
+				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+			});
+			await response.arrayBuffer();
+			if (!response.ok) {
+				this.deps.log(`The server on port ${this.deps.port} would not stop: HTTP ${response.status}. It may be a server this version did not start.`, 'warn');
+				return false;
+			}
+		} catch (error) {
+			this.deps.log(`The server on port ${this.deps.port} could not be asked to stop: ${messageOf(error)}`, 'warn');
+			return false;
+		}
+		const deadline = Date.now() + STOP_TIMEOUT_MS;
+		while (Date.now() < deadline) {
+			if ((await this.classify()).kind === 'absent') {
+				return true;
+			}
+			await delay(this.retryMs);
+		}
+		this.deps.log(`The server on port ${this.deps.port} did not release its port within ${STOP_TIMEOUT_MS / 1000} s.`, 'warn');
+		return false;
 	}
 
 	private async waitForCompatible(deadline: number, giveUp: () => string | undefined): Promise<boolean> {
@@ -380,6 +520,9 @@ export class ServerLink {
 		}
 		if (health.apiVersion !== API_VERSION) {
 			return { kind: 'incompatible', reason: `The server on port ${this.deps.port} answers /health with apiVersion ${health.apiVersion ?? 'none'} and this window speaks ${API_VERSION}; update that server.` };
+		}
+		if (this.deps.detached && this.deps.version && typeof health.version === 'string' && isOlder(health.version, this.deps.version)) {
+			return { kind: 'older', version: health.version };
 		}
 		return { kind: 'compatible' };
 	}
@@ -439,7 +582,9 @@ export class ServerLink {
 		}
 		// A light check, so a server that dies between turns is replaced on the next one.
 		this.watcher = setInterval(() => {
-			void this.ensure();
+			if (!this.paused) {
+				void this.settle();
+			}
 		}, WATCH_INTERVAL_MS);
 		this.watcher.unref();
 	}
@@ -515,24 +660,52 @@ function stopChild(child: ChildProcess): void {
 	}
 }
 
+/** Reads what a file gains after a point, so a log another process writes can be followed. */
+class LogTail {
+	constructor(private readonly file: string, private offset: number) { }
+
+	/** The text written since the last read; empty when the file is gone or has not grown. */
+	read(): string {
+		try {
+			const size = fs.statSync(this.file).size;
+			if (size <= this.offset) {
+				return '';
+			}
+			const buffer = Buffer.alloc(size - this.offset);
+			const descriptor = fs.openSync(this.file, 'r');
+			try {
+				fs.readSync(descriptor, buffer, 0, buffer.length, this.offset);
+			} finally {
+				fs.closeSync(descriptor);
+			}
+			this.offset = size;
+			return buffer.toString('utf8');
+		} catch {
+			return '';
+		}
+	}
+}
+
+/** Whether `version` is below `than`, comparing dotted numbers; a version that is not numbers is never older. */
+function isOlder(version: string, than: string): boolean {
+	const parts = (text: string): number[] | undefined => {
+		const numbers = text.split(/[.-]/).slice(0, 3).map(Number);
+		return numbers.length === 3 && numbers.every(Number.isInteger) ? numbers : undefined;
+	};
+	const left = parts(version);
+	const right = parts(than);
+	if (!left || !right) {
+		return false;
+	}
+	for (let index = 0; index < 3; index++) {
+		if (left[index] !== right[index]) {
+			return left[index] < right[index];
+		}
+	}
+	return false;
+}
+
 function lastLine(text: string): string | undefined {
 	return text.split(/\r?\n/).map(line => line.trim()).filter(line => line).pop();
 }
 
-/** The level a line of the server's own log names, which it writes before the message. */
-function levelOf(line: string): LogLevel {
-	const words = line.split(/\s+/);
-	const at = /^\d{4}-\d{2}-\d{2}T/.test(words[0]) ? 1 : 0;
-	switch ((words[at] ?? '').toUpperCase()) {
-		case 'DEBUG':
-			return 'debug';
-		case 'WARN':
-		case 'WARNING':
-			return 'warn';
-		case 'ERROR':
-			return 'error';
-		default:
-			// INFO and a line the server did not format are both news, not warnings.
-			return 'info';
-	}
-}

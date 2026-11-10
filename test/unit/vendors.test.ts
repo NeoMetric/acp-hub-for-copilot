@@ -44,12 +44,16 @@ describe('vendors', () => {
 		expect(properties['acpHub.server.port']).toEqual({ type: 'number', default: 8791 });
 	});
 
-	it('contributes only the two settings the extension itself reads', () => {
+	it('contributes only the settings the extension itself reads', () => {
 		const properties = packageJson.contributes.configuration.properties as Record<string, Record<string, unknown>>;
-		// The design: the extension keeps only its own settings — the server's port, and whether it starts one.
-		expect(Object.keys(properties).sort()).toEqual(['acpHub.server.autoStart', 'acpHub.server.port']);
+		// The design: the extension keeps only its own settings — the server's port, whether and how it starts one, and when it closes.
+		expect(Object.keys(properties).sort()).toEqual(['acpHub.server.autoStart', 'acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes', 'acpHub.server.port']);
 		expect(properties['acpHub.server.port']).toMatchObject({ type: 'number', default: 8791 });
 		expect(properties['acpHub.server.autoStart']).toMatchObject({ type: 'boolean', default: true });
+		expect(properties['acpHub.server.detached']).toMatchObject({ type: 'boolean', default: true });
+		expect(properties['acpHub.server.idleTimeoutMinutes']).toMatchObject({ type: 'number', default: 30, minimum: 0 });
+		// The idle limit leads the list in the Settings editor.
+		expect(properties['acpHub.server.idleTimeoutMinutes'].order).toBe(0);
 	});
 
 	it('leaves the list of activation events free of duplicates', () => {
