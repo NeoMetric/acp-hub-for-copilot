@@ -510,6 +510,22 @@ describe('a server that runs on its own', () => {
 		await waitForHealth(port);
 	});
 
+	it('leaves a stopped server stopped for background callers, and starts it for a chat', async () => {
+		const port = await freePort();
+		const link = makeLink({ root: storeRoot(), port, detached: true });
+		readyOf(await link.ensure());
+		expect(await link.stopServer()).toBe(true);
+		await waitForPortClosed(port);
+
+		const background = await link.ensure({ background: true });
+
+		expect(reasonOf(background)).toContain('was stopped');
+		await delay(500);
+		expect(await answers(port), 'the sidebar reconnecting must not start it again').toBe(false);
+		readyOf(await link.ensure());
+		await waitForHealth(port);
+	});
+
 	it('replaces a server of an older version, so an update takes effect', async () => {
 		const port = await freePort();
 		const root = storeRoot();

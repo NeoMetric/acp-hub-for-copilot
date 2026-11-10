@@ -153,7 +153,7 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 
 	/** The models the server publishes for this agent, or the ones a window listed before. */
 	private async list(saved: readonly vscode.LanguageModelChatInformation[]): Promise<vscode.LanguageModelChatInformation[]> {
-		const state = await this.deps.link.ensure();
+		const state = await this.deps.link.ensure({ background: true });
 		this.lastKind = state.kind;
 		if (state.kind !== 'ready') {
 			this.deps.log(`The server is unavailable (${state.reason}); offering the ${saved.length} saved ${this.deps.agentId} model(s).`, 'warn');

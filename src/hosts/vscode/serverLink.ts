@@ -151,8 +151,15 @@ export class ServerLink {
 		};
 	}
 
-	/** Attaches to the server, or starts one; concurrent and repeated calls share one answer. */
-	async ensure(): Promise<LinkState> {
+	/**
+	 * Attaches to the server, or starts one; concurrent and repeated calls share one answer. A `background`
+	 * caller, such as the sidebar reconnecting or the model list refreshing, leaves a server the user stopped
+	 * stopped: only a chat or a sidebar action asks for it again.
+	 */
+	async ensure(options: { readonly background?: boolean } = {}): Promise<LinkState> {
+		if (options.background && this.paused && this.current) {
+			return this.current;
+		}
 		this.paused = false;
 		return this.settle();
 	}

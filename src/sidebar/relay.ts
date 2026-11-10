@@ -118,7 +118,7 @@ export class SidebarRelay implements ControlTransport, Disposable {
 		this.current = abort;
 		const live = (): boolean => !this.disposed && this.current === abort && !abort.signal.aborted;
 
-		const state = await this.deps.link.ensure().catch((): undefined => undefined);
+		const state = await this.deps.link.ensure({ background: true }).catch((): undefined => undefined);
 		if (!live()) {
 			return;
 		}
