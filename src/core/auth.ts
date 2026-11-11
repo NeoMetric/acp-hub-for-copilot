@@ -1,6 +1,6 @@
 import type { AgentAdapter, AuthMethodSpec, LaunchContext } from './adapter';
 
-/** The part of the secret store that sign-in needs; `AgentSecretStore` fits. */
+/** The part of the secret store that sign-in needs; the shared store's secrets fit it. */
 export interface KeyStore {
 	get(agentId: string): Promise<string | undefined>;
 	set(agentId: string, value: string): Promise<void>;

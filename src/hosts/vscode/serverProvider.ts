@@ -1,0 +1,263 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) NeoMetric. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import * as vscode from 'vscode';
+import { characterCountOf } from './tokenCount';
+import { CHARS_PER_TOKEN } from '../../engine/chat/usageReport';
+import type { Log } from '../../engine/ports/host';
+import type { StateStore } from '../../engine/ports/state';
+import { modelsStateKey } from '../../core/modelInfo';
+import { modelInformationOf, modelWireOfSaved } from './modelMapping';
+import { bodyOf } from './requestMapping';
+import { listModels, ServerChatError, streamChat, type WireEvent, type WireUsage } from './serverClient';
+import type { LinkState, ServerLink } from './serverLink';
+
+/** What the provider needs of the window's link to the server. */
+export type ServerProviderLink = Pick<ServerLink, 'ensure' | 'state' | 'onDidChange'>;
+
+export interface ServerProviderDeps {
+	/** The agent whose models this provider publishes; the server reads it from the model id. */
+	readonly agentId: string;
+	/** The vendor the workbench registers the provider under. */
+	readonly vendor: string;
+	readonly link: ServerProviderLink;
+	/** The shared store the server saves its models in; the window only reads it, so a cold server cannot empty the picker. */
+	readonly state: Pick<StateStore, 'get'>;
+	readonly log: Log;
+	/** The window's own folder, which roots a chat whose folders this machine does not have. */
+	windowFolder(): string;
+}
+
+/**
+ * Publishes the models of one agent to Copilot Chat and carries each turn to
+ * the server, which drives the agent. There is one provider per agent; every
+ * difference between agents lives in the server's adapters, never here.
+ */
+export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.LanguageModelChatInformation>, vscode.Disposable {
+
+	private readonly changeEmitter = new vscode.EventEmitter<void>();
+	readonly onDidChangeLanguageModelChatInformation = this.changeEmitter.event;
+
+	private readonly unsubscribe: () => void;
+	private listing: Promise<vscode.LanguageModelChatInformation[]> | undefined;
+	private lastKind: LinkState['kind'] | undefined;
+	/** The list the server answered last, kept in memory: it carries what the saved copy lacks, such as renamed models. */
+	private offered: vscode.LanguageModelChatInformation[] | undefined;
+	private disposed = false;
+
+	constructor(private readonly deps: ServerProviderDeps) {
+		this.lastKind = deps.link.state?.kind;
+		this.unsubscribe = deps.link.onDidChange(state => this.linkChanged(state));
+	}
+
+	get vendor(): string {
+		return this.deps.vendor;
+	}
+
+	async provideLanguageModelChatInformation(_options: vscode.PrepareLanguageModelChatModelOptions, token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
+		if (token.isCancellationRequested) {
+			return [];
+		}
+		const saved = this.savedModels();
+		if (saved.length > 0) {
+			// A cold server must not hold the picker: the models a window listed last are offered at once,
+			// and the listing below refreshes them in the background when the server answers otherwise.
+			this.listInBackground(saved);
+			return saved;
+		}
+		return this.list(saved);
+	}
+
+	async provideLanguageModelChatResponse(
+		model: vscode.LanguageModelChatInformation,
+		messages: readonly vscode.LanguageModelChatRequestMessage[],
+		options: vscode.ProvideLanguageModelChatResponseOptions,
+		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+		token: vscode.CancellationToken,
+	): Promise<void> {
+		if (token.isCancellationRequested) {
+			return;
+		}
+		const controller = new AbortController();
+		const subscription = token.onCancellationRequested(() => controller.abort());
+		try {
+			this.deps.log(`Chat request from Copilot for ${model.id}: ${messages.length} message(s)`, 'info');
+			const asked = performance.now();
+			const state = await this.deps.link.ensure();
+			if (state.kind !== 'ready') {
+				throw new ServerChatError(`Could not reach the server: ${state.reason}`);
+			}
+			const reached = performance.now();
+			const body = bodyOf(model, this.deps.agentId, messages, options, this.deps.windowFolder());
+			const built = performance.now();
+			this.deps.log(`Reaching the server took ${Math.round(reached - asked)} ms and building the request ${Math.round(built - reached)} ms.`, 'debug');
+			let first = true;
+			await streamChat(state.endpoint, body, controller.signal, event => {
+				if (first) {
+					first = false;
+					this.deps.log(`The first event of the turn arrived after ${Math.round(performance.now() - built)} ms.`, 'debug');
+				}
+				this.report(event, progress);
+			});
+		} catch (error) {
+			// A turn the window left is not a failure, and the chat shows nothing for it.
+			if (controller.signal.aborted) {
+				return;
+			}
+			this.deps.log(`The ${this.deps.agentId} chat failed: ${messageOf(error)}`, 'error');
+			// The server may have gone with the turn; the next message finds or starts one. This check is a
+			// background one, so a turn that fails cannot start a server the user stopped.
+			void this.deps.link.ensure({ background: true });
+			throw new vscode.LanguageModelError(messageOf(error));
+		} finally {
+			subscription.dispose();
+		}
+	}
+
+	async provideTokenCount(_model: vscode.LanguageModelChatInformation, value: string | vscode.LanguageModelChatRequestMessage, _token: vscode.CancellationToken): Promise<number> {
+		const characters = typeof value === 'string' ? value.length : characterCountOf(value);
+		return Math.ceil(characters / CHARS_PER_TOKEN);
+	}
+
+	/**
+	 * Resolves this provider's models in the workbench. The model picker of the
+	 * Agents window only lists what the agent host advertises, and the host's
+	 * BYOK bridge enumerates already-resolved models, so without this the models
+	 * would never be published there.
+	 */
+	async publishModels(): Promise<void> {
+		try {
+			await vscode.lm.selectChatModels({ vendor: this.deps.vendor });
+			this.deps.log(`Published the ${this.deps.agentId} models to the workbench.`, 'debug');
+		} catch (error) {
+			this.deps.log(`Could not publish the ${this.deps.agentId} models: ${messageOf(error)}`, 'error');
+		}
+	}
+
+	/** Asks the workbench to list the models again, for example after an agent was installed, enabled or signed in. */
+	refresh(): void {
+		if (!this.disposed) {
+			this.changeEmitter.fire();
+		}
+	}
+
+	dispose(): void {
+		if (this.disposed) {
+			return;
+		}
+		this.disposed = true;
+		this.unsubscribe();
+		this.changeEmitter.dispose();
+	}
+
+	/** The models the server publishes for this agent, or the ones a window listed before. */
+	private async list(saved: readonly vscode.LanguageModelChatInformation[]): Promise<vscode.LanguageModelChatInformation[]> {
+		const state = await this.deps.link.ensure({ background: true });
+		this.lastKind = state.kind;
+		if (state.kind !== 'ready') {
+			this.deps.log(`The server is unavailable (${state.reason}); offering the ${saved.length} saved ${this.deps.agentId} model(s).`, 'warn');
+			return [...saved];
+		}
+
+		try {
+			const wires = await listModels(state.endpoint);
+			const models = wires
+				.filter(model => model.owned_by === this.deps.agentId)
+				.flatMap(model => modelInformationOf(this.deps.agentId, model));
+			if (models.length === 0) {
+				// A cold server or an agent that is not installed: an empty answer must not empty the picker.
+				this.deps.log(`The server listed no ${this.deps.agentId} models; offering the ${saved.length} saved one(s) instead.`, 'warn');
+				return [...saved];
+			}
+			const changed = saved.length > 0 && JSON.stringify(saved) !== JSON.stringify(models);
+			// Kept first, so the workbench that lists again on this news already sees them.
+			this.offered = models;
+			if (changed) {
+				this.changeEmitter.fire();
+			}
+			return models;
+		} catch (error) {
+			this.deps.log(`Could not list the ${this.deps.agentId} models: ${messageOf(error)}`, 'warn');
+			return [...saved];
+		}
+	}
+
+	/** Lists once at a time, so a slow link cannot stack a request per picker redraw. */
+	private listInBackground(saved: readonly vscode.LanguageModelChatInformation[]): void {
+		if (this.listing || this.disposed) {
+			return;
+		}
+		const work = this.list(saved);
+		this.listing = work;
+		void work.then(() => {
+			if (this.listing === work) {
+				this.listing = undefined;
+			}
+		});
+	}
+
+	/** What the picker offers before the server answers: the last live list, or the copy the server saved. */
+	private savedModels(): vscode.LanguageModelChatInformation[] {
+		if (this.offered) {
+			return this.offered;
+		}
+		const saved = this.deps.state.get<unknown>(modelsStateKey(this.deps.agentId));
+		if (!Array.isArray(saved)) {
+			return [];
+		}
+		return saved.flatMap(entry => {
+			const wire = modelWireOfSaved(this.deps.agentId, entry);
+			return wire ? modelInformationOf(this.deps.agentId, wire) : [];
+		});
+	}
+
+	/** A server that came or went changed what can be offered, so the workbench lists again. */
+	private linkChanged(state: LinkState): void {
+		if (this.disposed || state.kind === this.lastKind) {
+			return;
+		}
+		this.lastKind = state.kind;
+		this.changeEmitter.fire();
+	}
+
+	/** Reports one event of the reply as the part the chat renders. */
+	private report(event: WireEvent, progress: vscode.Progress<vscode.LanguageModelResponsePart>): void {
+		switch (event.type) {
+			case 'text':
+				progress.report(new vscode.LanguageModelTextPart(event.text));
+				return;
+			case 'thought':
+				reportThinking(progress, event.text);
+				return;
+			case 'tool-call':
+				progress.report(new vscode.LanguageModelToolCallPart(event.callId, event.name, (event.input ?? {}) as object));
+				return;
+			case 'usage':
+				progress.report(vscode.LanguageModelDataPart.json(usageReportOf(event.usage), 'usage'));
+				return;
+		}
+	}
+}
+
+/** The figures of a turn, in the shape the chat already reads them in; a detail the server left out counts as none. */
+function usageReportOf(usage: WireUsage): Record<string, unknown> {
+	return {
+		...usage,
+		prompt_tokens_details: { cached_tokens: usage.prompt_tokens_details?.cached_tokens ?? 0 },
+		completion_tokens_details: { reasoning_tokens: usage.completion_tokens_details?.reasoning_tokens ?? 0 },
+	};
+}
+
+/** Reports a thinking chunk when the running VS Code exposes thinking parts. */
+function reportThinking(progress: vscode.Progress<vscode.LanguageModelResponsePart>, text: string): void {
+	const ThinkingPart = (vscode as unknown as { LanguageModelThinkingPart?: new (value: string) => unknown }).LanguageModelThinkingPart;
+	if (ThinkingPart) {
+		progress.report(new ThinkingPart(text) as vscode.LanguageModelResponsePart);
+	}
+}
+
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}

@@ -19,6 +19,30 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run package
+      - name: Prove the VSIX ships the server, and no server source
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $vsix = Get-ChildItem -Path . -Filter *.vsix | Sort-Object LastWriteTime | Select-Object -Last 1
+          if (-not $vsix) { throw 'npm run package produced no VSIX.' }
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($vsix.FullName)
+          try {
+            $paths = $zip.Entries | ForEach-Object { $_.FullName }
+          } finally {
+            $zip.Dispose()
+          }
+          $paths | Sort-Object | ForEach-Object { Write-Host $_ }
+          # Every window of the extension starts the server, so its bundle must travel with it.
+          if (-not ($paths -contains 'extension/dist/server.js')) {
+            Write-Host "::error::$($vsix.Name) ships no dist/server.js"
+            exit 1
+          }
+          # The server ships as a bundle only; its sources, the extension's, and the working copy's dev tree stay out.
+          $leaked = @($paths | Where-Object { $_ -match '^extension/src/' -or $_ -match 'hosts[\\/]http' -or $_ -match '^extension/\.superpowers/' })
+          if ($leaked.Count -gt 0) {
+            $leaked | ForEach-Object { Write-Host "::error::$($vsix.Name) ships source or dev-tree files: $_" }
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: acp-hub-vsix

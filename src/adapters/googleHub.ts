@@ -1,7 +1,7 @@
 import * as cp from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as net from 'node:net';
-import { killTree, trackChild } from '../core/processes';
+import { killTree, trackChild } from '../core/processHost';
 
 /**
  * The folder under `~/.gemini` where `agy acp` keeps its conversations. The language server that
@@ -41,6 +41,35 @@ function listening(port: number): Promise<boolean> {
 	});
 }
 
+/** How the hub is started: the program to run, its arguments, and whether the command line is already quoted. */
+export interface HubCommand {
+	readonly command: string;
+	readonly args: string[];
+	/** Set when `args` are a command line of their own, quoted here rather than by `spawn`. */
+	readonly verbatim?: boolean;
+}
+
+/** Quotes one argument the way `cmd.exe` reads it, for the wrapper below. */
+function quoteForCmd(argument: string): string {
+	return /[\s"]/.test(argument) ? `"${argument.replace(/"/g, '""')}"` : argument;
+}
+
+/**
+ * The command that starts the CLI's hub. On Windows it goes through `cmd.exe`: a `cmd` started
+ * hidden owns an invisible console, and the CLI inherits it, whereas a CLI started with no console
+ * allocates one of its own, which Windows hands to the default terminal — a window that flashes over
+ * the desktop for as long as the hub runs.
+ */
+export function hubCommand(agy: string, args: readonly string[], platform: NodeJS.Platform = process.platform): HubCommand {
+	if (platform !== 'win32') {
+		return { command: agy, args: [...args] };
+	}
+	// `cmd /s /c ""program" args"`: cmd strips the outer pair of quotes, which leaves the program
+	// quoted, so a folder with a space in it still runs.
+	const line = `"${agy}" ${args.map(quoteForCmd).join(' ')}`;
+	return { command: 'cmd.exe', args: ['/d', '/s', '/c', `"${line}"`], verbatim: true };
+}
+
 /**
  * Starts the CLI's own language server on a port of its own, behind a token made for this run. The
  * server the IDE runs, and its token, are never used.
@@ -48,10 +77,12 @@ function listening(port: number): Promise<boolean> {
 export async function startHub(agy: string, cwd: string): Promise<Hub> {
 	const port = await freePort();
 	const token = crypto.randomUUID();
-	const child = cp.spawn(agy, ['--hub', `--hub-port=${port}`, `--csrf_token=${token}`, `--app_data_dir=${APP_DATA_DIR}`, `--add-dir=${cwd}`], {
+	const launch = hubCommand(agy, ['--hub', `--hub-port=${port}`, `--csrf_token=${token}`, `--app_data_dir=${APP_DATA_DIR}`, `--add-dir=${cwd}`]);
+	const child = cp.spawn(launch.command, launch.args, {
 		cwd,
 		stdio: 'ignore',
 		windowsHide: true,
+		...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
 		detached: process.platform !== 'win32',
 	});
 	if (child.pid) {

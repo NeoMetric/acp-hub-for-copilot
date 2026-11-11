@@ -38,11 +38,31 @@ export default tseslint.config(
 		files: ['**/*.js', '**/*.mjs', '**/*.cjs'],
 		...tseslint.configs.disableTypeChecked,
 		languageOptions: {
-			globals: { require: 'readonly', process: 'readonly', console: 'readonly', module: 'readonly', __dirname: 'readonly' },
+			globals: { require: 'readonly', process: 'readonly', console: 'readonly', module: 'readonly', __dirname: 'readonly', setTimeout: 'readonly' },
 		},
 		rules: {
 			...tseslint.configs.disableTypeChecked.rules,
 			'@typescript-eslint/no-require-imports': 'off',
+		},
+	},
+	{
+		files: ['src/adapters/**/*.ts'],
+		rules: {
+			'no-restricted-imports': [
+				'error',
+				{
+					name: '../core/sessionStore',
+					message: 'Use sessionFingerprint instead',
+				},
+				{
+					name: '../core/processes',
+					message: 'Use processHost instead',
+				},
+				{
+					name: '../core/rpc',
+					message: 'Use protocol instead',
+				},
+			],
 		},
 	},
 );

@@ -8,9 +8,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, AgentSettings, LaunchContext } from '../../src/core/adapter';
-import { AdapterNotInstalledError, AgentClient, readTokenUsage, type AgentChange } from '../../src/core/agentClient';
+import { AdapterNotInstalledError, AgentClient, readTokenUsage, type AgentChange } from '../../src/engine/acp/agentClient';
 import type { Log } from '../../src/core/logging';
-import { isAuthRequiredError, RpcConnectionClosedError, RpcError } from '../../src/core/rpc';
+import { isAuthRequiredError, RpcConnectionClosedError, RpcError } from '../../src/engine/acp/rpc';
 
 const MOCK_AGENT = path.resolve(__dirname, '..', 'fixtures', 'mock-acp-agent.cjs');
 
@@ -31,7 +31,11 @@ afterEach(() => {
 	client = undefined;
 	vi.useRealTimers();
 	// A killed agent can hold its working directory for a moment on Windows.
-	fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	try {
+		fs.rmSync(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	} catch {
+		// Left to the temp folder's own clean-up.
+	}
 });
 
 function testAdapter(overrides: Partial<AgentAdapter> = {}): AgentAdapter {
@@ -374,7 +378,13 @@ describe('readTokenUsage', () => {
 	it('reads the usage the Antigravity server puts in the prompt result, with its thinking tokens', () => {
 		const usage = readTokenUsage({ usage: { inputTokens: 120, outputTokens: 30, thoughtTokens: 45, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195 } as never });
 
-		expect(usage).toEqual({ inputTokens: 120, outputTokens: 30, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195, reasoningOutputTokens: 45 });
+		expect(usage).toEqual({ inputTokens: 120, outputTokens: 75, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 195, reasoningOutputTokens: 45 });
+	});
+
+	it('leaves the output alone when the agent already counts thinking in it', () => {
+		const usage = readTokenUsage({ usage: { inputTokens: 20, outputTokens: 80, thoughtTokens: 50, cachedReadTokens: 100, cachedWriteTokens: 0, totalTokens: 200 } as never });
+
+		expect(usage).toEqual({ inputTokens: 20, outputTokens: 80, cachedReadTokens: 100, cachedWriteTokens: 0, totalTokens: 200, reasoningOutputTokens: 50 });
 	});
 
 	it('returns undefined without any usage', () => {

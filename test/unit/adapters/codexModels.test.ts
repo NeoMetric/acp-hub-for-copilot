@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	CONTEXT_WINDOWS, codexModelPolicy, contextWindowOf, DEFAULT_CONTEXT_WINDOW, effortLevelsFromModels, familyOf, MAX_OUTPUT_TOKENS, MODEL_DETAIL, MODEL_FAMILY,
 } from '../../../src/adapters/codexModels';
-import type { AcpConfigOption } from '../../../src/core/agentClient';
+import type { AcpConfigOption } from '../../../src/engine/acp/agentClient';
 import { effortLevelsOf, findEffortOption, flattenChoices, toModelVariants } from '../../../src/core/models';
 
 const modelOption: AcpConfigOption = {

@@ -72,8 +72,8 @@ function windowsOf(summary: QuotaSummary): UsageWindow[] {
  */
 export function quotaUsage(environment: QuotaEnvironment = realEnvironment, platform: NodeJS.Platform = process.platform): UsageSource {
 	return {
-		// The language server the CLI starts for the hub opens a console of its own, which Windows Terminal
-		// shows as a window for as long as the read lasts, whatever the extension asks of the process.
+		// The language server a hub starts is a second CLI process, and reading the quota costs it a
+		// start each time, so Windows reads it only when the user asks, never on startup or per turn.
 		onDemandOnly: platform === 'win32',
 		async read(ctx, signal): Promise<UsageReading> {
 			const { launch } = ctx;

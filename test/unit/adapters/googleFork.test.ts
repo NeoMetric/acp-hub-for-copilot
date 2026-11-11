@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { forkConversation, forkStepIndex, googleForker, type ForkEnvironment, type HubStep } from '../../../src/adapters/googleFork';
 import { APP_DATA_DIR } from '../../../src/adapters/googleHub';
 import type { ConversationForkRequest } from '../../../src/core/adapter';
-import { messageFingerprintOf } from '../../../src/core/sessionStore';
+import { messageFingerprintOf } from '../../../src/engine/chat/sessionStore';
 
 const planner = 'CORTEX_STEP_TYPE_PLANNER_RESPONSE';
 const point = (text: string, occurrence = 1) => ({ messageId: 'message-id', messageFingerprint: messageFingerprintOf(text), messageOccurrence: occurrence });

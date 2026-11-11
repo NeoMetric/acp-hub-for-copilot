@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import packageJson from '../../package.json';
 import { REGISTRY, registryAgent } from '../../src/core/registry';
-import { activationEventsOf, applyRegistry, configurationOf, vendorOf, type RegistryFile } from '../../src/core/vendors';
+import { activationEventsOf, applyRegistry, vendorOf, type RegistryFile } from '../../src/core/vendors';
 
 const small: RegistryFile = {
 	commonSettings: [{ key: 'idle', type: 'number', label: 'Idle', description: 'd', default: 5 }],
@@ -25,26 +26,34 @@ describe('vendors', () => {
 		expect(result.activationEvents).toEqual(['onStartupFinished', 'onLanguageModelChatProvider:One Agent', 'onLanguageModelChatProvider:Two Agent']);
 	});
 
-	it('generates a setting for every common and own setting, plus enabled', () => {
-		const properties = (configurationOf(small) as { properties: Record<string, Record<string, unknown>> }).properties;
-		expect(Object.keys(properties).sort()).toEqual([
-			'acpHub.agents.one.enabled', 'acpHub.agents.one.idle', 'acpHub.agents.one.mode',
-			'acpHub.agents.two.args', 'acpHub.agents.two.enabled', 'acpHub.agents.two.idle',
-		]);
-		expect(properties['acpHub.agents.one.mode']).toMatchObject({ type: 'string', enum: ['a', 'b'], default: 'a' });
-		expect(properties['acpHub.agents.two.args']).toMatchObject({ type: 'array', items: { type: 'string' } });
-		expect(properties['acpHub.agents.one.idle']).toMatchObject({ type: 'number', minimum: 0, default: 5 });
+	it('generates no agent settings, since the sidebar and config.json hold them', () => {
+		const result = applyRegistry({ name: 'x', contributes: { configuration: { title: 'ACP Hub', properties: {} } } }, small) as { contributes: { configuration: Record<string, unknown> } };
+		expect(result.contributes.configuration).toEqual({ title: 'ACP Hub', properties: {} });
 	});
 
-	it('preserves non-agent settings while replacing generated agent settings', () => {
+	it('drops agent settings a previous version generated, and keeps every other setting', () => {
 		const result = applyRegistry({ contributes: { configuration: { properties: {
 			'acpHub.resume.transcriptDetail': { default: 'compact' },
+			'acpHub.server.port': { type: 'number', default: 8791 },
 			'acpHub.agents.removed.enabled': { default: true },
+			'acpHub.agents.one.idle': { type: 'number', default: 5 },
 		} } } }, small) as { contributes: { configuration: { properties: Record<string, unknown> } } };
 		const properties = result.contributes.configuration.properties;
+		expect(Object.keys(properties).sort()).toEqual(['acpHub.resume.transcriptDetail', 'acpHub.server.port']);
 		expect(properties['acpHub.resume.transcriptDetail']).toEqual({ default: 'compact' });
-		expect(properties['acpHub.agents.removed.enabled']).toBeUndefined();
-		expect(properties['acpHub.agents.one.enabled']).toBeDefined();
+		expect(properties['acpHub.server.port']).toEqual({ type: 'number', default: 8791 });
+	});
+
+	it('contributes only the settings the extension itself reads', () => {
+		const properties = packageJson.contributes.configuration.properties as Record<string, Record<string, unknown>>;
+		// The design: the port, the warm-up and the process model are the server's, so the window keeps only how it runs one.
+		expect(Object.keys(properties).sort()).toEqual(['acpHub.server.autoStart', 'acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes']);
+		expect(properties['acpHub.server.detached']).toMatchObject({ type: 'boolean', default: true });
+		expect(properties['acpHub.server.idleTimeoutMinutes']).toMatchObject({ type: 'number', default: 30, minimum: 0 });
+		// Whether a window starts a server by itself is the window's business, never the server's.
+		expect(properties['acpHub.server.autoStart']).toMatchObject({ type: 'boolean', default: true });
+		// The idle limit leads the list in the Settings editor.
+		expect(properties['acpHub.server.idleTimeoutMinutes'].order).toBe(0);
 	});
 
 	it('leaves the list of activation events free of duplicates', () => {

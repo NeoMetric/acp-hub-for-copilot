@@ -2,8 +2,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PromptArchive } from '../../src/core/provider/promptArchive';
-import { shortHash } from '../../src/core/sessionStore';
+import { PromptArchive } from '../../src/engine/chat/promptArchive';
+import { shortHash } from '../../src/engine/chat/sessionStore';
 
 describe('PromptArchive', () => {
 	let dir: string;

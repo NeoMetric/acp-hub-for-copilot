@@ -73,6 +73,11 @@ export class LanguageModelTextPart {
 	constructor(readonly value: string) { }
 }
 
+/** The proposed-API part a thinking chunk arrives in; VS Code 1.10x exposes it, older builds do not. */
+export class LanguageModelThinkingPart {
+	constructor(readonly value: string, readonly id?: string) { }
+}
+
 export class LanguageModelDataPart {
 	constructor(readonly data: Uint8Array, readonly mimeType: string) { }
 
@@ -90,7 +95,7 @@ export class LanguageModelToolCallPart {
 }
 
 export class LanguageModelToolResultPart {
-	constructor(readonly callId: string, readonly content: unknown[]) { }
+	constructor(readonly callId: string, readonly content: unknown[], readonly isError = false) { }
 }
 
 export class LanguageModelError extends Error { }

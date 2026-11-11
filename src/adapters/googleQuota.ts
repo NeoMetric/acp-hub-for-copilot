@@ -1,4 +1,4 @@
-import { RpcError } from '../core/rpc';
+import { RpcError } from '../core/protocol';
 
 /** A usage limit the server refused a request for. */
 export interface QuotaLimit {

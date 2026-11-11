@@ -1,9 +1,11 @@
-import type { AcpAuthMethod } from '../core/agentClient';
+import type { AcpAuthMethod } from '../core/protocol';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentAdapter, AgentSettings, AuthenticateRequest, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
 import { HOST_IDENTITY } from '../core/hostIdentity';
+import { nativeSessionPolicy } from '../core/nativeSessionPolicy';
 import { REGISTRY, registryAgent } from '../core/registry';
+import type { SessionPolicy } from '../core/sessionPolicy';
 import { vendorOf } from '../core/vendors';
 import { ensureCodexHome } from './codexHome';
 import { codexModelPolicy } from './codexModels';
@@ -213,6 +215,12 @@ function sessionParams(input: SessionParamsInput): Record<string, unknown> {
 
 const registry = registryAgent(ID);
 
+/** Codex reuses a stored conversation by forking it whenever a chat is copied or edited. */
+const sessionPolicy: SessionPolicy = {
+	...nativeSessionPolicy,
+	planContinuation: () => ({ how: 'fork-native' }),
+};
+
 export const codexAdapter: AgentAdapter = {
 	id: ID,
 	displayName: registry.displayName,
@@ -234,7 +242,7 @@ export const codexAdapter: AgentAdapter = {
 		listRequiredArguments: false,
 	},
 	usage: codexUsage,
-	forkChats: true,
+	sessionPolicy,
 	mergeConfig,
 	sessionParams,
 	// The config of its home names the bridge, and Codex refuses a session whose config names a server with no transport.

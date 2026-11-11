@@ -1,8 +1,8 @@
 {
 	"name": "acp-hub-for-copilot",
 	"displayName": "ACP Hub for Copilot",
-	"description": "Use Claude, Codex and Antigravity ACP agents in GitHub Copilot Chat, with one sidebar to install, sign in, configure and monitor them.",
-	"version": "0.0.6",
+	"description": "A local server that serves your Claude, Codex and Antigravity ACP agents as OpenAI-compatible models for Copilot CLI, Copilot Chat in VS Code and any other client, with one page to install, sign in, configure and monitor them.",
+	"version": "1.0.0",
 	"publisher": "NeoMetric",
 	"license": "MIT",
 	"icon": "media/icon.png",
@@ -28,7 +28,11 @@
 		"antigravity",
 		"gemini",
 		"ai agent",
-		"language model"
+		"language model",
+		"openai-compatible",
+		"local server",
+		"copilot cli",
+		"llm gateway"
 	],
 	"engines": {
 		"vscode": "^1.105.0"
@@ -57,6 +61,10 @@
 				"title": "ACP Hub: Show Logs"
 			},
 			{
+				"command": "acpHub.showServerLogs",
+				"title": "ACP Hub: Show Server Logs"
+			},
+			{
 				"command": "acpHub.signIn",
 				"title": "ACP Hub: Sign In"
 			},
@@ -67,6 +75,14 @@
 			{
 				"command": "acpHub.refreshUsage",
 				"title": "ACP Hub: Refresh Usage"
+			},
+			{
+				"command": "acpHub.syncModels",
+				"title": "ACP Hub: Sync Models"
+			},
+			{
+				"command": "acpHub.stopServer",
+				"title": "ACP Hub: Stop Server"
 			}
 		],
 		"viewsContainers": {
@@ -104,199 +120,24 @@
 		"configuration": {
 			"title": "ACP Hub",
 			"properties": {
-				"acpHub.resume.transcriptDetail": {
-					"description": "How an earlier conversation is restored when a chat has no saved agent session to continue (the session expired, the history changed, or the agent could not reopen it). Applies to every agent. `compact` names the tools that ran and omits their results; `full` includes each tool call's arguments and its result as text, which restores more but costs more tokens.",
-					"default": "compact",
-					"type": "string",
-					"enum": [
-						"compact",
-						"full"
-					],
-					"enumDescriptions": [
-						"Messages plus the names of the tools that ran. Tool results are left out.",
-						"Messages plus tool call arguments and tool results, each cut to the per-result limit."
-					]
-				},
-				"acpHub.resume.transcriptMaxCharacters": {
-					"description": "Upper bound, in characters, for the restored conversation. The oldest messages are dropped first when it does not fit.",
-					"default": 40000,
-					"type": "number",
-					"minimum": 1000
-				},
-				"acpHub.resume.transcriptMaxToolResultCharacters": {
-					"description": "Upper bound, in characters, for one tool result in a `full` restored conversation.",
-					"default": 4000,
-					"type": "number",
-					"minimum": 100
-				},
-				"acpHub.agents.claude.enabled": {
-					"type": "boolean",
-					"default": true,
-					"description": "Show Claude Agent in the Copilot model picker."
-				},
-				"acpHub.agents.claude.idleTimeoutSeconds": {
-					"description": "How long a chat session stays warm after its last request before it is closed. 0 keeps it until the agent stops.",
-					"default": 120,
-					"type": "number",
-					"minimum": 0
-				},
-				"acpHub.agents.claude.idleShutdownMinutes": {
-					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again when you come back to the window, or on the next request.",
+				"acpHub.server.idleTimeoutMinutes": {
+					"order": 0,
+					"description": "How many minutes the ACP Hub server may go unused before it closes itself and its agents. Any open window counts as use, so this only applies once every window is closed. `0` keeps it running until you run `ACP Hub: Stop Server`. Applies the next time the server starts.",
 					"default": 30,
-					"type": "number",
-					"minimum": 0
+					"minimum": 0,
+					"type": "number"
 				},
-				"acpHub.agents.claude.dumpRequests": {
-					"description": "Write each request Copilot sends to a JSON file in the extension's storage folder. The files hold the whole prompt, so keep this off unless you are debugging.",
-					"default": false,
-					"type": "boolean"
-				},
-				"acpHub.agents.claude.authPreference": {
-					"description": "Which credentials the Claude agent uses when both an API key and a signed-in account (OAuth) are available. Changing it restarts the agent.",
-					"default": "auto",
-					"type": "string",
-					"enum": [
-						"auto",
-						"apiKey",
-						"oauth"
-					],
-					"enumDescriptions": [
-						"Use the saved API key when there is one, otherwise the signed-in account.",
-						"Use the saved API key. Without one, the agent falls back to its signed-in account.",
-						"Always use the signed-in account and ignore the saved API key and the key environment variables."
-					]
-				},
-				"acpHub.agents.claude.toolSearch": {
-					"description": "Whether Copilot's tools are loaded on demand. On: the model sees only tool names and fetches a tool's description when it needs it, which makes each request much smaller but can add a lookup step before a tool is first used (not supported by every model, Haiku included). Off: every tool's full description is sent with every request. Default: the agent decides. Changing it restarts the agent.",
-					"default": "default",
-					"type": "string",
-					"enum": [
-						"default",
-						"on",
-						"off"
-					],
-					"enumDescriptions": [
-						"Leave it to the agent.",
-						"Load tools on demand.",
-						"Send every tool's description with every request."
-					]
-				},
-				"acpHub.agents.claude.showThinking": {
-					"description": "On: the chat shows a summary of Claude's reasoning in a collapsed Thinking block. Off: the chat shows no thinking text, as when Claude leaves it out of the stream. The model thinks and the tokens are billed the same either way. Changing it restarts the agent.",
+				"acpHub.server.detached": {
+					"order": 1,
+					"description": "Run the ACP Hub server outside VS Code, so it survives closing or reloading a window and shows in Task Manager as its own process tree. Turn it off to tie the server to the window that started it. Its output goes to `server.log` in the ACP Hub store folder. Applies the next time the server starts.",
 					"default": true,
 					"type": "boolean"
 				},
-				"acpHub.agents.claude.replaceSystemPrompt": {
-					"description": "On: Claude's built-in Claude Code prompt is replaced by Copilot's guidance for the chat; only the agent's one-line identity stays. Off: Copilot's guidance is added to the end of the Claude Code prompt. Changing it restarts the agent.",
-					"default": false,
-					"type": "boolean"
-				},
-				"acpHub.agents.codex.enabled": {
-					"type": "boolean",
+				"acpHub.server.autoStart": {
+					"order": 2,
+					"description": "Start the ACP Hub server when this window loads, and whenever the sidebar or a model list looks for one. Turn it off to start the server only when you ask for it: a chat message, the sidebar's **Start server** button, or `node <extensions folder>/dist/server.js` in a terminal. A running server is used either way; this only decides whether a window starts one by itself. Applies after a window reload.",
 					"default": true,
-					"description": "Show Codex Agent in the Copilot model picker."
-				},
-				"acpHub.agents.codex.idleTimeoutSeconds": {
-					"description": "How long a chat session stays warm after its last request before it is closed. 0 keeps it until the agent stops.",
-					"default": 120,
-					"type": "number",
-					"minimum": 0
-				},
-				"acpHub.agents.codex.idleShutdownMinutes": {
-					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again when you come back to the window, or on the next request.",
-					"default": 30,
-					"type": "number",
-					"minimum": 0
-				},
-				"acpHub.agents.codex.dumpRequests": {
-					"description": "Write each request Copilot sends to a JSON file in the extension's storage folder. The files hold the whole prompt, so keep this off unless you are debugging.",
-					"default": false,
 					"type": "boolean"
-				},
-				"acpHub.agents.codex.authPreference": {
-					"description": "Which credentials the Codex agent uses when both an OpenAI API key and a ChatGPT account are available. Changing it restarts the agent.",
-					"default": "auto",
-					"type": "string",
-					"enum": [
-						"auto",
-						"apiKey",
-						"chatgpt"
-					],
-					"enumDescriptions": [
-						"Use the saved OpenAI API key when there is one, otherwise the ChatGPT account.",
-						"Use the saved OpenAI API key. Without one, the agent falls back to its ChatGPT account.",
-						"Always use the ChatGPT account: the saved API key is ignored and CODEX_API_KEY and OPENAI_API_KEY are withheld from the agent."
-					]
-				},
-				"acpHub.agents.codex.maxContextWindow": {
-					"description": "Ask Codex for the largest context window each model allows instead of its default. Models that cannot be raised keep their default. A larger window delays compaction, so long chats re-send more history on every turn and use up your plan limits faster. Changing it restarts the agent.",
-					"default": false,
-					"type": "boolean"
-				},
-				"acpHub.agents.codex.replaceSystemPrompt": {
-					"description": "On: Codex's built-in instructions, bundled skills and environment notes are replaced by a one-line identity, and Copilot's guidance for the chat is added after it. Off: Copilot's guidance is added to Codex's own instructions. Changing it restarts the agent.",
-					"default": false,
-					"type": "boolean"
-				},
-				"acpHub.agents.google.enabled": {
-					"type": "boolean",
-					"default": true,
-					"description": "Show Google Agent in the Copilot model picker."
-				},
-				"acpHub.agents.google.idleTimeoutSeconds": {
-					"description": "How long a chat session stays warm after its last request before it is closed. 0 keeps it until the agent stops.",
-					"default": 120,
-					"type": "number",
-					"minimum": 0
-				},
-				"acpHub.agents.google.idleShutdownMinutes": {
-					"description": "Stop the agent process after this many idle minutes. 0 never stops it. It starts again when you come back to the window, or on the next request.",
-					"default": 30,
-					"type": "number",
-					"minimum": 0
-				},
-				"acpHub.agents.google.dumpRequests": {
-					"description": "Write each request Copilot sends to a JSON file in the extension's storage folder. The files hold the whole prompt, so keep this off unless you are debugging.",
-					"default": false,
-					"type": "boolean"
-				},
-				"acpHub.agents.google.command": {
-					"description": "Path of the Antigravity CLI (agy) to run. Leave empty to use the one the extension downloads. The same program also forks chats and reads the quota.",
-					"default": "",
-					"type": "string"
-				},
-				"acpHub.agents.google.args": {
-					"description": "Arguments for the program. Leave empty for the default (acp --app-data-dir=antigravity-copilot).",
-					"default": [],
-					"type": "array",
-					"items": {
-						"type": "string"
-					}
-				},
-				"acpHub.agents.google.useAgentBuiltInTools": {
-					"description": "Let the Antigravity agent use its own file, shell and search tools. When off (default), the extension runs its own Antigravity agent with an empty tool allowlist, so Antigravity's built-in tools are gone and only the Copilot chat tools are available. The extension automatically approves agent permission requests; built-in tools do not use Copilot confirmations. Changing it restarts the agent.",
-					"default": false,
-					"type": "boolean"
-				},
-				"acpHub.agents.google.replaceSystemPrompt": {
-					"description": "On: the chat's agent takes Copilot's identity instead of Antigravity's persona, and Copilot's guidance for the chat follows. Off: it keeps a short Antigravity persona, with the same guidance after it. Antigravity's own generated prompt is replaced either way; its sections about skills, artifacts and messaging stay. This needs the extension's own agent, which has no Antigravity tools of its own. Changing it restarts the agent.",
-					"default": false,
-					"type": "boolean"
-				},
-				"acpHub.agents.google.authPreference": {
-					"description": "Which credentials the agent uses when both a Gemini API key and a signed-in account are available. Changing it restarts the agent.",
-					"default": "auto",
-					"type": "string",
-					"enum": [
-						"auto",
-						"apiKey",
-						"oauth"
-					],
-					"enumDescriptions": [
-						"Use the saved API key when there is one, otherwise the signed-in account.",
-						"Use the saved API key. Without one, the agent falls back to its signed-in account.",
-						"Always use the signed-in account and ignore the saved API key and the key environment variables."
-					]
 				}
 			}
 		}
@@ -307,6 +148,7 @@
 		"compile": "npm run typecheck && node esbuild.js",
 		"typecheck": "tsc -p . --noEmit",
 		"watch": "node esbuild.js --watch",
+		"server": "node dist/server.js",
 		"lint": "eslint .",
 		"test": "vitest run",
 		"test:smoke": "npm run compile && node esbuild.js --tests && vscode-test",

@@ -4,16 +4,25 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { lastUserMessageIndex } from '../../src/core/convert';
-import { buildPromptBlocks } from '../../src/core/provider/assemble';
-import type { ChatSession } from '../../src/core/provider/types';
-import { assistant, toolCall, toolResult, user } from './messages';
+import { buildPromptBlocks } from '../../src/engine/chat/assemble';
+import { DEFAULT_TRANSCRIPT_OPTIONS, lastUserMessageIndex } from '../../src/engine/chat/messages';
+import type { ChatSession } from '../../src/engine/chat/types';
+import type { ChatMessage, Part } from '../../src/engine/model/chat';
 
 const session = {} as ChatSession;
 const log = () => undefined;
 
+const message = (role: ChatMessage['role'], ...parts: Array<string | Part>): ChatMessage => ({
+	role,
+	parts: parts.map(part => typeof part === 'string' ? { type: 'text', text: part } : part),
+});
+const user = (...parts: Array<string | Part>) => message('user', ...parts);
+const assistant = (...parts: Array<string | Part>) => message('assistant', ...parts);
+const toolCall = (callId: string, name: string): Part => ({ type: 'tool-call', callId, name, input: {} });
+const toolResult = (callId: string): Part => ({ type: 'tool-result', callId, content: [{ type: 'text', text: 'output' }] });
+
 /** The prompt for a session whose cursor stands after `seen` messages. */
-function promptAfter(seen: number, messages: ReturnType<typeof user>[]) {
+function promptAfter(seen: number, messages: ChatMessage[]) {
 	return buildPromptBlocks(messages, seen, lastUserMessageIndex(messages), false, session, log);
 }
 
@@ -61,5 +70,32 @@ describe('buildPromptBlocks catching a session up', () => {
 
 		expect((blocks[0] as { text: string }).text).toContain('<conversation_so_far>');
 		expect((blocks[0] as { text: string }).text).not.toContain('<conversation_since_your_last_turn>');
+	});
+});
+
+describe('buildPromptBlocks with what the host contributes', () => {
+	// The engine names no section of any host's prompt: the host hands over the
+	// context it holds and the way to take its own sections out of a message.
+	const hostPrompt = {
+		chatContext: '<host_context>this machine</host_context>',
+		stripHostSections: (text: string) => text.replace(/<host_context>[\s\S]*?<\/host_context>/g, ''),
+	};
+
+	it('forwards the context of the chat once, ahead of the transcript', () => {
+		const messages = [user('<host_context>this machine</host_context>'), user('1'), user('2')];
+
+		const blocks = buildPromptBlocks(messages, 2, 2, true, session, log, DEFAULT_TRANSCRIPT_OPTIONS, hostPrompt);
+
+		expect(blocks[0]).toEqual({ type: 'text', text: hostPrompt.chatContext });
+		expect((blocks[1] as { text: string }).text).toContain('<conversation_so_far>');
+		expect(blocks[2]).toEqual({ type: 'text', text: '2' });
+	});
+
+	it('takes the host\'s sections out of the text it forwards', () => {
+		const messages = [user('<host_context>this machine</host_context>\nwhat changed?')];
+
+		const blocks = buildPromptBlocks(messages, 0, 0, false, session, log, DEFAULT_TRANSCRIPT_OPTIONS, hostPrompt);
+
+		expect(blocks).toEqual([{ type: 'text', text: 'what changed?' }]);
 	});
 });

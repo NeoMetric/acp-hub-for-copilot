@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+/* global fetch */
+
 // A tiny ACP agent for tests: newline-delimited JSON-RPC on stdio.
 // MOCK_ACP_MODE picks how it behaves:
 //   normal             initialize, session/new, session/prompt streams "hello" and ends the turn
@@ -20,8 +22,12 @@
 //   env:<NAME>   replies with the value of that environment variable
 //   count        replies with the number of session/new requests received
 //   permission   asks the client for permission first, then replies with the outcome
+//   think        thinks first, then replies with "hello"
+//   tool         calls the MCP tool "do_a_thing", then replies with what it returned
+//   tool2        calls it twice in a row, then replies with what the second call returned
 //   forget       fails as if the session no longer existed
 // MOCK_ACP_FAIL_FILE: while that file exists the process exits at start.
+// MOCK_ACP_NEW_DELAY_MS: answers session/new only after that many milliseconds.
 
 const fs = require('node:fs');
 const readline = require('node:readline');
@@ -36,9 +42,11 @@ let authenticated = false;
 let sessions = 0;
 let newRequests = 0;
 let permissionRequests = 0;
+let toolRequests = 0;
 const awaitingPermission = new Map();
 const knownSessions = new Set();
 const slowPrompts = new Map();
+const sessionMcpServers = new Map();
 const deletedSessions = [];
 let lastForkMeta;
 
@@ -63,6 +71,42 @@ function text(sessionId, value) {
 		method: 'session/update',
 		params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: value } } },
 	});
+}
+
+function thought(sessionId, value) {
+	send({
+		jsonrpc: '2.0',
+		method: 'session/update',
+		params: { sessionId, update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: value } } },
+	});
+}
+
+/**
+ * Calls the MCP tool the host listed for the session, the way an agent does.
+ * The call waits until the client that owns it returns its result.
+ */
+async function callTool(sessionId) {
+	const servers = sessionMcpServers.get(sessionId) || [];
+	const endpoint = servers[0];
+	if (!endpoint) {
+		throw new Error('The session was offered no MCP server');
+	}
+	const headers = { 'content-type': 'application/json' };
+	for (const header of endpoint.headers || []) {
+		headers[header.name.toLowerCase()] = header.value;
+	}
+	const response = await fetch(endpoint.url, {
+		method: 'POST',
+		headers,
+		body: JSON.stringify({ jsonrpc: '2.0', id: ++toolRequests, method: 'tools/call', params: { name: 'do_a_thing', arguments: { answer: 42 } } }),
+	});
+	const body = await response.json();
+	if (body.error) {
+		throw new Error(body.error.message);
+	}
+	const result = body.result || {};
+	const content = Array.isArray(result.content) ? result.content : [];
+	return { text: content.map(item => item.text || '').join(''), isError: result.isError === true };
 }
 
 const configOptions = [
@@ -110,6 +154,29 @@ function handlePrompt(message) {
 		});
 		return;
 	}
+	if (prompt === 'tool' || prompt === 'tool2') {
+		send({
+			jsonrpc: '2.0',
+			method: 'session/update',
+			params: { sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Run do_a_thing', kind: 'other', status: 'pending' } },
+		});
+		callTool(sessionId).then(async first => {
+			// `tool2` calls the tool a second time, so one turn has two calls in a row.
+			const result = prompt === 'tool2' ? await callTool(sessionId) : first;
+			text(sessionId, `tool:${result.isError ? 'error:' : ''}${result.text}`);
+			reply(message.id, { stopReason: 'end_turn', _meta: { quota: { token_count: { inputTokens: 3, outputTokens: 2 } } } });
+		}, error => {
+			text(sessionId, `tool failed: ${error.message}`);
+			reply(message.id, { stopReason: 'end_turn' });
+		});
+		return;
+	}
+	if (prompt === 'think') {
+		thought(sessionId, 'pondering');
+		text(sessionId, 'hello');
+		reply(message.id, { stopReason: 'end_turn', _meta: { quota: { token_count: { inputTokens: 3, outputTokens: 2, reasoningOutputTokens: 7 } } } });
+		return;
+	}
 	if (prompt.startsWith('env:')) {
 		text(sessionId, process.env[prompt.slice(4)] ?? 'unset');
 	} else if (prompt === 'count') {
@@ -127,6 +194,19 @@ function handlePrompt(message) {
 	});
 }
 
+/** Answers a new session, with the model and effort options every session reports. */
+function openSession(message) {
+	newRequests++;
+	if (mode === 'auth-required' || (mode === 'key-auth' && !authenticated)) {
+		fail(message.id, -32000, 'Authentication required');
+		return;
+	}
+	const sessionId = `s${++sessions}`;
+	knownSessions.add(sessionId);
+	sessionMcpServers.set(sessionId, message.params.mcpServers || []);
+	reply(message.id, { sessionId, configOptions });
+}
+
 readline.createInterface({ input: process.stdin }).on('line', line => {
 	const message = JSON.parse(line);
 
@@ -141,14 +221,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 		if (message.params.methodId === 'mock-login' && (mode !== 'key-auth' || process.env.MOCK_API_KEY === 'fixture-key')) { authenticated = true; reply(message.id, {}); }
 		else { fail(message.id, -32602, 'Unknown authentication method'); }
 	} else if (message.method === 'session/new') {
-		newRequests++;
-		if (mode === 'auth-required' || (mode === 'key-auth' && !authenticated)) {
-			fail(message.id, -32000, 'Authentication required');
-			return;
-		}
-		const sessionId = `s${++sessions}`;
-		knownSessions.add(sessionId);
-		reply(message.id, { sessionId, configOptions });
+		// A test can hold a new session open, as an agent that is slow to start does.
+		setTimeout(() => openSession(message), Number(process.env.MOCK_ACP_NEW_DELAY_MS || 0));
 	} else if (message.method === 'session/resume') {
 		knownSessions.add(message.params.sessionId);
 		reply(message.id, { configOptions });

@@ -5,15 +5,17 @@
 
 import type * as vscode from 'vscode';
 import type { ModelPolicy } from './adapter';
-import type { AcpConfigOption, AcpConfigOptionChoice, AcpConfigOptionGroup } from './agentClient';
+import type { AcpConfigOption, AcpConfigOptionChoice, AcpConfigOptionGroup } from '../engine/acp/protocol';
 
 const MODEL_CATEGORY = 'model';
 /** The model's own version is not known to the adapter; the picker only needs a stable value. */
-const MODEL_VERSION = '1';
+export const MODEL_VERSION = '1';
 
 export const EFFORT_CATEGORY = 'thought_level';
 /** The model configuration key the picker sends the chosen effort under. */
 export const EFFORT_PROPERTY = 'reasoningEffort';
+/** The picker's title for the thinking effort of every agent. */
+export const EFFORT_TITLE = 'Thinking Effort';
 /** The model picker only shows a property in the toolbar when it is in this group. */
 const EFFORT_GROUP = 'navigation';
 
@@ -110,7 +112,7 @@ export function toModelInformation(policy: ModelPolicy, choice: AcpConfigOptionC
 			properties: {
 				[EFFORT_PROPERTY]: {
 					type: 'string',
-					title: "Thinking Effort",
+					title: EFFORT_TITLE,
 					description: policy.thinkingDescription,
 					group: EFFORT_GROUP,
 					enum: [...effortLevels],

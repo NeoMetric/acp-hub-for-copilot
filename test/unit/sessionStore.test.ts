@@ -5,12 +5,12 @@
 
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import type * as vscode from 'vscode';
-import { guidanceChangeOf, guidanceLineHashes } from '../../src/core/provider';
-import { guidanceChangeBlock } from '../../src/core/provider/assemble';
-import { mergeGuidanceChange } from '../../src/core/provider/keys';
-import { describeToolChange, toolChangeOf } from '../../src/core/provider/keys';
-import { findCheckpoint, findForkSource, hashAll, isPrefixOf, messageFingerprintOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/core/sessionStore';
+import type { StateStore } from '../../src/engine/ports/state';
+import { guidanceChangeOf, guidanceLineHashes } from '../../src/engine/chat/keys';
+import { guidanceChangeBlock } from '../../src/engine/chat/assemble';
+import { mergeGuidanceChange } from '../../src/engine/chat/keys';
+import { describeToolChange, toolChangeOf } from '../../src/engine/chat/keys';
+import { findCheckpoint, findForkSource, hashAll, isPrefixOf, messageFingerprintOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/engine/chat/sessionStore';
 
 const check: ReuseCheck = { cwd: '/work', toolsHash: toolsHashOf(['a', 'b']), guidanceHash: 'g1' };
 
@@ -210,13 +210,13 @@ describe('messageFingerprintOf', () => {
 });
 
 describe('SavedSessionStore', () => {
-	function memento(): vscode.Memento {
+	function memento(): StateStore {
 		const values = new Map<string, unknown>();
 		return {
 			keys: () => [...values.keys()],
 			get: <T>(key: string, fallback?: T) => (values.has(key) ? values.get(key) as T : fallback),
 			update: (key: string, value: unknown) => { values.set(key, value); return Promise.resolve(); },
-		} as vscode.Memento;
+		};
 	}
 
 	it('replaces the entry of a key and forgets it', () => {

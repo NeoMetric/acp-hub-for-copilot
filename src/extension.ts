@@ -1,199 +1,255 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) NeoMetric. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { ADAPTERS, findAdapter } from './core/agents';
-import type { AgentAdapter, LaunchContext } from './core/adapter';
-import { signIn, signOut, terminalMethodsFrom } from './core/auth';
-import { pickSignInChoice, runInVsCodeTerminal } from './core/authPrompts';
-import { McpBridge } from './core/bridge';
-import { findInstalled, getInstallState, installAgent, needsUpdate, uninstallAgent } from './core/installers';
 import { scopedLog } from './core/logging';
-import { killAllChildren, killStrayAgents } from './core/processes';
-import { AcpProvider } from './core/provider';
-import { AgentSecretStore } from './core/secrets';
-import { readAgentSettings, settingKey } from './core/settings';
+import { resolveNode } from './core/nodeRuntime';
+import { REGISTRY } from './core/registry';
+import { migrateSecretsOnce } from './core/secretsMigration';
+import { migrateSettingsOnce } from './core/settingsMigration';
+import { loadConfig } from './hosts/http/config';
+import { migrateInstallsOnce, migrateState, openSharedStore } from './core/sharedStore';
+import { stateStoreOf } from './core/stateStore';
 import { recordStoragePath } from './core/storageCleanup';
-import { UsageStore } from './core/usage';
+import { vendorOf } from './core/vendors';
+import { agentsRoot, storageRoot } from './engine/store/paths';
+import { ModelNames } from './engine/models/modelNames';
+import { copilotProvidersFile } from './hosts/vscode/applyNames';
+import { syncModels } from './hosts/vscode/syncModels';
+import { ServerLink } from './hosts/vscode/serverLink';
+import { ServerProvider } from './hosts/vscode/serverProvider';
+import { warmAgents } from './hosts/vscode/warmAgents';
+import { changedAgents } from './sidebar/agentChanges';
 import { SidebarHost } from './sidebar/host';
-import type { SettingValue } from './sidebar/messages';
+import { SidebarRelay } from './sidebar/relay';
+import type { ControlState } from './ui/messages';
 
+/** How long a server no window uses stays up, in minutes, when the setting is absent. */
+const DEFAULT_IDLE_MINUTES = 30;
+
+/** The link this window owns, so `deactivate` stops the server this window started. */
+let link: ServerLink | undefined;
+
+/**
+ * The window as a client of the ACP Hub server: it reaches or starts the
+ * server, publishes the models of every agent through a provider of its own,
+ * and hands the sidebar the server's control surface. The agents, their
+ * settings and their sign-in live in the server; nothing here knows which
+ * agent is which beyond the registry's ids and display names.
+ */
 export function activate(context: vscode.ExtensionContext): void {
 	const output = vscode.window.createOutputChannel('ACP Hub', { log: true });
 	const log = scopedLog(output);
-	const bridge = new McpBridge(log);
-	const secrets = new AgentSecretStore(context.secrets);
-	const usage = new UsageStore(log);
-	const providers = new Map<string, AcpProvider>();
-	const storageDir = context.globalStorageUri.fsPath;
-	const installEnv = { storageDir, extensionDir: context.extensionUri.fsPath, log, progress: (message: string) => log(message) };
-	recordStoragePath(installEnv.extensionDir, storageDir);
-	for (const adapter of ADAPTERS) { killStrayAgents(path.join(storageDir, adapter.id, 'agents')); }
+	// The server's own lines live in a channel of their own, so the window's channel shows only what the window did.
+	const serverOutput = vscode.window.createOutputChannel('ACP Hub Server', { log: true });
+	const serverLog = scopedLog(serverOutput);
+	const root = storageRoot();
+	const extensionDir = context.extensionUri.fsPath;
+	const globalStorageDir = context.globalStorageUri.fsPath;
+	// The install root of both gateways: an agent installed here is installed for the server, with its logs and pid registry.
+	const agentsDir = agentsRoot(root);
+	const settings = vscode.workspace.getConfiguration('acpHub');
 
-	function adapterFor(id: string): AgentAdapter {
-		const adapter = findAdapter(id);
-		if (!adapter) { throw new Error(`Unknown agent: ${id}`); }
-		return adapter;
+	// One store for both gateways, so a chat saved in VS Code resumes in the server, and back.
+	const shared = openSharedStore({ root, fallbackRoot: globalStorageDir, log });
+	log(`The shared store is in ${shared.root}.`, 'debug');
+	const legacyState = stateStoreOf(context.globalState);
+	if (legacyState) {
+		void migrateState(legacyState, shared.store.state).catch(error => log(`Could not copy the extension's saved state into the shared store: ${messageOf(error)}`, 'warn'));
 	}
-	function settingsFor(adapter: AgentAdapter) {
-		const result = readAgentSettings(adapter, vscode.workspace.getConfiguration('acpHub'));
-		for (const warning of result.warnings) { log(warning, 'warn'); }
-		return result.values;
-	}
-	async function resolveLaunch(adapter: AgentAdapter): Promise<LaunchContext | undefined> {
-		const installed = await findInstalled(adapter, { ...installEnv, settings: settingsFor(adapter) });
-		if (!installed) { return undefined; }
-		return {
-			...installed,
-			storageDir: path.join(storageDir, adapter.id),
-			settings: settingsFor(adapter),
-			apiKey: await secrets.get(adapter.id),
-			workspaceFolder: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? storageDir,
-		};
-	}
-	async function chooseSignIn(id: string): Promise<{ ok: boolean; message?: string }> {
-		const adapter = adapterFor(id);
-		const choice = await pickSignInChoice(adapter, terminalMethodsFrom(adapter, []));
-		if (!choice) { return { ok: false, message: 'Sign-in was cancelled.' }; }
-		const launch = await resolveLaunch(adapter);
-		if (!launch) { return { ok: false, message: 'Install the agent first.' }; }
-		const result = await signIn(adapter, choice, {
-			store: secrets, ctx: launch, runTerminal: options => runInVsCodeTerminal(options, storageDir),
-			startAgent: methodId => providers.get(id)?.startForSignIn(methodId) ?? Promise.resolve(false),
+	// An agent the previous version installed under the extension's own folder moves into the shared root once, so an upgrade does not make it look missing.
+	void migrateInstallsOnce({
+		sourceRoot: globalStorageDir,
+		agentsRoot: agentsDir,
+		agentIds: REGISTRY.agents.map(agent => agent.id),
+		state: shared.store.state,
+		log,
+	}).catch(error => log(`Could not move the agent installs into ${agentsDir}: ${messageOf(error)}`, 'warn'));
+	// A key the previous version saved in the window's secret storage moves into the shared store once, so the sidebar still offers it.
+	void migrateSecretsOnce({
+		secrets: context.secrets,
+		target: shared.store.secrets,
+		agentIds: REGISTRY.agents.map(agent => agent.id),
+		state: shared.store.state,
+		log,
+	}).catch(error => log(`Could not carry the saved API keys into the shared store: ${messageOf(error)}`, 'warn'));
+	// The previous version read the agents' settings from the user's own settings; the server reads them from config.json, so what the user saved moves there once.
+	void migrateSettingsOnce({
+		saved: section => settings.inspect(section)?.globalValue,
+		config: loadConfig(root, log),
+		agents: REGISTRY.agents.map(agent => ({ id: agent.id, settingKeys: [...REGISTRY.commonSettings, ...agent.settings].map(spec => spec.key) })),
+		state: shared.store.state,
+		log,
+	}).catch(error => log(`Could not carry the previous settings into the shared store: ${messageOf(error)}`, 'warn'));
+	// The uninstall hook deletes the agents with the extension.
+	recordStoragePath(extensionDir, agentsDir);
+
+	const providers = new Map<string, ServerProvider>();
+
+	const binding = new ServerLink({
+		root,
+		detached: settings.get<boolean>('server.detached') ?? true,
+		autoStart: settings.get<boolean>('server.autoStart') ?? true,
+		idleMinutes: Math.max(0, settings.get<number>('server.idleTimeoutMinutes') ?? DEFAULT_IDLE_MINUTES),
+		version: typeof context.extension.packageJSON?.version === 'string' ? context.extension.packageJSON.version : undefined,
+		serverScript: path.join(extensionDir, 'dist', 'server.js'),
+		nodeCommand: () => resolveNode({ root, log }),
+		extensionDir,
+		// The prompts the server composes from, kept where the extension always kept them.
+		promptsDir: path.join(path.dirname(path.dirname(globalStorageDir)), 'prompts'),
+		log,
+		serverLog,
+	});
+	link = binding;
+	// A server that cannot be used is named once per change, in the channel the user opens for it.
+	binding.onDidChange(state => {
+		if (state.kind === 'ready') {
+			log(`The ACP Hub server answers on ${state.endpoint.baseUrl}${state.owned ? ' (this window started it)' : ''}.`, 'debug');
+			warmAgents(state.endpoint).then(
+				agents => log(`Starting the ${agents.join(', ') || 'no'} agent(s) ahead of the first chat.`),
+				error => log(`Could not warm the agents: ${messageOf(error)}`, 'warn'),
+			);
+		} else {
+			log(state.reason, 'warn');
+		}
+	});
+
+	for (const agent of REGISTRY.agents) {
+		const vendor = vendorOf(agent.id);
+		const provider = new ServerProvider({
+			agentId: agent.id,
+			vendor,
+			link: binding,
+			// Read-only: the server's saved models, so the window offers them before the server answers.
+			state: shared.store.state,
+			log: scopedLog(output, agent.id),
+			// A chat whose folders this machine does not have runs in the agents folder, as it always did.
+			windowFolder: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? agentsDir,
 		});
-		if (result.ok) { await context.globalState.update(`signedIn.${id}`, true); await providers.get(id)?.restart(); providers.get(id)?.refresh(); void refreshUsage(id); }
-		return result;
-	}
-	async function refreshUsage(id: string, force = true): Promise<void> {
-		const adapter = adapterFor(id);
-		const launch = await resolveLaunch(adapter);
-		if (!launch) { return; }
-		await usage.refresh(adapter, { launch, ready: () => providers.get(id)?.prepareAgent() ?? Promise.resolve(false), askAgent: prompt => providers.get(id)?.askAgent(prompt) ?? Promise.resolve(undefined) }, force);
-	}
-	for (const adapter of ADAPTERS) {
-		const provider = new AcpProvider(adapter, {
-			log: scopedLog(output, adapter.id), bridge, state: context.globalState,
-			resolveLaunch: () => resolveLaunch(adapter),
-			isEnabled: () => vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(adapter.id, 'enabled'), true),
-			client: {
-				log: scopedLog(output, adapter.id),
-				storageDir: path.join(storageDir, adapter.id),
-				clientVersion: String(context.extension.packageJSON.version),
-				onSignInUrl: prompt => sidebar.showSignInUrl(adapter.id, prompt),
-			},
-			requestDumpDir: context.globalStorageUri,
-			profilePromptsDir: path.join(path.dirname(path.dirname(storageDir)), 'prompts'),
-			signIn: id => { void chooseSignIn(id); },
-			showOutput: () => output.show(),
-		});
-		providers.set(adapter.id, provider);
+		providers.set(agent.id, provider);
 		context.subscriptions.push(
+			vscode.lm.registerLanguageModelChatProvider(vendor, provider),
 			provider,
-			provider.onDidRequireSignIn(() => {
-				void context.globalState.update(`signedIn.${adapter.id}`, false);
-				sidebar.refresh();
-			}),
-			provider.onDidMeasureRequest(measurement => usage.recordRequest(adapter.id, measurement)),
-			provider.onDidFinishTurn(turn => {
-				usage.recordTurn(adapter.id, adapter.reportsCache === false ? undefined : turn.usage, turn.background);
-				if (!turn.background && adapter.usage && !adapter.usage.onDemandOnly) { void refreshUsage(adapter.id, false); }
-			}),
-			vscode.lm.registerLanguageModelChatProvider(adapter.vendor, provider),
 		);
+		// The Agents window only lists what the workbench resolved, so the models are asked for once.
 		void provider.publishModels();
 	}
-	// A usage read is the best proof of the account: limits came back, or the agent asked for credentials.
-	context.subscriptions.push({
-		dispose: usage.onDidChange(id => {
-			const signedIn = usage.get(id).signedIn;
-			if (signedIn !== undefined && context.globalState.get<boolean>(`signedIn.${id}`) !== signedIn) {
-				void context.globalState.update(`signedIn.${id}`, signedIn);
-			}
-		}),
-	});
-	const sidebar = new SidebarHost({
-		listAdapters: () => ADAPTERS,
-		getVisibleAgents: () => context.globalState.get<string[]>('sidebar.visibleAgents'),
-		saveVisibleAgents: async ids => { await context.globalState.update('sidebar.visibleAgents', ids); },
-		getInstallState: id => getInstallState(adapterFor(id), { ...installEnv, settings: settingsFor(adapterFor(id)) }),
-		install: async (id, onProgress) => { await installAgent(adapterFor(id), installEnv, update => { if (update.state === 'progress') { onProgress(update.message, update.fraction); } }); onProgress('Starting the agent...'); providers.get(id)?.refresh(); await providers.get(id)?.publishModels(); },
-		uninstall: async id => {
-			const adapter = adapterFor(id);
+
+	const relay = new SidebarRelay({
+		link: binding,
+		openExternal: async url => { await vscode.env.openExternal(vscode.Uri.parse(url)); },
+		copyToClipboard: async text => { await vscode.env.clipboard.writeText(text); },
+		confirmUninstall: async displayName => {
 			const confirmed = await vscode.window.showWarningMessage(
-				`Uninstall ${adapter.displayName}?`,
+				`Uninstall ${displayName}?`,
 				{ modal: true, detail: 'This deletes the agent and the data the extension keeps for it. Your sign-in, saved API key and settings are kept.' },
 				'Uninstall',
 			);
-			if (confirmed !== 'Uninstall') { return false; }
-			const provider = providers.get(id);
-			await provider?.closeAllSessions();
-			await provider?.restart();
-			await uninstallAgent(adapter, installEnv);
-			provider?.refresh();
-			await provider?.publishModels();
-			return true;
+			return confirmed === 'Uninstall';
 		},
-		isSignedIn: async id => {
-			if (await secrets.get(id)) { return true; }
-			return context.globalState.get<boolean>(`signedIn.${id}`);
-		},
-		hasSavedKey: async id => Boolean(await secrets.get(id)),
-		signIn: chooseSignIn,
-		signOut: async id => { await signOut(id, secrets); await providers.get(id)?.restart(); providers.get(id)?.refresh(); },
-		readSettings: id => settingsFor(adapterFor(id)),
-		writeSetting: async (id, key, value) => { await vscode.workspace.getConfiguration('acpHub').update(settingKey(id, key), value, vscode.ConfigurationTarget.Global); },
-		readGlobalSetting: key => vscode.workspace.getConfiguration('acpHub').get<SettingValue>(key),
-		writeGlobalSetting: async (key, value) => { await vscode.workspace.getConfiguration('acpHub').update(key, value, vscode.ConfigurationTarget.Global); },
-		isEnabled: id => vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(id, 'enabled'), true),
-		setEnabled: async (id, enabled) => { await vscode.workspace.getConfiguration('acpHub').update(settingKey(id, 'enabled'), enabled, vscode.ConfigurationTarget.Global); providers.get(id)?.refresh(); },
-		getUsage: id => adapterFor(id).usage ? usage.get(id) : { ...usage.get(id), status: 'unsupported' },
-		refreshUsage,
-		onUsageChange: listener => ({ dispose: usage.onDidChange(listener) }),
-		openExternal: async url => { await vscode.env.openExternal(vscode.Uri.parse(url)); },
-		copyToClipboard: async text => { await vscode.env.clipboard.writeText(text); },
+		log,
+	});
+	const sidebar = new SidebarHost(relay, {
 		assetUri: relative => vscode.Uri.joinPath(context.extensionUri, relative),
 	});
+
+	// An agent that was installed, uninstalled, switched on or off, signed in or given a key changes
+	// which models the picker may offer, so that agent's provider is asked to list them again.
+	let drawn: ControlState | undefined;
+	const unsubscribeCards = relay.onState(state => {
+		for (const agentId of changedAgents(drawn, state)) {
+			providers.get(agentId)?.refresh();
+		}
+		drawn = state;
+	});
+
 	context.subscriptions.push(
-		output, bridge, secrets,
+		output,
+		serverOutput,
+		binding,
+		relay,
+		{ dispose: unsubscribeCards },
 		vscode.window.registerWebviewViewProvider('acpHub.agents', sidebar),
 		vscode.commands.registerCommand('acpHub.showLogs', () => output.show()),
-		vscode.commands.registerCommand('acpHub.signIn', async () => {
-			const picked = await vscode.window.showQuickPick(ADAPTERS.map(adapter => ({ label: adapter.displayName, id: adapter.id })));
-			if (picked) { await chooseSignIn(picked.id); }
-		}),
-		vscode.commands.registerCommand('acpHub.install', () => vscode.commands.executeCommand('acpHub.agents.focus')),
-		vscode.commands.registerCommand('acpHub.refreshUsage', async () => { for (const adapter of ADAPTERS) { await refreshUsage(adapter.id); } }),
-		vscode.workspace.onDidChangeConfiguration(event => {
-			for (const adapter of ADAPTERS) {
-				if (event.affectsConfiguration(`acpHub.agents.${adapter.id}`)) { void providers.get(adapter.id)?.restart(); providers.get(adapter.id)?.refresh(); }
+		vscode.commands.registerCommand('acpHub.showServerLogs', () => serverOutput.show()),
+		vscode.commands.registerCommand('acpHub.stopServer', async () => {
+			if (await binding.stopServer()) {
+				void vscode.window.showInformationMessage('The ACP Hub server and its agents were stopped. They start again when a chat needs them.');
+			} else {
+				void vscode.window.showWarningMessage('The ACP Hub server could not be stopped. See the ACP Hub log for the reason.');
 			}
 		}),
-		secrets.onDidChange(id => { void providers.get(id)?.restart(); providers.get(id)?.refresh(); }),
-		// The user is back: an agent the idle shutdown stopped starts while they type, not after they send.
-		vscode.window.onDidChangeWindowState(state => {
-			if (state.focused && state.active) { for (const provider of providers.values()) { provider.wakeAfterIdle(); } }
+		vscode.commands.registerCommand('acpHub.signIn', async () => {
+			const picked = await vscode.window.showQuickPick(
+				REGISTRY.agents.map(agent => ({ label: agent.displayName, id: agent.id })),
+				{ title: 'Sign in to an agent' },
+			);
+			if (picked) {
+				relay.send({ type: 'signIn', agentId: picked.id });
+			}
+		}),
+		vscode.commands.registerCommand('acpHub.install', () => vscode.commands.executeCommand('acpHub.agents.focus')),
+		vscode.commands.registerCommand('acpHub.refreshUsage', () => {
+			for (const agent of REGISTRY.agents) {
+				relay.send({ type: 'refreshUsage', agentId: agent.id });
+			}
+		}),
+		vscode.commands.registerCommand('acpHub.syncModels', async () => {
+			const state = await binding.ensure({ background: true });
+			if (state.kind !== 'ready') {
+				void vscode.window.showWarningMessage(`The ACP Hub server is not available (${state.reason}), so the model pickers were not synced.`);
+				return;
+			}
+			try {
+				const outcome = await syncModels({
+					endpoint: state.endpoint,
+					agents: REGISTRY.agents,
+					names: new ModelNames(shared.store.state),
+					state: shared.store.state,
+					packageJson: path.join(extensionDir, 'package.json'),
+					providersFile: copilotProvidersFile(),
+				});
+				for (const problem of outcome.problems) {
+					log(problem, 'warn');
+				}
+				for (const provider of providers.values()) {
+					provider.refresh();
+				}
+				const summary = `Synced ${outcome.models} model(s) of ${outcome.providers} agent(s) into the Copilot model pickers.`;
+				const advice = outcome.reloadNeeded
+					? 'Reload the window to see the provider names, and restart the Copilot CLI.'
+					: 'Restart the Copilot CLI to see them there.';
+				// Each target reported its own outcome, so a failure in one still says what the other did.
+				const text = [summary, advice, ...outcome.problems].join(' ');
+				const reload = 'Reload Window';
+				const choices = outcome.reloadNeeded ? [reload] : [];
+				const answer = outcome.problems.length > 0
+					? await vscode.window.showWarningMessage(text, ...choices)
+					: await vscode.window.showInformationMessage(text, ...choices);
+				if (answer === reload) {
+					await vscode.commands.executeCommand('workbench.action.reloadWindow');
+				}
+			} catch (error) {
+				void vscode.window.showErrorMessage(`The model pickers were not synced: ${messageOf(error)}`);
+			}
 		}),
 	);
-	// An agent downloaded by version stays usable at the older one until the newer one is in place.
-	async function updateOutdated(adapter: AgentAdapter): Promise<void> {
-		const env = { ...installEnv, settings: settingsFor(adapter) };
-		if (!await needsUpdate(adapter, env)) { return; }
-		log(`${adapter.displayName} has an update; installing it while the installed version stays in use.`);
-		let shown = 0;
-		await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Updating ${adapter.displayName}` }, async progress => {
-			await installAgent(adapter, installEnv, update => {
-				if (update.state !== 'progress') { return; }
-				const fraction = update.fraction ?? shown;
-				progress.report({ message: update.message, increment: Math.max(0, fraction - shown) });
-				shown = Math.max(shown, fraction);
-			});
-		});
-		providers.get(adapter.id)?.refresh();
-	}
-	for (const adapter of ADAPTERS) {
-		if (adapter.usage && !adapter.usage.onDemandOnly && vscode.workspace.getConfiguration('acpHub').get<boolean>(settingKey(adapter.id, 'enabled'), true)) {
-			void refreshUsage(adapter.id, false).catch(error => log(`Could not start usage refresh for ${adapter.id}: ${String(error)}`, 'warn'));
-		}
-		void updateOutdated(adapter).catch(error => log(`Could not update ${adapter.displayName}: ${error instanceof Error ? error.message : String(error)}`, 'warn'));
-	}
+
+	// The server runs whether or not a chat is open, so the sidebar has a state to draw at once. This is a
+	// background start: a window that opens after the user stopped the server attaches to one that answers,
+	// but starts none, so opening a window does not undo the stop.
+	void binding.ensure({ background: true });
 }
 
-export function deactivate(): void { killAllChildren(); }
+export async function deactivate(): Promise<void> {
+	const owned = link;
+	link = undefined;
+	await owned?.dispose();
+}
+
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}

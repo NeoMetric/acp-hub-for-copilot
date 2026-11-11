@@ -2,6 +2,7 @@ node_modules/
 .scratch/
 dist/
 out/
+server-dist/
 .vscode-test/
 *.vsix
 .DS_Store
@@ -11,3 +12,6 @@ Desktop.ini
 .env
 .env.local
 storage-paths.json
+
+# Subagent-driven-development scratch (ledger, briefs, review packages)
+.superpowers/

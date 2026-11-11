@@ -1,5 +1,6 @@
-import type { AcpAuthMethod, AcpTokenUsage, ForkPoint } from './agentClient';
+import type { AcpAuthMethod, AcpTokenUsage, ForkPoint } from '../engine/acp/protocol';
 import type { Log } from './logging';
+import type { SessionPolicy } from './sessionPolicy';
 
 /** Values of an agent's settings, after defaults are applied. */
 export type AgentSettings = Record<string, string | number | boolean | string[]>;
@@ -214,25 +215,10 @@ export interface AgentAdapter {
 	usage?: UsageSource;
 	/** Whether the token counts the agent reports tell what the prompt cache served; `false` for one whose cache counts are always 0, so no hit rate is claimed. */
 	reportsCache?: boolean;
-	rebuildExpiredSessions?: boolean;
-	/** Whether a chat copied from another chat, or edited above its last message, can continue the stored conversation with `session/fork`; the agent must also advertise it. */
-	forkChats?: boolean;
+	/** How this agent continues a stored conversation, what its chats do when their tools change, and how long a tool call may wait; absent, the native default applies. */
+	sessionPolicy?: SessionPolicy;
 	/** Forks chats by other means than `session/fork`, for an agent that lacks it; used only where the program is installed. */
 	forker?: ConversationForker;
-	/**
-	 * Whether a fork that rewound the source conversation needs the agent restarted before the copy is
-	 * opened, for an agent that keeps every conversation it opened in memory and never reads one again.
-	 */
-	restartAfterFork?: boolean;
-	/**
-	 * Whether a resumed or forked session is sent the session prompt it was saved with instead of a rebuilt one,
-	 * for an agent that applies the prompt on every open, so a reworded prompt misses its cache.
-	 */
-	keepsSessionPrompt?: boolean;
-	/** Whether the agent fetches the tool list again on `tools/list_changed`, so a changed tool set needs no new session. */
-	refreshesTools?: boolean;
-	/** How long (ms) a tool call may wait for Copilot to pick it up before it is failed; absent waits for as long as the agent does. */
-	toolWaitTimeoutMs?: number;
 	/** The most characters of text a tool result may carry to the agent; more is cut with a note on how to read the rest. Absent passes results whole. */
 	maxToolResultChars?: number;
 	/** Whether the session that reads the model list must declare the tool bridge (the agent's own config names it). */
@@ -267,5 +253,4 @@ export interface AgentAdapter {
 	 * session it belongs to and the usage (absent for a call already counted; `seen` remembers call ids).
 	 */
 	modelCallUsage?(method: string, params: unknown, seen: Set<string>): { sessionId: string; usage?: AcpTokenUsage } | undefined;
-	systemPromptNote?: string;
 }

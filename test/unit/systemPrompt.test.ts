@@ -7,10 +7,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { customInstructionsBlock, toAcpContentBlocks } from '../../src/core/convert';
+import { customInstructionsBlock, toAcpContentBlocks } from '../../src/engine/chat/messages';
 import { discoverCustomizations } from '../../src/core/customizations';
-import { guidanceDiffers } from '../../src/core/provider';
-import { systemGuidanceOf } from '../../src/core/requestContext';
+import { guidanceDiffers } from '../../src/engine/chat/keys';
+import { systemGuidanceOf } from '../../src/hosts/vscode/identity';
+import { engineMessageOf } from '../../src/hosts/vscode/requestMapping';
 import { assistant, system, user } from './messages';
 import { buildSystemPromptAppend as buildWithAccess, CUSTOM_FILES_CHAR_BUDGET, type SessionPromptInput } from '../../src/core/systemPrompt';
 
@@ -28,12 +29,15 @@ describe('prompt stability and duplication', () => {
 	const instructions = 'When generating code, please follow these user provided coding instructions.\n<instructions>\nUse tabs.\n</instructions>';
 
 	/** What the agent gets as the append for the chat that a request opens, and the per-turn text it is sent. */
-	const turn = (messages: ReturnType<typeof user>[]) => ({
-		append: buildSystemPromptAppend({ guidance: systemGuidanceOf(messages), customFiles: [file('instructions', 'ts', { applyTo: '**/*.ts' })] }),
-		guidance: systemGuidanceOf(messages),
-		blocks: toAcpContentBlocks(messages),
-		instructions: customInstructionsBlock(messages)?.text,
-	});
+	const turn = (messages: ReturnType<typeof user>[]) => {
+		const engine = messages.map(engineMessageOf);
+		return {
+			append: buildSystemPromptAppend({ guidance: systemGuidanceOf(messages), customFiles: [file('instructions', 'ts', { applyTo: '**/*.ts' })] }),
+			guidance: systemGuidanceOf(messages),
+			blocks: toAcpContentBlocks(engine),
+			instructions: customInstructionsBlock(engine)?.text,
+		};
+	};
 
 	it('keeps the appended prompt and the guidance byte-identical across consecutive turns', () => {
 		const first = [hostSystem('Be careful.'), user(`${instructions}\n<context>10:00</context><userRequest>one</userRequest>`)];

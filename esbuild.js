@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 const esbuild = require("esbuild");
+const { version } = require("./package.json");
 
 const watch = process.argv.includes("--watch");
 const tests = process.argv.includes("--tests");
@@ -16,7 +17,9 @@ const shared = {
 	target: "node20",
 	external: ["vscode"],
 	sourcemap: true,
-	logLevel: "info"
+	logLevel: "info",
+	// The bundle names the version it was built from, so `/health` can report it.
+	define: { __ACP_HUB_VERSION__: JSON.stringify(version) }
 };
 
 /** @type {import('esbuild').BuildOptions[]} */
@@ -40,14 +43,22 @@ const builds = tests
 		outfile: "dist/uninstall.js",
 		minify: !watch
 	}, {
-		// The sidebar page runs in a webview, not in node.
+		// The control page: VS Code loads this into the sidebar's webview, and the
+		// HTTP host serves the same file to a browser.
 		...shared,
 		platform: "browser",
 		format: "iife",
 		target: "es2022",
 		external: [],
-		entryPoints: ["src/sidebar/webview/main.ts"],
+		entryPoints: ["src/ui/main.ts"],
 		outfile: "dist/sidebar.js",
+		minify: !watch
+	}, {
+		// The server every window starts or attaches to; it ships beside the
+		// extension bundle, not inside it, and dies with the window that started it.
+		...shared,
+		entryPoints: ["src/main/server.ts"],
+		outfile: "dist/server.js",
 		minify: !watch
 	}];
 

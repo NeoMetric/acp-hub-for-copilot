@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import type { AcpSessionUpdate } from '../../src/core/agentClient';
-import { checkpointOf, countsOf, noteAgentUpdate, type AgentMessage } from '../../src/core/provider/checkpoints';
-import { messageFingerprintOf } from '../../src/core/sessionStore';
+import type { AcpSessionUpdate } from '../../src/engine/acp/agentClient';
+import { checkpointOf, countsOf, noteAgentUpdate, type AgentMessage } from '../../src/engine/chat/checkpoints';
+import { messageFingerprintOf } from '../../src/engine/chat/sessionStore';
 
 const chunk = (text: string, messageId?: string): AcpSessionUpdate => ({ sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'text', text } });
 const toolCall: AcpSessionUpdate = { sessionUpdate: 'tool_call', toolCallId: 't1' };

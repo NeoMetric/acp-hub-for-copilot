@@ -1,0 +1,917 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) NeoMetric. All rights reserved.
+ *  Licensed under the MIT License. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { parseServerLine } from '../../core/logging';
+import type { Log } from '../../engine/ports/host';
+import { ensureToken, readToken, tokenFileOf } from '../../main/token';
+import { STATE_ROUTE } from '../../ui/transport';
+import { loadConfig, serverPortOf, type FileConfig } from '../http/config';
+import { API_VERSION, SERVER_NAME, SHUTDOWN_ROUTE, type HealthWire } from '../http/wire';
+
+/** What a client needs to reach the server: where it answers, and the token it wants. */
+export type ServerEndpoint = { readonly baseUrl: string; readonly token?: string };
+
+/**
+ * Whether a window can talk to a server, and whether that server is the one
+ * this window started — only a server it started may ever be stopped by it.
+ */
+export type LinkState =
+	| { readonly kind: 'ready'; readonly endpoint: ServerEndpoint; readonly owned: boolean }
+	| { readonly kind: 'unavailable'; readonly reason: string };
+
+export interface ServerLinkDeps {
+	/** The store root both gateways share; the token file lives here. */
+	readonly root: string;
+	/** The port the server listens on, which a test names; otherwise it is the port saved in `config.json`, which every window of this machine reads. */
+	readonly port?: number;
+	/** The built server bundle, `dist/server.js`. */
+	readonly serverScript: string;
+	/** The folder the server runs in, so the store resolves as it does for the extension. */
+	readonly extensionDir: string;
+	/** The prompts folder the server composes from, when the extension has one. */
+	readonly promptsDir?: string;
+	/**
+	 * Start the server on its own, outside this window's process tree, so it outlives the window and
+	 * every other window keeps using it. Its output goes to `server.log` in the store root.
+	 */
+	readonly detached?: boolean;
+	/**
+	 * The Node a detached server runs on, so it is a process of its own and not another copy of the
+	 * editor's executable. `undefined`, or no answer, falls back to the editor's binary.
+	 */
+	readonly nodeCommand?: () => Promise<string | undefined>;
+	/** How many minutes a detached server may go unused before it closes itself; 0 keeps it running. */
+	readonly idleMinutes?: number;
+	/**
+	 * Whether a background caller, such as the sidebar reconnecting or the model
+	 * list refreshing, may start a server; `false` starts one only when the user
+	 * asks for it, with a chat or the sidebar's own button.
+	 */
+	readonly autoStart?: boolean;
+	/** The extension's version; a detached server of another version is replaced, so an update takes effect. */
+	readonly version?: string;
+	/** The window's own channel; the server's lines never go here. */
+	readonly log: Log;
+	/** The channel of the server's own lines, whether they come from its log file or a child's stderr. */
+	readonly serverLog: Log;
+	readonly spawn?: typeof nodeSpawn;
+	readonly fetch?: typeof fetch;
+	/** How long the link waits between two probes of a server that is still starting. */
+	readonly retryMs?: number;
+	/** How often a server this window reached is checked again; every window of this machine shares one, and a test names another. */
+	readonly watchMs?: number;
+}
+
+/** How long a server this window starts may take to answer. */
+const START_TIMEOUT_MS = 15_000;
+
+/** How long one probe may take before it counts as no answer. */
+const PROBE_TIMEOUT_MS = 2_000;
+
+/** How long a server this window started gets to leave once its stdin closes. */
+const KILL_AFTER_MS = 2_000;
+
+/** How often a reached server is checked again, so a dead one is replaced. */
+const WATCH_INTERVAL_MS = 30_000;
+
+/**
+ * How long a child that lost the port to another window gets to show it did
+ * before its window counts the answering server as its own. A second server
+ * cannot bind the port the winner holds, so it exits as soon as it tries.
+ */
+const SETTLE_MIN_MS = 300;
+
+/** The waiting between two probes of a server that is still starting. */
+const DEFAULT_RETRY_MS = 200;
+
+/** The flag that makes the server exit when its stdin closes. */
+const EXIT_WITH_PARENT_FLAG = '--exit-with-parent';
+
+/** The flag that tells a server it runs on its own, so it keeps the sign-in link out of its log. */
+const DETACHED_FLAG = '--detached';
+
+/** The file a detached server writes its output to, in the store root. */
+const SERVER_LOG = 'server.log';
+
+/** A log this large is started over, so a server that runs for months does not fill the disk. */
+const SERVER_LOG_LIMIT_BYTES = 2 * 1024 * 1024;
+
+/** How often the server's log file is read for new lines once the server is up. */
+const FOLLOW_INTERVAL_MS = 500;
+
+/** How much of a log a window that attaches to a running server shows before following it live. */
+const REPLAY_BYTES = 256 * 1024;
+
+/** How long a server asked to stop gets to release its port. */
+const STOP_TIMEOUT_MS = 10_000;
+
+/** The file whose presence says the user stopped the server and nothing has used it since, in the store root. */
+const STOP_MARKER = 'server.stopped';
+
+/**
+ * Where the stop marker lives: `<root>/server.stopped`, beside `server.log` and `server.token`. Every window
+ * of this machine derives it from the store root they share, so a stop in one window is seen by all of them.
+ */
+export function stopMarkerOf(root: string): string {
+	return path.join(path.resolve(root), STOP_MARKER);
+}
+
+/** What one probe of the port found. */
+type Probe =
+	| { readonly kind: 'absent' }
+	| { readonly kind: 'compatible' }
+	| { readonly kind: 'older'; readonly version: string }
+	| { readonly kind: 'incompatible'; readonly reason: string };
+
+/**
+ * The window's side of the server's lifecycle: it attaches to a server that
+ * answers and is compatible, starts one when none does, and starts another
+ * when the one it attached to goes away. It never signals a server it did not
+ * start, and the server it starts exits when this window's process does.
+ *
+ * It holds no VS Code API, so the lifecycle can be tested outside the editor;
+ * `onDidChange` is a plain listener set for the same reason.
+ */
+export class ServerLink {
+	private readonly deps: ServerLinkDeps;
+	private readonly config: FileConfig;
+	private readonly retryMs: number;
+	private readonly watchMs: number;
+	private readonly fetchOf: typeof fetch;
+	private readonly spawnOf: typeof nodeSpawn;
+	private readonly listeners = new Set<(state: LinkState) => void>();
+	private child: ChildProcess | undefined;
+	private tail: LogTail | undefined;
+	private follower: NodeJS.Timeout | undefined;
+	/** Set while a stop the user asked for is under way, so a background caller does not attach to the server that is leaving. */
+	private stopping = false;
+	private current: LinkState | undefined;
+	/** The work in flight, and whether it was asked for in the background, which decides what it may do. */
+	private pending: { readonly work: Promise<LinkState>; readonly background: boolean } | undefined;
+	private watcher: NodeJS.Timeout | undefined;
+	private disposed = false;
+
+	constructor(deps: ServerLinkDeps) {
+		this.deps = deps;
+		this.config = loadConfig(deps.root);
+		this.retryMs = deps.retryMs ?? DEFAULT_RETRY_MS;
+		this.watchMs = deps.watchMs ?? WATCH_INTERVAL_MS;
+		this.fetchOf = deps.fetch ?? fetch;
+		this.spawnOf = deps.spawn ?? nodeSpawn;
+	}
+
+	/** The port the server is looked for on: a test's, else the one saved in `config.json`, which the dashboard can change while the window runs. */
+	private get port(): number {
+		return this.deps.port ?? serverPortOf(this.config);
+	}
+
+	private get baseUrl(): string {
+		return `http://127.0.0.1:${this.port}`;
+	}
+
+	/** The last state the link settled on, if it has looked yet. */
+	get state(): LinkState | undefined {
+		return this.current;
+	}
+
+	/** Calls `listener` whenever the state changes, and returns the unsubscribe. */
+	onDidChange(listener: (state: LinkState) => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Attaches to the server, or starts one; concurrent and repeated calls share one answer. A `background`
+	 * caller, such as the sidebar reconnecting or the model list refreshing, never starts a server the user
+	 * stopped — it uses one only when one answers. A chat or a sidebar action asks for the server, so it
+	 * clears the stop and starts one as it always did.
+	 */
+	async ensure(options: { readonly background?: boolean } = {}): Promise<LinkState> {
+		const background = options.background === true;
+		if (!background) {
+			this.clearStopMarker();
+		}
+		return this.settle(background);
+	}
+
+	/**
+	 * Asks the server to close, agents and all, whichever window started it, and waits until its port is
+	 * free. The stop is recorded in the store root before the server is asked, so the other windows see it
+	 * while the shutdown runs and leave the server stopped too. `false` when the server could not be asked
+	 * or did not leave; the record is taken back then, since the server still runs.
+	 */
+	async stopServer(): Promise<boolean> {
+		this.stopping = true;
+		this.markStopped();
+		try {
+			if (!await this.requestStop()) {
+				this.clearStopMarker();
+				return false;
+			}
+		} finally {
+			this.stopping = false;
+		}
+		this.child = undefined;
+		this.publish(this.stopped());
+		return true;
+	}
+
+	/** Records the user's stop before the server is asked to close, so every window sees it during the shutdown. */
+	private markStopped(): void {
+		const file = stopMarkerOf(this.deps.root);
+		try {
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, `${new Date().toISOString()}\n`, 'utf8');
+		} catch (error) {
+			// A stop that cannot be recorded still stops the server; the other windows may start one again.
+			this.deps.log(`The stop could not be recorded in ${file}: ${messageOf(error)}`, 'warn');
+		}
+	}
+
+	/** Forgets a stop, because the server is asked for again or one answered. */
+	private clearStopMarker(): void {
+		try {
+			fs.rmSync(stopMarkerOf(this.deps.root), { force: true });
+		} catch (error) {
+			this.deps.log(`The stop recorded for the server could not be taken back: ${messageOf(error)}`, 'warn');
+		}
+	}
+
+	/** Whether the user stopped the server and nothing has used it since, in any window. */
+	private stoppedByUser(): boolean {
+		try {
+			fs.statSync(stopMarkerOf(this.deps.root));
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	private async settle(background: boolean): Promise<LinkState> {
+		const pending = this.pending;
+		if (pending) {
+			if (background || !pending.background) {
+				return pending.work;
+			}
+			// A background answer leaves a server the user stopped stopped, and this call asks for one.
+			await pending.work;
+		}
+		const work = this.run(background);
+		this.pending = { work, background };
+		try {
+			return await work;
+		} finally {
+			if (this.pending?.work === work) {
+				this.pending = undefined;
+			}
+		}
+	}
+
+	/** Stops the server this window started; one it merely attached to keeps running. */
+	async dispose(): Promise<void> {
+		this.disposed = true;
+		if (this.watcher) {
+			clearInterval(this.watcher);
+			this.watcher = undefined;
+		}
+		if (this.follower) {
+			clearInterval(this.follower);
+			this.follower = undefined;
+		}
+		this.listeners.clear();
+		const child = this.child;
+		this.child = undefined;
+		// A detached server belongs to no window: it stays for the others and closes itself when idle.
+		if (!child || gone(child) || this.deps.detached) {
+			return;
+		}
+		const exited = new Promise<void>(resolve => {
+			if (gone(child)) {
+				resolve();
+				return;
+			}
+			child.once('exit', () => resolve());
+			// A child that never started reports the failure and no exit, so that is the other way out.
+			child.once('error', () => resolve());
+		});
+		try {
+			// A closed pipe is how the server learns its window is gone, before any kill.
+			child.stdin?.end();
+		} catch (error) {
+			this.deps.log(`The server's stdin did not close: ${messageOf(error)}`, 'warn');
+		}
+		const killer = setTimeout(() => {
+			if (!gone(child)) {
+				child.kill();
+			}
+		}, KILL_AFTER_MS);
+		try {
+			// A window that closes must not wait on a process that will never report an exit.
+			if (!await settlesWithin(exited, KILL_AFTER_MS + 1000)) {
+				this.deps.log(`The server on port ${this.port} did not report that it left; the window stops anyway.`, 'warn');
+			}
+		} finally {
+			clearTimeout(killer);
+		}
+	}
+
+	private async run(background: boolean): Promise<LinkState> {
+		if (this.disposed) {
+			return this.closed();
+		}
+		try {
+			return await this.attachOrStart(background);
+		} catch (error) {
+			return this.publish({ kind: 'unavailable', reason: `The server on port ${this.port} could not be reached: ${messageOf(error)}` });
+		}
+	}
+
+	private async attachOrStart(background: boolean): Promise<LinkState> {
+		if (background && this.stopping) {
+			// The server a stop is closing still answers for a moment; attaching to it would undo the stop.
+			return this.publish(this.stopped());
+		}
+		const probe = await this.classify();
+		// dispose() may have run while the probe was out; a closed link starts nothing.
+		if (this.disposed) {
+			return this.closed();
+		}
+		if (probe.kind === 'incompatible') {
+			return this.publish({ kind: 'unavailable', reason: probe.reason });
+		}
+		if (probe.kind === 'compatible') {
+			// The server may be one this window started earlier; a watch must not unown it.
+			return this.reach(this.ownsRunning());
+		}
+		// Nothing this link can use answers, and a background caller never starts a server the user stopped;
+		// attaching to one that does answer, above, is how a server someone asked for is used again.
+		if (background && this.stoppedByUser()) {
+			return this.publish(this.stopped());
+		}
+		if (background && this.deps.autoStart === false) {
+			return this.publish({ kind: 'unavailable', reason: `The server on port ${this.port} is not running, and acpHub.server.autoStart is off; a chat message or the sidebar's Start server button starts one.` });
+		}
+		if (probe.kind === 'older') {
+			// A server left running by an earlier version would keep serving the old code after an update.
+			this.deps.log(`The server on port ${this.port} is version ${probe.version} and this window is ${this.deps.version}; replacing it.`);
+			if (!await this.requestStop()) {
+				return this.reach(false);
+			}
+			if (this.disposed) {
+				return this.closed();
+			}
+		}
+		return this.start(background);
+	}
+
+	/** Verifies the token and reports the server as reachable, watching it from then on. */
+	private async reach(owned: boolean): Promise<LinkState> {
+		const refused = await this.verifyToken();
+		if (this.disposed) {
+			return this.closed();
+		}
+		if (refused) {
+			return this.publish({ kind: 'unavailable', reason: refused });
+		}
+		// A server answers, so a stop that was recorded is over: the marker lives only while nothing uses it.
+		this.clearStopMarker();
+		this.watch();
+		this.followAttached();
+		return this.publish({
+			kind: 'ready',
+			endpoint: { baseUrl: this.baseUrl, token: readToken(this.deps.root, process.env) },
+			owned,
+		});
+	}
+
+	private async start(background: boolean): Promise<LinkState> {
+		if (this.disposed) {
+			return this.closed();
+		}
+		if (this.child && !gone(this.child)) {
+			// A server this window started is still coming up.
+			const ready = await this.waitForCompatible(Date.now() + START_TIMEOUT_MS, () => undefined);
+			if (this.disposed) {
+				return this.closed();
+			}
+			return ready ? this.reach(this.ownsRunning()) : this.publish({ kind: 'unavailable', reason: this.didNotAnswer() });
+		}
+		if (this.disposed) {
+			return this.closed();
+		}
+		// A stop that was recorded while this call was on its way is still a stop the user asked for.
+		if (background && this.stoppedByUser()) {
+			return this.publish(this.stopped());
+		}
+
+		ensureToken(this.deps.root);
+		this.deps.log(`Starting the ACP Hub server on port ${this.port}.`);
+		const child = await this.spawnServer();
+		this.child = child;
+		let stderr = '';
+		const hear = (text: string): void => {
+			stderr += text;
+			for (const line of text.split(/\r?\n/)) {
+				const said = line.trim();
+				if (said) {
+					const { level, message } = parseServerLine(said);
+					this.deps.serverLog(message, level);
+				}
+			}
+		};
+		child.stderr?.setEncoding('utf8');
+		child.stderr?.on('data', hear);
+		const tail = this.tail;
+		if (tail) {
+			// A detached server writes to its log file, which is the only place its start-up can be read.
+			const poll = setInterval(() => hear(tail.read()), Math.min(this.retryMs, 100));
+			poll.unref();
+			setTimeout(() => {
+				clearInterval(poll);
+				hear(tail.read());
+				// The server goes on writing for as long as it runs, and the channel keeps showing it.
+				this.follow(tail);
+			}, START_TIMEOUT_MS + 1000).unref();
+		}
+		// A dispose() that slipped in before the spawn owns no child, so the link must end this one,
+		// unless it is detached and meant to be left running.
+		if (this.disposed) {
+			if (!this.deps.detached) {
+				stopChild(child);
+			}
+			return this.closed();
+		}
+		let spawnError: string | undefined;
+		child.on('error', error => {
+			spawnError = error.message;
+			// A child that never started is no server: nothing may count it as one this window owns.
+			if (this.child === child) {
+				this.child = undefined;
+			}
+		});
+		child.on('exit', (code, signal) => {
+			this.deps.log(`The server on port ${this.port} exited (${signal ?? `code ${code}`}).`, 'warn');
+		});
+		const giveUp = (): string | undefined => {
+			if (spawnError) {
+				return `The ACP Hub server could not be started: ${spawnError}`;
+			}
+			// Losing the port race to a window that started its server first is not a failure.
+			if (child.exitCode !== null && !stderr.includes('EADDRINUSE')) {
+				const said = lastLine(stderr);
+				return `The ACP Hub server on port ${this.port} exited with code ${child.exitCode}${said ? `: ${said}` : '.'}`;
+			}
+			return undefined;
+		};
+
+		if (await this.waitForCompatible(Date.now() + START_TIMEOUT_MS, giveUp)) {
+			return this.reach(await this.survived(child, () => stderr));
+		}
+		if (this.disposed) {
+			return this.closed();
+		}
+
+		// Another window may have won the port while this child was starting.
+		const probe = await this.classify();
+		if (probe.kind === 'compatible') {
+			return this.reach(false);
+		}
+		if (probe.kind === 'incompatible') {
+			return this.publish({ kind: 'unavailable', reason: probe.reason });
+		}
+		const stopped = giveUp();
+		if (stopped) {
+			return this.publish({ kind: 'unavailable', reason: stopped });
+		}
+		const reason = stderr.includes('EADDRINUSE')
+			? `Port ${this.port} is held by another process; stop it and the next chat starts the server again.`
+			: this.didNotAnswer();
+		return this.publish({ kind: 'unavailable', reason });
+	}
+
+	private async spawnServer(): Promise<ChildProcess> {
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			// The extension host is Electron, which runs a script as node only when told to.
+			ELECTRON_RUN_AS_NODE: '1',
+		};
+		// The server reads the saved port itself, so a port in the window's own environment must not override it.
+		if (this.deps.port !== undefined) {
+			env.ACP_HUB_PORT = String(this.deps.port);
+		} else {
+			delete env.ACP_HUB_PORT;
+		}
+		if (this.deps.promptsDir) {
+			env.ACP_HUB_PROMPTS_DIR = this.deps.promptsDir;
+		}
+		if (this.deps.detached && this.deps.idleMinutes !== undefined) {
+			env.ACP_HUB_IDLE_MINUTES = String(this.deps.idleMinutes);
+		}
+		// The server finds its vendored adapters and prompt files from this folder. It is passed
+		// rather than taken from the child's working directory, because a process whose working
+		// directory is a folder keeps Windows from renaming that folder: an update of the
+		// extension could not replace it while the server it started was running.
+		env.ACP_HUB_EXTENSION_DIR = this.deps.extensionDir;
+		if (this.deps.detached) {
+			return this.spawnDetached(env, await this.nodeOf());
+		}
+		return this.spawnOf(process.execPath, [this.deps.serverScript, EXIT_WITH_PARENT_FLAG], {
+			cwd: this.deps.root,
+			env,
+			stdio: ['pipe', 'ignore', 'pipe'],
+			windowsHide: true,
+		});
+	}
+
+	/** The Node the detached server runs on; the editor's own binary when no other is found. */
+	private async nodeOf(): Promise<string> {
+		try {
+			const node = await this.deps.nodeCommand?.();
+			if (node) {
+				this.deps.log(`The server runs on ${node}.`, 'debug');
+				return node;
+			}
+		} catch (error) {
+			this.deps.log(`Could not find a Node.js for the server: ${messageOf(error)}`, 'warn');
+		}
+		return process.execPath;
+	}
+
+	/** Shows what a server writes to its log in the server's channel, from now on. */
+	private follow(tail: LogTail): void {
+		if (this.disposed || this.follower) {
+			return;
+		}
+		this.follower = setInterval(() => {
+			for (const line of tail.read().split(/\r?\n/)) {
+				const said = line.trim();
+				if (said) {
+					const { level, message } = parseServerLine(said);
+					this.deps.serverLog(message, level);
+				}
+			}
+		}, FOLLOW_INTERVAL_MS);
+		this.follower.unref();
+	}
+
+	/**
+	 * A window that attached to a server it did not start shows the end of that server's log, so the lines
+	 * of the requests before it attached are not lost, and then follows it live.
+	 */
+	private followAttached(): void {
+		if (!this.deps.detached || this.follower || this.tail) {
+			return;
+		}
+		const file = path.join(this.deps.root, SERVER_LOG);
+		try {
+			this.tail = new LogTail(file, replayStartOf(file, fs.statSync(file).size));
+		} catch {
+			return;
+		}
+		this.follow(this.tail);
+	}
+
+	/**
+	 * The server as a process of its own: no pipe to this window that a closing window would break, and
+	 * its output in a file, which the window reads while the server starts.
+	 */
+	private spawnDetached(env: NodeJS.ProcessEnv, node: string): ChildProcess {
+		const file = path.join(this.deps.root, SERVER_LOG);
+		fs.mkdirSync(this.deps.root, { recursive: true });
+		const startOver = fs.existsSync(file) && fs.statSync(file).size > SERVER_LOG_LIMIT_BYTES;
+		const descriptor = fs.openSync(file, startOver ? 'w' : 'a');
+		if (this.follower) {
+			// The start-up reads the new server's log itself, and follows it once the server is up.
+			clearInterval(this.follower);
+			this.follower = undefined;
+		}
+		this.tail = new LogTail(file, fs.fstatSync(descriptor).size);
+		try {
+			const child = this.spawnOf(node, [this.deps.serverScript, DETACHED_FLAG], {
+				cwd: this.deps.root,
+				env,
+				stdio: ['ignore', descriptor, descriptor],
+				windowsHide: true,
+				detached: true,
+			});
+			// The window neither waits for this process nor keeps its own from closing on its account.
+			child.unref();
+			return child;
+		} finally {
+			// The child holds its own handle to the file.
+			fs.closeSync(descriptor);
+		}
+	}
+
+	/** Asks the server to close and waits for its port to go quiet; `false` when it would not. */
+	private async requestStop(): Promise<boolean> {
+		const token = readToken(this.deps.root, process.env);
+		try {
+			const response = await this.fetchOf(`${this.baseUrl}${SHUTDOWN_ROUTE}`, {
+				method: 'POST',
+				headers: token ? { authorization: `Bearer ${token}` } : {},
+				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+			});
+			await response.arrayBuffer();
+			if (!response.ok) {
+				this.deps.log(`The server on port ${this.port} would not stop: HTTP ${response.status}. It may be a server this version did not start.`, 'warn');
+				return false;
+			}
+		} catch (error) {
+			this.deps.log(`The server on port ${this.port} could not be asked to stop: ${messageOf(error)}`, 'warn');
+			return false;
+		}
+		const deadline = Date.now() + STOP_TIMEOUT_MS;
+		while (Date.now() < deadline) {
+			if ((await this.classify()).kind === 'absent') {
+				return true;
+			}
+			await delay(this.retryMs);
+		}
+		this.deps.log(`The server on port ${this.port} did not release its port within ${STOP_TIMEOUT_MS / 1000} s.`, 'warn');
+		return false;
+	}
+
+	private async waitForCompatible(deadline: number, giveUp: () => string | undefined): Promise<boolean> {
+		while (Date.now() < deadline) {
+			if (this.disposed) {
+				return false;
+			}
+			const probe = await this.classify();
+			if (probe.kind === 'compatible') {
+				return true;
+			}
+			if (probe.kind === 'incompatible' || giveUp()) {
+				return false;
+			}
+			await delay(this.retryMs);
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the server that answered is the one this window started: a child
+	 * that lost the port race leaves within a moment, and one that is still
+	 * there afterwards is the process the port now belongs to.
+	 */
+	private async survived(child: ChildProcess, stderr: () => string): Promise<boolean> {
+		const deadline = Date.now() + Math.max(this.retryMs * 3, SETTLE_MIN_MS);
+		while (Date.now() < deadline) {
+			if (gone(child) || stderr().includes('EADDRINUSE')) {
+				return false;
+			}
+			await delay(Math.min(this.retryMs, 50));
+		}
+		return !gone(child);
+	}
+
+	private async classify(): Promise<Probe> {
+		let response: Response;
+		try {
+			response = await this.fetchOf(`${this.baseUrl}/health`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+		} catch {
+			return { kind: 'absent' };
+		}
+		let health: Partial<HealthWire> = {};
+		try {
+			health = await response.json() as Partial<HealthWire>;
+		} catch {
+			// A body that is not JSON says nothing about who answers.
+		}
+		if (!response.ok) {
+			return { kind: 'incompatible', reason: `The server on port ${this.port} answered the health check with HTTP ${response.status}; stop that process.` };
+		}
+		if (health.name !== SERVER_NAME) {
+			const called = typeof health.name === 'string' ? ` (it calls itself "${health.name}")` : '';
+			return { kind: 'incompatible', reason: `The server on port ${this.port} is not ACP Hub${called}; stop that process.` };
+		}
+		if (health.apiVersion !== API_VERSION) {
+			return { kind: 'incompatible', reason: `The server on port ${this.port} answers /health with apiVersion ${health.apiVersion ?? 'none'} and this window speaks ${API_VERSION}; update that server.` };
+		}
+		if (this.deps.detached && this.deps.version && typeof health.version === 'string' && isOlder(health.version, this.deps.version)) {
+			return { kind: 'older', version: health.version };
+		}
+		return { kind: 'compatible' };
+	}
+
+	/**
+	 * Why the server cannot be used, or `undefined` when the token it wants is the one this window holds.
+	 *
+	 * The cheap state route is asked, not the model list: a cold server fills that list by waking
+	 * every agent, which can take longer than a probe is allowed. A probe that runs out of its own
+	 * time is no answer about the token either, so an answering `/health` is not undone by it.
+	 */
+	private async verifyToken(): Promise<string | undefined> {
+		const token = readToken(this.deps.root, process.env);
+		let response: Response;
+		try {
+			response = await this.fetchOf(`${this.baseUrl}${STATE_ROUTE}`, {
+				headers: token ? { authorization: `Bearer ${token}` } : {},
+				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+			});
+		} catch (error) {
+			if (timedOut(error)) {
+				this.deps.log(`The server on port ${this.port} did not answer the token check within ${PROBE_TIMEOUT_MS} ms; its token is left unchecked.`, 'debug');
+				return undefined;
+			}
+			return `The ACP Hub server on port ${this.port} stopped answering: ${messageOf(error)}`;
+		}
+		try {
+			await response.arrayBuffer();
+		} catch {
+			// The status already said what matters; a body that did not arrive says nothing more.
+		}
+		if (response.status === 401) {
+			return `The ACP Hub server on port ${this.port} rejected the token; check ${tokenFileOf(this.deps.root)}.`;
+		}
+		if (!response.ok) {
+			return `The ACP Hub server on port ${this.port} answered the state check with HTTP ${response.status}.`;
+		}
+		return undefined;
+	}
+
+	private didNotAnswer(): string {
+		return `The ACP Hub server on port ${this.port} did not answer within ${START_TIMEOUT_MS / 1000} s.`;
+	}
+
+	private closed(): LinkState {
+		return this.publish({ kind: 'unavailable', reason: `The link to the server on port ${this.port} is closed.` });
+	}
+
+	private stopped(): LinkState {
+		return { kind: 'unavailable', reason: `The server on port ${this.port} was stopped; it starts again when a chat needs it.` };
+	}
+
+	/** Whether the server that answers is one this window started and that still runs. */
+	private ownsRunning(): boolean {
+		return this.child !== undefined && !gone(this.child);
+	}
+
+	private watch(): void {
+		if (this.watcher || this.disposed) {
+			return;
+		}
+		// A light check, so a server that dies between turns is replaced on the next one. It is a background
+		// check, so a server the user stopped stays stopped even when the window that stopped it was another.
+		this.watcher = setInterval(() => {
+			void this.settle(true);
+		}, this.watchMs);
+		this.watcher.unref();
+	}
+
+	private publish(state: LinkState): LinkState {
+		if (!sameState(this.current, state)) {
+			this.current = state;
+			for (const listener of this.listeners) {
+				try {
+					listener(state);
+				} catch (error) {
+					this.deps.log(`A listener of the server link failed: ${messageOf(error)}`, 'warn');
+				}
+			}
+		}
+		return state;
+	}
+}
+
+function sameState(current: LinkState | undefined, next: LinkState): boolean {
+	if (!current || current.kind !== next.kind) {
+		return false;
+	}
+	if (current.kind === 'ready' && next.kind === 'ready') {
+		return current.owned === next.owned && current.endpoint.baseUrl === next.endpoint.baseUrl && current.endpoint.token === next.endpoint.token;
+	}
+	if (current.kind === 'unavailable' && next.kind === 'unavailable') {
+		return current.reason === next.reason;
+	}
+	return true;
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Whether `work` finished before `ms` went by; the timer is cleared either way. */
+async function settlesWithin(work: Promise<void>, ms: number): Promise<boolean> {
+	let timer: NodeJS.Timeout | undefined;
+	const bound = new Promise<false>(resolve => {
+		timer = setTimeout(() => resolve(false), ms);
+	});
+	try {
+		return await Promise.race([work.then(() => true as const), bound]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/** Whether a fetch gave up on its own timer, rather than on a server that went away. */
+function timedOut(error: unknown): boolean {
+	return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+}
+
+/** Whether the child has left, however it did; one that never started has no pid and never exits. */
+function gone(child: ChildProcess): boolean {
+	return child.pid === undefined || child.exitCode !== null || child.signalCode !== null;
+}
+
+/** Ends a server this window started when the window is already closing: no waiting, just the pipe and the kill. */
+function stopChild(child: ChildProcess): void {
+	try {
+		child.stdin?.end();
+	} catch {
+		// The pipe is gone already; the kill below is what leaves no process behind.
+	}
+	if (!gone(child)) {
+		child.kill();
+	}
+}
+
+/** Reads what a file gains after a point, so a log another process writes can be followed. */
+class LogTail {
+	constructor(private readonly file: string, private offset: number) { }
+
+	/** The text written since the last read; empty when the file is gone or has not grown. */
+	read(): string {
+		try {
+			const size = fs.statSync(this.file).size;
+			if (size < this.offset) {
+				// The log was started over, so what it holds now is all new.
+				this.offset = 0;
+			}
+			if (size <= this.offset) {
+				return '';
+			}
+			const buffer = Buffer.alloc(size - this.offset);
+			const descriptor = fs.openSync(this.file, 'r');
+			try {
+				fs.readSync(descriptor, buffer, 0, buffer.length, this.offset);
+			} finally {
+				fs.closeSync(descriptor);
+			}
+			this.offset = size;
+			return buffer.toString('utf8');
+		} catch {
+			return '';
+		}
+	}
+}
+
+/**
+ * Where to start reading a log of `size` bytes so its last `REPLAY_BYTES` are shown: just after the
+ * first newline of that stretch, since the line the offset falls in was cut in half.
+ */
+function replayStartOf(file: string, size: number): number {
+	const offset = Math.max(0, size - REPLAY_BYTES);
+	if (offset === 0) {
+		return 0;
+	}
+	try {
+		const buffer = Buffer.alloc(size - offset);
+		const descriptor = fs.openSync(file, 'r');
+		try {
+			fs.readSync(descriptor, buffer, 0, buffer.length, offset);
+		} finally {
+			fs.closeSync(descriptor);
+		}
+		const newline = buffer.indexOf(0x0a);
+		// A stretch of a single line that does not end yet shows nothing rather than half a line.
+		return newline < 0 ? size : offset + newline + 1;
+	} catch {
+		return offset;
+	}
+}
+
+/** Whether `version` is below `than`, comparing dotted numbers; a version that is not numbers is never older. */
+function isOlder(version: string, than: string): boolean {
+	const parts = (text: string): number[] | undefined => {
+		const numbers = text.split(/[.-]/).slice(0, 3).map(Number);
+		return numbers.length === 3 && numbers.every(Number.isInteger) ? numbers : undefined;
+	};
+	const left = parts(version);
+	const right = parts(than);
+	if (!left || !right) {
+		return false;
+	}
+	for (let index = 0; index < 3; index++) {
+		if (left[index] !== right[index]) {
+			return left[index] < right[index];
+		}
+	}
+	return false;
+}
+
+function lastLine(text: string): string | undefined {
+	return text.split(/\r?\n/).map(line => line.trim()).filter(line => line).pop();
+}
+

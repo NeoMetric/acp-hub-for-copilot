@@ -1,6 +1,6 @@
 # Using the extension's models from Copilot CLI (LLM gateway)
 
-Status: **parked**. Evaluated on 2026-10-30; nothing here is built. This records the options, findings and open questions so the work can be picked up later.
+Status: **superseded**. Evaluated on 2026-10-30 and parked; the server-only runtime ([design](superpowers/specs/2026-11-09-server-only-runtime-design.md)) built what is described here as options B and C — a headless ACP Hub server that the extension is now a thin client of, and that any OpenAI-compatible client, Copilot CLI included, can point at. Nothing further is to be picked up from this document; it is kept for its findings on how Copilot CLI accepts outside models. The extension paths and source-count audit below describe the code as it was in October 2026: `src/core/provider.ts` and `src/core/convert.ts` no longer exist.
 
 ## Goal
 
@@ -17,7 +17,7 @@ Run `copilot` (GitHub Copilot CLI) in a terminal and use the models this extensi
 Per the GitHub docs (BYOK / "Adding LLM models to Copilot CLI"):
 
 - Env vars: `COPILOT_PROVIDER_BASE_URL`, `COPILOT_PROVIDER_TYPE` (`openai` default, `azure`, `anthropic`), `COPILOT_PROVIDER_API_KEY`, `COPILOT_MODEL`. Setting these **replaces** GitHub model routing for that session (community request for side-by-side use: github/community discussion 194778).
-- `~/.copilot/providers.json` (or the path in `COPILOT_PROVIDERS_CONFIG`): models listed there appear in the CLI model picker **alongside** the GitHub models. Preferred.
+- `~/.copilot/providers.json` (or the path in `COPILOT_PROVIDERS_CONFIG`): models listed there appear in the CLI model picker **alongside** the GitHub models. Preferred. The extension's **ACP Hub: Sync Models** command writes it; the server never does.
 - The target must support tool calling and streaming.
 
 So any approach reduces to: serve an OpenAI- or Anthropic-compatible endpoint that fronts the ACP agents, then point the CLI at it.
@@ -57,7 +57,7 @@ Works for any terminal and any folder because the extension host lives as long a
 This already works in the extension and carries over:
 
 1. Client sends a chat request with its tool definitions.
-2. The gateway opens an ACP session and registers those tools with a loopback MCP server (one bearer token per session). `src/core/bridge.ts`.
+2. The gateway opens an ACP session and registers those tools with a loopback MCP server (one bearer token per session). `src/engine/mcp/bridge.ts`.
 3. The agent calls an MCP tool; the gateway does not run it. It writes the call into the response (`tool_calls` delta for OpenAI, `tool_use` for Anthropic) and ends the response with `finish_reason: tool_calls`. The agent's turn stays suspended. `src/core/provider/heldCalls.ts`.
 4. The client runs the tool (keeping its own permission prompts) and sends a new request with the result.
 5. The gateway matches the result by call id, completes the waiting MCP call, and streams the agent's continuation.
@@ -76,7 +76,7 @@ Harder in a gateway than in the extension:
 Current behavior is tuned to VS Code Copilot Chat's prompts:
 
 - Identity/persona sentences are stripped by regexes (`src/core/identityPatterns.ts`) because the agent has its own identity.
-- An intro is appended to the agent's system prompt with required tool arguments and pointers to instruction files (`src/core/systemPrompt.ts`).
+- An intro is appended to the agent's system prompt with required tool arguments and pointers to instruction files (`src/engine/chat/systemPrompt.ts`).
 - Workspace folders, working directory, user/mode instructions and chat context are parsed from VS Code's prompt structure (`src/core/requestContext.ts`, `src/core/convert.ts`).
 - The system guidance is hashed to decide whether a session can be reused.
 
