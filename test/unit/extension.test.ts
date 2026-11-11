@@ -10,6 +10,7 @@ import { agentsRoot } from '../../src/engine/store/paths';
 interface LinkDeps {
 	root: string;
 	detached?: boolean;
+	autoStart?: boolean;
 	idleMinutes?: number;
 	serverScript: string;
 	extensionDir: string;
@@ -369,6 +370,16 @@ describe('the extension is a client of the server', () => {
 
 		expect(mocks.linkDeps[0].idleMinutes).toBe(5);
 		expect(mocks.linkDeps[0].detached).toBe(false);
+	});
+
+	it('reads whether a window may start the server by itself, and starts one unless it may not', () => {
+		activateOnce();
+		expect(mocks.linkDeps[0].autoStart, 'a window starts the server when the setting says nothing').toBe(true);
+
+		mocks.linkDeps.length = 0;
+		mocks.config['server.autoStart'] = false;
+		activateOnce();
+		expect(mocks.linkDeps[0].autoStart).toBe(false);
 	});
 
 	it('writes the reason a server cannot be used to the output channel', () => {

@@ -92,6 +92,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	const binding = new ServerLink({
 		root,
 		detached: settings.get<boolean>('server.detached') ?? true,
+		autoStart: settings.get<boolean>('server.autoStart') ?? true,
 		idleMinutes: Math.max(0, settings.get<number>('server.idleTimeoutMinutes') ?? DEFAULT_IDLE_MINUTES),
 		version: typeof context.extension.packageJSON?.version === 'string' ? context.extension.packageJSON.version : undefined,
 		serverScript: path.join(extensionDir, 'dist', 'server.js'),

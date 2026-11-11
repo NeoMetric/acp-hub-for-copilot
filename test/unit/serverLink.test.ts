@@ -554,6 +554,21 @@ describe('a server that runs on its own', () => {
 		await waitForHealth(port);
 	});
 
+	it('starts no server for a background caller when autoStart is off, and starts one when a chat asks', async () => {
+		const port = await freePort();
+		const spawned: ChildProcess[] = [];
+		const link = makeLink({ root: storeRoot(), port, detached: true, autoStart: false, spawn: capturing(spawned) });
+
+		const background = await link.ensure({ background: true });
+
+		expect(reasonOf(background)).toContain('acpHub.server.autoStart is off');
+		expect(spawned, 'a window starts no server it was told not to start').toHaveLength(0);
+		expect(await answers(port)).toBe(false);
+
+		readyOf(await link.ensure());
+		await waitForHealth(port);
+	});
+
 	it('records the stop before it asks the server to close, so another window sees it during the shutdown', async () => {
 		const port = await freePort();
 		const root = storeRoot();

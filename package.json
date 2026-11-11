@@ -132,6 +132,12 @@
 					"description": "Run the ACP Hub server outside VS Code, so it survives closing or reloading a window and shows in Task Manager as its own process tree. Turn it off to tie the server to the window that started it. Its output goes to `server.log` in the ACP Hub store folder. Applies the next time the server starts.",
 					"default": true,
 					"type": "boolean"
+				},
+				"acpHub.server.autoStart": {
+					"order": 2,
+					"description": "Start the ACP Hub server when this window loads, and whenever the sidebar or a model list looks for one. Turn it off to start the server only when you ask for it: a chat message, the sidebar's **Start server** button, or `node <extensions folder>/dist/server.js` in a terminal. A running server is used either way; this only decides whether a window starts one by itself. Applies after a window reload.",
+					"default": true,
+					"type": "boolean"
 				}
 			}
 		}

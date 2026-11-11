@@ -47,9 +47,11 @@ describe('vendors', () => {
 	it('contributes only the settings the extension itself reads', () => {
 		const properties = packageJson.contributes.configuration.properties as Record<string, Record<string, unknown>>;
 		// The design: the port, the warm-up and the process model are the server's, so the window keeps only how it runs one.
-		expect(Object.keys(properties).sort()).toEqual(['acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes']);
+		expect(Object.keys(properties).sort()).toEqual(['acpHub.server.autoStart', 'acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes']);
 		expect(properties['acpHub.server.detached']).toMatchObject({ type: 'boolean', default: true });
 		expect(properties['acpHub.server.idleTimeoutMinutes']).toMatchObject({ type: 'number', default: 30, minimum: 0 });
+		// Whether a window starts a server by itself is the window's business, never the server's.
+		expect(properties['acpHub.server.autoStart']).toMatchObject({ type: 'boolean', default: true });
 		// The idle limit leads the list in the Settings editor.
 		expect(properties['acpHub.server.idleTimeoutMinutes'].order).toBe(0);
 	});

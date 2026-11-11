@@ -47,6 +47,12 @@ export interface ServerLinkDeps {
 	readonly nodeCommand?: () => Promise<string | undefined>;
 	/** How many minutes a detached server may go unused before it closes itself; 0 keeps it running. */
 	readonly idleMinutes?: number;
+	/**
+	 * Whether a background caller, such as the sidebar reconnecting or the model
+	 * list refreshing, may start a server; `false` starts one only when the user
+	 * asks for it, with a chat or the sidebar's own button.
+	 */
+	readonly autoStart?: boolean;
 	/** The extension's version; a detached server of another version is replaced, so an update takes effect. */
 	readonly version?: string;
 	/** The window's own channel; the server's lines never go here. */
@@ -348,6 +354,9 @@ export class ServerLink {
 		// attaching to one that does answer, above, is how a server someone asked for is used again.
 		if (background && this.stoppedByUser()) {
 			return this.publish(this.stopped());
+		}
+		if (background && this.deps.autoStart === false) {
+			return this.publish({ kind: 'unavailable', reason: `The server on port ${this.port} is not running, and acpHub.server.autoStart is off; a chat message or the sidebar's Start server button starts one.` });
 		}
 		if (probe.kind === 'older') {
 			// A server left running by an earlier version would keep serving the old code after an update.
