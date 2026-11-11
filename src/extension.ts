@@ -9,6 +9,8 @@ import { scopedLog } from './core/logging';
 import { resolveNode } from './core/nodeRuntime';
 import { REGISTRY } from './core/registry';
 import { migrateSecretsOnce } from './core/secretsMigration';
+import { migrateSettingsOnce } from './core/settingsMigration';
+import { loadConfig } from './hosts/http/config';
 import { migrateInstallsOnce, migrateState, openSharedStore } from './core/sharedStore';
 import { stateStoreOf } from './core/stateStore';
 import { recordStoragePath } from './core/storageCleanup';
@@ -74,6 +76,14 @@ export function activate(context: vscode.ExtensionContext): void {
 		state: shared.store.state,
 		log,
 	}).catch(error => log(`Could not carry the saved API keys into the shared store: ${messageOf(error)}`, 'warn'));
+	// The previous version read the agents' settings from the user's own settings; the server reads them from config.json, so what the user saved moves there once.
+	void migrateSettingsOnce({
+		saved: section => settings.inspect(section)?.globalValue,
+		config: loadConfig(root, log),
+		agents: REGISTRY.agents.map(agent => ({ id: agent.id, settingKeys: [...REGISTRY.commonSettings, ...agent.settings].map(spec => spec.key) })),
+		state: shared.store.state,
+		log,
+	}).catch(error => log(`Could not carry the previous settings into the shared store: ${messageOf(error)}`, 'warn'));
 	// The uninstall hook deletes the agents with the extension.
 	recordStoragePath(extensionDir, agentsDir);
 
