@@ -2,7 +2,7 @@
 	"name": "acp-hub-for-copilot",
 	"displayName": "ACP Hub for Copilot",
 	"description": "A local server that serves your Claude, Codex and Antigravity ACP agents as OpenAI-compatible models for Copilot CLI, Copilot Chat in VS Code and any other client, with one page to install, sign in, configure and monitor them.",
-	"version": "0.0.7",
+	"version": "1.0.0",
 	"publisher": "NeoMetric",
 	"license": "MIT",
 	"icon": "media/icon.png",
