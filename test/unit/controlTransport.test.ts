@@ -206,6 +206,27 @@ describe('the control transport', () => {
 		expect(httpRoot.innerHTML).toBe(webviewRoot.innerHTML);
 	});
 
+	it('draws the server strip in both hosts, which is what the sidebar was missing', async () => {
+		const withServer: ControlState = {
+			...SAMPLE,
+			server: { port: 8791, savedPort: 8791, url: 'http://127.0.0.1:8791/?token=abc', portFromEnv: false, alive: true },
+		};
+
+		const webviewRoot = new FakeRoot();
+		const webview = webviewChannel();
+		mountPage(webview.transport, webviewRoot as unknown as HTMLElement);
+		webview.state(withServer);
+
+		const httpRoot = new FakeRoot();
+		const http = httpChannel(withServer);
+		mountPage(http.transport, httpRoot as unknown as HTMLElement);
+		await vi.waitFor(() => expect(httpRoot.innerHTML).toContain('server-status'));
+
+		expect(webviewRoot.innerHTML).toContain('status-dot alive');
+		expect(webviewRoot.innerHTML).toContain('127.0.0.1:8791');
+		expect(webviewRoot.innerHTML).toBe(httpRoot.innerHTML);
+	});
+
 	it('delivers the Models fields of a snapshot in both hosts', async () => {
 		const withModels: ControlState = { ...SAMPLE, models: { agents: [{ agentId: 'a', provider: { name: 'A', default: 'A' }, models: [] }] }, notice: 'Reload it.', refreshing: true };
 
@@ -376,5 +397,29 @@ describe('the webview transport', () => {
 		};
 		deliver?.({ type: 'state', agents: [], usage });
 		expect(received[0]?.usage).toEqual(usage);
+	});
+
+	it('carries the server view from the message into the page state, as the browser gets it', () => {
+		let deliver: ((data: unknown) => void) | undefined;
+		const transport = createWebviewTransport({ postMessage: () => { }, onMessage: listener => { deliver = listener; } });
+		const received: ControlState[] = [];
+		transport.onState(state => received.push(state));
+		const server = { port: 8791, savedPort: 8791, url: 'http://127.0.0.1:8791/?token=abc', portFromEnv: false, alive: true };
+
+		deliver?.({ type: 'state', agents: [], server });
+
+		expect(received[0]?.server).toEqual(server);
+	});
+
+	it('carries the reason the host reaches no server, and whether it is starting one', () => {
+		let deliver: ((data: unknown) => void) | undefined;
+		const transport = createWebviewTransport({ postMessage: () => { }, onMessage: listener => { deliver = listener; } });
+		const received: ControlState[] = [];
+		transport.onState(state => received.push(state));
+
+		deliver?.({ type: 'state', agents: [], linkError: 'The server is not running.', starting: true });
+
+		expect(received[0]?.linkError).toBe('The server is not running.');
+		expect(received[0]?.starting).toBe(true);
 	});
 });

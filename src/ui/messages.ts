@@ -147,6 +147,13 @@ export interface ControlState {
 	notice?: string;
 	/** Whether the models are being read from the agents now. */
 	refreshing?: boolean;
+	/**
+	 * Why the host cannot reach its server, when it cannot. The page says so and
+	 * offers to start one; a host that is the server leaves it out.
+	 */
+	linkError?: string;
+	/** Whether the host is starting the server the page asked for. */
+	starting?: boolean;
 }
 
 export type ToWebview = { type: 'state' } & ControlState;

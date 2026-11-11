@@ -6,7 +6,8 @@
 import type { UsageWindow } from '../core/adapter';
 import { formatTokens } from './chart';
 import { escapeHtml } from './html';
-import type { AgentCardState, ModelsView, SettingView, UsageHistoryView, UsagePoint } from './messages';
+import { SERVER_COMMAND } from './serverCommand';
+import type { AgentCardState, ModelsView, ServerView, SettingView, UsageHistoryView, UsagePoint } from './messages';
 import { renderAreaChart, renderChartLegend } from './chart';
 
 export { escapeHtml };
@@ -191,24 +192,79 @@ function renderCard(agent: AgentCardState, settingsOpen: boolean, keyOpen: boole
 }
 
 /** The views of the page; a tab is drawn only for the ones the host can fill. */
-export type PageView = 'agents' | 'models' | 'usage';
+export type PageView = 'agents' | 'models' | 'usage' | 'docs' | 'server';
 
-/** Which views this page can show: renaming models needs a Models surface, the chart a usage history. */
+/** Which views this page can show: renaming models needs a Models surface, the chart a usage history, the port a server that describes itself. */
 export interface PageViews {
 	readonly models: boolean;
 	readonly usage: boolean;
+	readonly server?: boolean;
 }
 
 export function renderNav(view: PageView, available: PageViews = { models: true, usage: false }): string {
-	const actions: Record<PageView, string> = { agents: 'showAgents', models: 'showModels', usage: 'showUsage' };
+	const actions: Record<PageView, string> = { agents: 'showAgents', models: 'showModels', usage: 'showUsage', docs: 'showDocs', server: 'showServer' };
 	const tab = (target: PageView, label: string): string =>
 		`<button class="${view === target ? '' : 'secondary'}" data-action="${actions[target]}" aria-pressed="${view === target}">${label}</button>`;
 	const tabs = [
 		tab('agents', 'Agents'),
 		...(available.models ? [tab('models', 'Models')] : []),
 		...(available.usage ? [tab('usage', 'Usage')] : []),
+		tab('docs', 'Docs'),
+		...(available.server ? [tab('server', 'Server settings')] : []),
 	];
 	return `<nav class="page-nav">${tabs.join('')}</nav>`;
+}
+
+/**
+ * The strip above the tabs: where the server answers, with the page's own address and token as a link, and a
+ * dot that is green while the server is there. A server that is not there has nothing to open.
+ */
+export function renderServerHeader(server: ServerView): string {
+	const address = `127.0.0.1:${server.port}`;
+	if (!server.alive) {
+		return `<div class="server-status"><span class="status-dot down" role="img" aria-label="Server not reachable"></span><span>Server not reachable (${escapeHtml(address)})</span></div>`;
+	}
+	return `<div class="server-status"><span class="status-dot alive" role="img" aria-label="Server running"></span>`
+		+ `<a class="server-link" href="${escapeHtml(server.url)}" target="_blank" rel="noopener" title="Open the dashboard in your browser">${escapeHtml(address)}</a></div>`;
+}
+
+/**
+ * The page when the host reaches no server at all: what the page would be worth
+ * without one, the button that starts it, and the two things a user can do when
+ * that button is not what they want.
+ */
+export function renderServerDown(reason: string, starting = false): string {
+	return `<div class="server-status down">`
+		+ `<span class="status-dot down" role="img" aria-label="Server not running"></span>`
+		+ `<span class="server-down-label">Server not running</span>`
+		+ `<button data-action="startServer"${starting ? ' disabled' : ''}>${starting ? 'Starting…' : 'Start server'}</button>`
+		+ `</div>`
+		+ `<div class="server-down-help">`
+		+ `<div class="note">${escapeHtml(reason)}</div>`
+		+ `<div class="note">Or run it yourself: paste this in a terminal.</div>`
+		+ `<pre><code>${escapeHtml(SERVER_COMMAND)}</code></pre>`
+		+ `<div class="note">Or set <code>acpHub.server.autoStart</code> to on, and a window starts it for you.</div>`
+		+ `</div>`;
+}
+
+/** The Server settings view: the port, which applies after a restart, and the restart itself. */
+export function renderServerSettings(server: ServerView, draftPort: string | undefined, error?: string): string {
+	const locked = server.portFromEnv ? ' disabled' : '';
+	const value = draftPort ?? String(server.savedPort);
+	const pending = server.savedPort !== server.port
+		? `<div class="note">Running on ${server.port}; ${server.savedPort} is used after a restart.</div>`
+		: '';
+	const fromEnv = server.portFromEnv ? '<div class="note">The port is set by ACP_HUB_PORT, so a saved port is ignored.</div>' : '';
+	const port = `<div class="setting"><div class="setting-heading"><span class="setting-label">Port</span>`
+		+ `${renderInfo('Port', 'The port the server listens on, on 127.0.0.1 only. A new port is used the next time the server starts.')}</div>`
+		+ `<div class="actions"><input aria-label="Port" type="number" min="1" max="65535" data-server-port="true" value="${escapeHtml(value)}"${locked}>`
+		+ `<button data-action="saveServerPort"${locked}>Save</button></div>`
+		+ (error ? `<div class="error">${escapeHtml(error)}</div>` : '')
+		+ `</div>`;
+	const restart = `<div class="actions"><button class="secondary" data-action="restartServer">Restart server</button></div>`
+		+ '<div class="note">Restarting stops the server and ends any existing sessions.</div>';
+	const sync = '<div class="note">After a port change, run ACP Hub: Sync Models and restart the Copilot CLI so its providers.json points at the new address.</div>';
+	return `<div class="server-settings">${port}${pending}${fromEnv}${restart}${sync}</div>`;
 }
 
 /** The range of the chart, and the agents and workspaces it leaves in; an empty set means every one. */

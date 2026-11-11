@@ -33,7 +33,9 @@ export interface SidebarRelayDeps {
  * The sidebar's one connection to the server: it reads the state over
  * `/api/state`, follows the changes over `/api/events` and forwards what the
  * page asks for to `/api/action`, all with the link's bearer token. The token
- * never leaves this class, and nothing here knows which agent is which.
+ * is sent in a header and nowhere else, apart from the address the server's own
+ * state offers the page for its header link, and nothing here knows which agent
+ * is which.
  *
  * A few actions stay in the window, where their answer is: the sign-in page is
  * opened or copied from the URL the state holds, and an uninstall is confirmed
@@ -52,6 +54,10 @@ export class SidebarRelay implements ControlTransport, Disposable {
 	private attempt = 0;
 	private started = false;
 	private disposed = false;
+	/** Whether the page asked for a start and the link has not answered yet. */
+	private starting = false;
+	/** Why the link last said it reaches no server, so a start can say it is working on that. */
+	private downReason = 'The server is not running.';
 	private current: AbortController | undefined;
 
 	constructor(private readonly deps: SidebarRelayDeps) {
@@ -64,6 +70,11 @@ export class SidebarRelay implements ControlTransport, Disposable {
 			if (this.delivered) {
 				this.deliver(this.delivered);
 			}
+			return;
+		}
+		if (action.type === 'startServer') {
+			// A page that reaches no server has nothing to forward to: the window starts one instead.
+			void this.startServer();
 			return;
 		}
 		if (action.type === 'openSignInUrl' || action.type === 'copySignInUrl') {
@@ -124,6 +135,7 @@ export class SidebarRelay implements ControlTransport, Disposable {
 		}
 		if (!state || state.kind !== 'ready') {
 			const reason = state ? state.reason : 'The server could not be reached.';
+			this.downReason = reason;
 			this.deliver(this.withLinkError(reason));
 			this.retry();
 			return;
@@ -236,14 +248,39 @@ export class SidebarRelay implements ControlTransport, Disposable {
 		}
 	}
 
-	/** The last state with the link's reason on every card, or an empty page if the server never answered. */
+	/** The last state with the link's reason on every card, or a page that says why it has none. */
 	private withLinkError(reason: string): ControlState {
 		const latest = this.latest;
+		const starting: { starting?: boolean } = this.starting ? { starting: true } : {};
 		if (!latest) {
-			return { agents: [] };
+			return { agents: [], linkError: reason, ...starting };
 		}
 		const agents: AgentCardState[] = latest.agents.map(agent => ({ ...agent, error: reason }));
-		return { ...latest, agents };
+		return { ...latest, agents, ...(latest.server ? { server: { ...latest.server, alive: false } } : {}), linkError: reason, ...starting };
+	}
+
+	/** Starts the server the page asked for; a click is not background work, so it clears a stop the retries respect. */
+	private async startServer(): Promise<void> {
+		if (this.starting || this.disposed) {
+			return;
+		}
+		this.starting = true;
+		this.deliver(this.withLinkError(this.downReason));
+		const state = await this.deps.link.ensure().catch((): undefined => undefined);
+		this.starting = false;
+		if (this.disposed) {
+			return;
+		}
+		if (!state || state.kind !== 'ready') {
+			this.downReason = state ? state.reason : 'The server could not be started.';
+			this.deliver(this.withLinkError(this.downReason));
+			this.retry();
+			return;
+		}
+		this.attempt = 0;
+		this.clearTimers();
+		// The link only speaks up when its state changes, so a link that was ready all along is followed from here.
+		void this.connect();
 	}
 
 	private linkChanged(state: LinkState): void {
@@ -258,6 +295,7 @@ export class SidebarRelay implements ControlTransport, Disposable {
 		}
 		this.current?.abort();
 		this.current = undefined;
+		this.downReason = state.reason;
 		this.deliver(this.withLinkError(state.reason));
 	}
 

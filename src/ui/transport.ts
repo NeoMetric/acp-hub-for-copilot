@@ -22,9 +22,14 @@ export interface WebviewChannel {
 	onMessage(listener: (data: unknown) => void): void;
 }
 
-/** Keeps the transport's side of a snapshot: the state, without the message that carried it. */
+/**
+ * Keeps the transport's side of a snapshot: the state, without the message that carried it. It
+ * drops only `type` and passes the rest through, because a field left out here would draw a
+ * sidebar that differs from the dashboard.
+ */
 function stateOf(message: ToWebview): ControlState {
-	return { agents: message.agents, globalSettings: message.globalSettings, models: message.models, usage: message.usage, notice: message.notice, refreshing: message.refreshing };
+	const { type: _carrier, ...state } = message;
+	return state;
 }
 
 /** The VS Code transport, over the webview's `postMessage`. */

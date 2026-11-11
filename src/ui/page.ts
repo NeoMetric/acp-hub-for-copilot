@@ -5,8 +5,9 @@
 
 /// <reference lib="dom" />
 
-import type { AgentCardState, ModelsView, SettingValue, SettingView, UsageHistoryView } from './messages';
-import { GLOBAL_SETTINGS_ID, renderCards, renderModels, renderNav, renderUsageView, type PageView, type UsageRange } from './render';
+import { renderDocsView } from './docs';
+import type { AgentCardState, ModelsView, ServerView, SettingValue, SettingView, UsageHistoryView } from './messages';
+import { GLOBAL_SETTINGS_ID, renderCards, renderModels, renderNav, renderServerDown, renderServerHeader, renderServerSettings, renderUsageView, type PageView, type UsageRange } from './render';
 import type { ControlTransport } from './transport';
 
 /**
@@ -20,6 +21,13 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 	let globalSettings: SettingView[] = [];
 	let models: ModelsView | undefined;
 	let usage: UsageHistoryView | undefined;
+	let server: ServerView | undefined;
+	/** Why the host reaches no server, and whether it is starting one; the page is only this while it does not. */
+	let linkError: string | undefined;
+	let starting = false;
+	/** The port as typed in Server settings, and why it was not sent, so a redraw does not wipe either. */
+	let draftPort: string | undefined;
+	let portError: string | undefined;
 	let notice: string | undefined;
 	let refreshing = false;
 	let view: PageView = 'agents';
@@ -62,8 +70,12 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 	}
 
 	function draw(): void {
-		const available = { models: models !== undefined, usage: usage !== undefined };
-		if (!available.models && !available.usage) {
+		if (linkError !== undefined) {
+			root.innerHTML = renderServerDown(linkError, starting);
+			return;
+		}
+		const available = { models: models !== undefined, usage: usage !== undefined, server: server !== undefined };
+		if (!available.models && !available.usage && !available.server) {
 			root.innerHTML = renderCards(agents, openSettings, globalSettings, keyEntry);
 			restoreKeyDrafts();
 			return;
@@ -72,14 +84,33 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 			? renderModels(models, notice, { refreshing, editing })
 			: view === 'usage' && usage
 				? renderUsageView(usage, { range: usageRange, agents: usageAgents, workspaces: usageWorkspaces })
-				: renderCards(agents, openSettings, globalSettings, keyEntry);
-		root.innerHTML = renderNav(view, available) + body;
+				: view === 'docs'
+					? renderDocsView()
+					: view === 'server' && server
+						? renderServerSettings(server, draftPort, portError)
+						: renderCards(agents, openSettings, globalSettings, keyEntry);
+		root.innerHTML = (server ? renderServerHeader(server) : '') + renderNav(view, available) + body;
 		restoreKeyDrafts();
 		if (editing !== undefined) {
 			const input = root.querySelector?.('input[data-models]') as HTMLInputElement | null | undefined;
 			input?.focus();
 			input?.select();
 		}
+	}
+
+	/** Sends the typed port when it is one, and otherwise keeps it in the field with the reason. */
+	function saveServerPort(): void {
+		const text = (draftPort ?? String(server?.savedPort ?? '')).trim();
+		const port = Number(text);
+		if (text === '' || !Number.isInteger(port) || port < 1 || port > 65_535) {
+			portError = 'Enter a port from 1 to 65535.';
+			draw();
+			return;
+		}
+		portError = undefined;
+		draftPort = undefined;
+		transport.send({ type: 'setServerPort', port });
+		draw();
 	}
 
 	function stopEditing(): void {
@@ -127,8 +158,22 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		}
 		const action = target.dataset.action;
 		const agentId = target.dataset.agent ?? '';
-		if (action === 'showAgents' || action === 'showModels' || action === 'showUsage') {
-			view = action === 'showModels' ? 'models' : action === 'showUsage' ? 'usage' : 'agents';
+		if (action === 'showAgents' || action === 'showModels' || action === 'showUsage' || action === 'showDocs' || action === 'showServer') {
+			view = action === 'showModels' ? 'models' : action === 'showUsage' ? 'usage' : action === 'showDocs' ? 'docs' : action === 'showServer' ? 'server' : 'agents';
+			draw();
+			return;
+		}
+		if (action === 'saveServerPort') {
+			saveServerPort();
+			return;
+		}
+		if (action === 'restartServer') {
+			transport.send({ type: 'restartServer' });
+			return;
+		}
+		if (action === 'startServer') {
+			transport.send({ type: 'startServer' });
+			starting = true;
 			draw();
 			return;
 		}
@@ -206,6 +251,9 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		if (target.dataset?.keyInput && target.dataset.agent) {
 			keyDrafts.set(target.dataset.agent, target.value);
 		}
+		if (target.dataset?.serverPort !== undefined) {
+			draftPort = target.value;
+		}
 	});
 
 	root.addEventListener('change', event => {
@@ -258,6 +306,12 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 			}
 			return;
 		}
+		if ((target as HTMLElement).dataset?.serverPort !== undefined) {
+			if (key === 'Enter') {
+				saveServerPort();
+			}
+			return;
+		}
 		if (!(target as HTMLElement).dataset?.models) {
 			return;
 		}
@@ -273,8 +327,11 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		globalSettings = state.globalSettings ?? [];
 		models = state.models;
 		usage = state.usage;
+		server = state.server;
 		notice = state.notice;
 		refreshing = state.refreshing === true;
+		linkError = state.linkError;
+		starting = state.starting === true;
 		draw();
 	});
 

@@ -241,8 +241,122 @@ select {
 
 .page-nav {
 	display: flex;
+	flex-wrap: wrap;
 	gap: 6px;
 	margin-bottom: 8px;
+}
+
+.server-status {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 8px;
+	padding: 6px 10px;
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 4px;
+	background: var(--vscode-sideBar-background);
+	font-family: var(--vscode-editor-font-family);
+	font-size: 0.9em;
+}
+
+.status-dot {
+	flex: none;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+}
+
+.status-dot.alive {
+	background: var(--vscode-testing-iconPassed, #3fb950);
+}
+
+.status-dot.down {
+	background: var(--vscode-errorForeground, #f85149);
+}
+
+.server-status.down {
+	border-color: var(--vscode-errorForeground, #f85149);
+}
+
+.server-down-label {
+	font-weight: 600;
+}
+
+.server-status button {
+	margin-left: auto;
+	flex: none;
+}
+
+.server-link {
+	color: var(--vscode-textLink-foreground);
+}
+
+.server-settings {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.docs-view {
+	display: flex;
+	flex-direction: column;
+}
+
+.docs-section {
+	margin-bottom: 8px;
+	padding: 10px;
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 4px;
+	background: var(--vscode-sideBar-background);
+}
+
+.docs-section summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.docs-body p,
+.docs-body ul,
+.docs-body ol {
+	margin: 8px 0 0;
+}
+
+.docs-body ul,
+.docs-body ol {
+	padding-left: 18px;
+}
+
+.docs-body code {
+	font-family: var(--vscode-editor-font-family);
+	font-size: 0.9em;
+}
+
+.docs-body pre,
+.server-down-help pre {
+	margin: 8px 0 0;
+	padding: 6px 8px;
+	overflow-x: auto;
+	border-radius: 4px;
+	background: var(--vscode-textCodeBlock-background);
+	/* One click selects the whole command, which is what the reader wants to paste. */
+	user-select: all;
+}
+
+.docs-body pre code,
+.server-down-help pre code {
+	white-space: pre;
+}
+
+.server-down-help {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-top: 8px;
+}
+
+.server-down-help code {
+	font-family: var(--vscode-editor-font-family);
+	font-size: 0.9em;
 }
 
 .card-head input[type="text"] {

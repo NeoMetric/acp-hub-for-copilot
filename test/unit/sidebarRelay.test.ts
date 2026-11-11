@@ -316,6 +316,20 @@ describe('SidebarRelay', () => {
 		await vi.waitFor(() => { expect(states.at(-1)!.agents[0].busy).toBe('Back'); });
 	});
 
+	it('marks the server not alive while the link is away, and keeps its address', async () => {
+		const server = { port: 8791, savedPort: 8791, url: 'http://127.0.0.1:8791/?token=abc', portFromEnv: false, alive: true };
+		const stub = await startStub({ state: { ...stateOf(), server } });
+		const { link, change } = stubLink(stub.baseUrl);
+		const { states } = relayOf(link);
+		await vi.waitFor(() => { expect(states.at(-1)?.server?.alive).toBe(true); });
+
+		stub.dropStreams();
+		change({ kind: 'unavailable', reason: 'The server is not running.' });
+
+		await vi.waitFor(() => { expect(states.at(-1)?.server?.alive).toBe(false); });
+		expect(states.at(-1)?.server).toEqual({ ...server, alive: false });
+	});
+
 	it('waits a second before reconnecting on its own', async () => {
 		const stub = await startStub({ state: stateOf() });
 		const { states } = relayOf(stubLink(stub.baseUrl).link);
@@ -340,11 +354,44 @@ describe('SidebarRelay', () => {
 		expect(stub.requests.filter(request => request.path === STATE_ROUTE)).toHaveLength(1);
 	});
 
-	it('delivers an empty state while the link has never been ready', async () => {
+	it('delivers the reason instead of an empty page while the link has never been ready', async () => {
 		const { link } = stubLink('http://127.0.0.1:1', { kind: 'unavailable', reason: 'The server is not running.' });
 		const { states } = relayOf(link);
 
 		await vi.waitFor(() => { expect(states).toHaveLength(1); });
-		expect(states[0]).toEqual({ agents: [] });
+		expect(states[0]).toEqual({ agents: [], linkError: 'The server is not running.' });
+	});
+
+	it('starts a server the page asked for, and says it is starting while it does', async () => {
+		const stub = await startStub({ state: stateOf() });
+		const calls: Array<boolean | undefined> = [];
+		let current: LinkState = { kind: 'unavailable', reason: 'The server is not running.' };
+		const listeners = new Set<(state: LinkState) => void>();
+		const link: Pick<ServerLink, 'ensure' | 'onDidChange'> = {
+			ensure: async options => {
+				calls.push(options?.background);
+				if (options?.background !== true) {
+					current = { kind: 'ready', endpoint: { baseUrl: stub.baseUrl, token: TOKEN }, owned: true };
+					for (const listener of [...listeners]) {
+						listener(current);
+					}
+				}
+				return current;
+			},
+			onDidChange: listener => {
+				listeners.add(listener);
+				return () => { listeners.delete(listener); };
+			},
+		};
+		const { relay, states } = relayOf(link);
+		await vi.waitFor(() => { expect(states.at(-1)?.linkError).toBe('The server is not running.'); });
+
+		relay.send({ type: 'startServer' });
+
+		await vi.waitFor(() => { expect(states.at(-1)?.agents.map(agent => agent.id)).toEqual(['a']); });
+		expect(states.some(state => state.starting === true)).toBe(true);
+		// The click asks for the server without the background flag, which is what clears a recorded stop.
+		expect(calls).toContain(undefined);
+		expect(states.at(-1)?.linkError).toBeUndefined();
 	});
 });

@@ -5,8 +5,9 @@
 
 import { describe, expect, it } from 'vitest';
 import type { AgentCardState } from '../../src/ui/messages';
-import { renderCards, renderNav, renderUsageView } from '../../src/ui/render';
-import type { UsageHistoryView } from '../../src/ui/messages';
+import { renderDocsView } from '../../src/ui/docs';
+import { renderCards, renderNav, renderServerDown, renderServerHeader, renderServerSettings, renderUsageView } from '../../src/ui/render';
+import type { ServerView, UsageHistoryView } from '../../src/ui/messages';
 
 function card(overrides: Partial<AgentCardState> = {}): AgentCardState {
 	return {
@@ -25,6 +26,153 @@ function card(overrides: Partial<AgentCardState> = {}): AgentCardState {
 }
 
 const open = new Set(['one']);
+
+const SERVER: ServerView = { port: 8791, savedPort: 8791, url: 'http://127.0.0.1:8791/?token=abc', portFromEnv: false, alive: true };
+
+describe('the page nav', () => {
+	it('always offers Docs, right after Usage, and Server settings last when the host has a server', () => {
+		const nav = renderNav('agents', { models: true, usage: true, server: true });
+		const order = ['showAgents', 'showModels', 'showUsage', 'showDocs', 'showServer'].map(action => nav.indexOf(`data-action="${action}"`));
+		expect(order.every(index => index >= 0)).toBe(true);
+		expect([...order].sort((a, b) => a - b)).toEqual(order);
+		expect(nav).toContain('>Docs<');
+		expect(nav).toContain('>Server settings<');
+	});
+
+	it('offers Docs even when the host fills no other tab, and no Server settings without a server', () => {
+		const nav = renderNav('agents', { models: false, usage: false });
+		expect(nav).toContain('data-action="showDocs"');
+		expect(nav).not.toContain('data-action="showServer"');
+	});
+
+	it('marks the view being shown as pressed', () => {
+		expect(renderNav('docs', { models: false, usage: false })).toMatch(/aria-pressed="true">Docs</);
+		expect(renderNav('server', { models: false, usage: false, server: true })).toMatch(/aria-pressed="true">Server settings</);
+	});
+});
+
+describe('the docs view', () => {
+	const html = renderDocsView();
+	const summaries = [...html.matchAll(/<summary>([^<]+)<\/summary>/g)].map(match => match[1]);
+
+	it('has three collapsible sections, all closed to begin with', () => {
+		expect(html.match(/<details/g)).toHaveLength(3);
+		expect(html).not.toMatch(/<details[^>]*\bopen\b/);
+		expect(summaries).toEqual(['Server', 'VS Code Copilot client', 'Copilot CLI']);
+	});
+
+	it('explains the server and every server-level setting', () => {
+		expect(html).toContain('127.0.0.1');
+		expect(html).toContain('server.token');
+		expect(html).toContain('acpHub.server.idleTimeoutMinutes');
+		expect(html).toContain('acpHub.server.detached');
+		expect(html).toContain('ACP_HUB_PORT');
+		expect(html).toContain('Server settings');
+	});
+
+	it('names the command that syncs the models into Copilot', () => {
+		expect(html).toContain('ACP Hub: Sync Models');
+	});
+
+	it('names the command that runs the server outside VS Code', () => {
+		expect(html).toContain('<pre><code>node "$env:USERPROFILE\\.vscode\\extensions\\neometric.acp-hub-for-copilot-');
+		expect(html).toContain('\\dist\\server.js"</code></pre>');
+		expect(html).toContain('~/.vscode/extensions/neometric.acp-hub-for-copilot-');
+	});
+
+	it('says how to make the Copilot CLI work', () => {
+		expect(html).toContain('providers.json');
+		expect(html).toContain('COPILOT_PROVIDERS_CONFIG');
+		expect(html).toContain('restart the CLI');
+	});
+});
+
+describe('the server header', () => {
+	it('links the address with the token and shows a green dot while the server is alive', () => {
+		const html = renderServerHeader(SERVER);
+		expect(html).toContain('status-dot alive');
+		expect(html).toContain('href="http://127.0.0.1:8791/?token=abc"');
+		expect(html).toContain('target="_blank"');
+		expect(html).toContain('>127.0.0.1:8791<');
+	});
+
+	it('shows a red dot and no link when the server does not answer', () => {
+		const html = renderServerHeader({ ...SERVER, alive: false });
+		expect(html).toContain('status-dot down');
+		expect(html).not.toContain('href=');
+		expect(html).toContain('Server not reachable');
+		expect(html).toContain('127.0.0.1:8791');
+	});
+
+	it('escapes what the server sends', () => {
+		const html = renderServerHeader({ ...SERVER, url: 'http://127.0.0.1:8791/?token="><script>x</script>' });
+		expect(html).not.toContain('<script>');
+	});
+});
+
+describe('the server-down panel', () => {
+	it('says the server is not running, with the reason and a button to start one', () => {
+		const html = renderServerDown('The server on port 8791 is not running.');
+		expect(html).toContain('status-dot down');
+		expect(html).toContain('Server not running');
+		expect(html).toContain('data-action="startServer"');
+		expect(html).toContain('The server on port 8791 is not running.');
+	});
+
+	it('disables the button and says it is starting while it is', () => {
+		const html = renderServerDown('The server is not running.', true);
+		expect(html).toMatch(/data-action="startServer" disabled/);
+		expect(html).toContain('Starting…');
+	});
+
+	it('names the terminal command and the autoStart setting, for a user who would rather not use the button', () => {
+		const html = renderServerDown('The server is not running.');
+		expect(html).toContain('paste this in a terminal');
+		expect(html).toContain('<pre><code>node &quot;$env:USERPROFILE\\.vscode\\extensions\\neometric.acp-hub-for-copilot-');
+		expect(html).toContain('\\dist\\server.js&quot;</code></pre>');
+		expect(html).toContain('<code>acpHub.server.autoStart</code>');
+	});
+
+	it('escapes the reason', () => {
+		expect(renderServerDown('<img onerror="x">')).not.toContain('<img');
+	});
+});
+
+describe('the server settings view', () => {
+	it('offers the saved port, a Save button, and a Restart button that says it ends the sessions', () => {
+		const html = renderServerSettings(SERVER, undefined);
+		expect(html).toMatch(/<input[^>]*data-server-port[^>]*value="8791"/);
+		expect(html).toContain('data-action="saveServerPort"');
+		expect(html).toContain('data-action="restartServer"');
+		expect(html).toContain('ends any existing sessions');
+	});
+
+	it('shows a half-typed port instead of the saved one', () => {
+		expect(renderServerSettings(SERVER, '90')).toMatch(/data-server-port[^>]*value="90"/);
+	});
+
+	it('says the running and the saved port differ until a restart', () => {
+		const html = renderServerSettings({ ...SERVER, savedPort: 9100 }, undefined);
+		expect(html).toContain('Running on 8791; 9100 is used after a restart.');
+	});
+
+	it('names no difference when the ports agree', () => {
+		expect(renderServerSettings(SERVER, undefined)).not.toContain('is used after a restart');
+	});
+
+	it('disables the port when ACP_HUB_PORT names it', () => {
+		const html = renderServerSettings({ ...SERVER, portFromEnv: true }, undefined);
+		expect(html).toContain('ACP_HUB_PORT');
+		expect(html).toMatch(/data-server-port[^>]*disabled/);
+		expect(html).toMatch(/data-action="saveServerPort"[^>]*disabled/);
+	});
+
+	it('tells the user to sync the models again after a port change', () => {
+		const html = renderServerSettings(SERVER, undefined);
+		expect(html).toContain('ACP Hub: Sync Models');
+		expect(html).toContain('providers.json');
+	});
+});
 
 describe('renderCards', () => {
 	it('keeps settings out of the card until its settings button is opened', () => {
