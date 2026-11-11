@@ -42,6 +42,19 @@ describe('writeCliProviders', () => {
 		expect(config.models).toEqual([{ id: 'Sonnet-5.5', provider: 'Work Claude', wireModel: 'claude/sonnet' }]);
 	});
 
+	it('writes a model\'s efforts under capabilities.supports.reasoning_effort, and nothing when it has none', () => {
+		const file = tempFile('providers.json');
+
+		writeCliProviders({
+			file, ...BASE, previous: [],
+			providers: [{ name: 'P', models: [{ name: 'A', wireModel: 'p/a', efforts: ['low', 'high'] }, { name: 'B', wireModel: 'p/b', efforts: [] }] }],
+		});
+
+		const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+		expect(config.models[0].capabilities).toEqual({ supports: { reasoning_effort: ['low', 'high'] } });
+		expect(config.models[1]).not.toHaveProperty('capabilities');
+	});
+
 	it('keeps entries it did not write and replaces the ones it wrote before, and the legacy acp-hub ones', () => {
 		const file = tempFile('providers.json', JSON.stringify({
 			providers: [{ name: 'mine', type: 'openai', baseUrl: 'http://x' }, { name: 'Old Claude', type: 'openai', baseUrl: 'http://old' }, { name: 'acp-hub', type: 'openai', baseUrl: 'http://old' }],

@@ -6,7 +6,7 @@
 import { vendorOf } from '../../core/vendors';
 import type { ModelNames } from '../../engine/models/modelNames';
 import type { StateStore } from '../../engine/ports/state';
-import { CLI_PROVIDERS_KEY, writeCliProviders, writeVendorNames, type CliProvider } from './applyNames';
+import { CLI_EFFORT_LEVELS, CLI_PROVIDERS_KEY, writeCliProviders, writeVendorNames, type CliProvider } from './applyNames';
 import { listModels, refreshModels } from './serverClient';
 import type { ServerEndpoint } from './serverLink';
 
@@ -59,7 +59,7 @@ export async function syncModels(deps: SyncModelsDeps): Promise<SyncOutcome> {
 		if (models.length > 0) {
 			providers.push({
 				name: deps.names.providerName(agent.id, agent.displayName),
-				models: models.map(wire => ({ name: wire.acp!.name, wireModel: wire.id })),
+				models: models.map(wire => ({ name: wire.acp!.name, wireModel: wire.id, efforts: cliEffortsOf(wire.acp!.efforts) })),
 			});
 		}
 	}
@@ -99,6 +99,12 @@ export async function syncModels(deps: SyncModelsDeps): Promise<SyncOutcome> {
 		problems,
 		reloadNeeded,
 	};
+}
+
+/** The levels the CLI knows, in its order; the server's own `default` and any level the CLI lacks are left out. */
+function cliEffortsOf(efforts: ReadonlyArray<{ readonly value: string }>): string[] {
+	const offered = new Set(efforts.map(effort => effort.value));
+	return CLI_EFFORT_LEVELS.filter(level => offered.has(level));
 }
 
 function messageOf(error: unknown): string {

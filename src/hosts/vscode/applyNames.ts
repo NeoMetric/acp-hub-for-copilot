@@ -18,10 +18,14 @@ export function copilotProvidersFile(): string {
 	return process.env.COPILOT_PROVIDERS_CONFIG?.trim() || path.join(os.homedir(), '.copilot', 'providers.json');
 }
 
+/** The reasoning-effort levels the Copilot CLI recognizes in a model's `capabilities.supports.reasoning_effort`. */
+export const CLI_EFFORT_LEVELS: readonly string[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
 /** One agent as the Copilot CLI lists it: the provider name and the models under it. */
 export interface CliProvider {
 	readonly name: string;
-	readonly models: ReadonlyArray<{ readonly name: string; readonly wireModel: string }>;
+	/** `efforts` are the levels the model offers; the CLI's `/model` picker steps through them with the arrow keys. */
+	readonly models: ReadonlyArray<{ readonly name: string; readonly wireModel: string; readonly efforts?: readonly string[] }>;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -56,7 +60,12 @@ export function writeCliProviders(options: {
 		for (const model of provider.models) {
 			const id = uniqueId(model.name.replace(/[\s/]+/g, '-'), taken);
 			taken.add(id);
-			models.push({ id, provider: provider.name, wireModel: model.wireModel });
+			models.push({
+				id,
+				provider: provider.name,
+				wireModel: model.wireModel,
+				...(model.efforts?.length ? { capabilities: { supports: { reasoning_effort: [...model.efforts] } } } : {}),
+			});
 		}
 	}
 

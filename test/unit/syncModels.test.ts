@@ -92,6 +92,18 @@ describe('syncModels', () => {
 		expect(read(packageJson).contributes.languageModelChatProviders[0].displayName).toBe('Claude Agent');
 	});
 
+	it("writes the efforts a model offers as the CLI's reasoning_effort, leaving out the ones it does not know", async () => {
+		const wire = wireOf('sonnet', 'Fast one');
+		wire.acp!.efforts = ['default', 'max', 'low', 'ultra', 'high'].map(value => ({ value, label: value, description: '' }));
+		const { deps, providersFile } = await setup([wire, wireOf('haiku', 'Plain')]);
+
+		await syncModels(deps);
+
+		const [withEfforts, without] = read(providersFile).models;
+		expect(withEfforts.capabilities).toEqual({ supports: { reasoning_effort: ['low', 'high', 'max'] } });
+		expect(without).not.toHaveProperty('capabilities');
+	});
+
 	it('shows the provider name the user chose', async () => {
 		const { deps, names, providersFile, packageJson } = await setup([wireOf('sonnet', 'Fast one')]);
 		await names.setProvider('claude', 'Work Claude', new Map([['claude', 'Claude Agent']]));
