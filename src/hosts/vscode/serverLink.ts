@@ -10,6 +10,7 @@ import { parseServerLine } from '../../core/logging';
 import type { Log } from '../../engine/ports/host';
 import { ensureToken, readToken, tokenFileOf } from '../../main/token';
 import { STATE_ROUTE } from '../../ui/transport';
+import { loadConfig, serverPortOf, type FileConfig } from '../http/config';
 import { API_VERSION, SERVER_NAME, SHUTDOWN_ROUTE, type HealthWire } from '../http/wire';
 
 /** What a client needs to reach the server: where it answers, and the token it wants. */
@@ -26,7 +27,7 @@ export type LinkState =
 export interface ServerLinkDeps {
 	/** The store root both gateways share; the token file lives here. */
 	readonly root: string;
-	/** The port the server listens on; every window of this machine uses the same one, and a test names another. */
+	/** The port the server listens on, which a test names; otherwise it is the port saved in `config.json`, which every window of this machine reads. */
 	readonly port?: number;
 	/** The built server bundle, `dist/server.js`. */
 	readonly serverScript: string;
@@ -59,9 +60,6 @@ export interface ServerLinkDeps {
 	/** How often a server this window reached is checked again; every window of this machine shares one, and a test names another. */
 	readonly watchMs?: number;
 }
-
-/** The port every window of this machine reaches the server on; the server's own default. */
-const SERVER_PORT = 8791;
 
 /** How long a server this window starts may take to answer. */
 const START_TIMEOUT_MS = 15_000;
@@ -135,8 +133,7 @@ type Probe =
  */
 export class ServerLink {
 	private readonly deps: ServerLinkDeps;
-	private readonly port: number;
-	private readonly baseUrl: string;
+	private readonly config: FileConfig;
 	private readonly retryMs: number;
 	private readonly watchMs: number;
 	private readonly fetchOf: typeof fetch;
@@ -155,12 +152,20 @@ export class ServerLink {
 
 	constructor(deps: ServerLinkDeps) {
 		this.deps = deps;
-		this.port = deps.port ?? SERVER_PORT;
-		this.baseUrl = `http://127.0.0.1:${this.port}`;
+		this.config = loadConfig(deps.root);
 		this.retryMs = deps.retryMs ?? DEFAULT_RETRY_MS;
 		this.watchMs = deps.watchMs ?? WATCH_INTERVAL_MS;
 		this.fetchOf = deps.fetch ?? fetch;
 		this.spawnOf = deps.spawn ?? nodeSpawn;
+	}
+
+	/** The port the server is looked for on: a test's, else the one saved in `config.json`, which the dashboard can change while the window runs. */
+	private get port(): number {
+		return this.deps.port ?? serverPortOf(this.config);
+	}
+
+	private get baseUrl(): string {
+		return `http://127.0.0.1:${this.port}`;
 	}
 
 	/** The last state the link settled on, if it has looked yet. */
@@ -487,8 +492,13 @@ export class ServerLink {
 			...process.env,
 			// The extension host is Electron, which runs a script as node only when told to.
 			ELECTRON_RUN_AS_NODE: '1',
-			ACP_HUB_PORT: String(this.port),
 		};
+		// The server reads the saved port itself, so a port in the window's own environment must not override it.
+		if (this.deps.port !== undefined) {
+			env.ACP_HUB_PORT = String(this.deps.port);
+		} else {
+			delete env.ACP_HUB_PORT;
+		}
 		if (this.deps.promptsDir) {
 			env.ACP_HUB_PROMPTS_DIR = this.deps.promptsDir;
 		}

@@ -14,6 +14,23 @@ const SECTION = 'acpHub';
 /** The setting naming the folder a chat works in when its request names none. */
 export const DEFAULT_WORKSPACE = 'defaultWorkspace';
 
+/** The setting naming the port the server listens on. */
+export const SERVER_PORT = 'server.port';
+
+/** The port the server listens on when none is saved or named. */
+export const DEFAULT_PORT = 8791;
+
+/** Whether `value` can be a port the server listens on: an integer from 1 to 65535. */
+export function isPort(value: unknown): value is number {
+	return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65_535;
+}
+
+/** The port saved in the settings, or the default when none is saved or the saved value is not a port. */
+export function serverPortOf(config: ConfigReader): number {
+	const value = config.get<unknown>(SERVER_PORT);
+	return isPort(value) ? value : DEFAULT_PORT;
+}
+
 /** The settings file of a store root: `<root>/config.json`. */
 export function configFileOf(root: string): string {
 	return path.join(root, 'config.json');

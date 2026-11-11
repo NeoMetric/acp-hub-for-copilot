@@ -4,7 +4,7 @@ import type { InstallState } from '../../src/core/installers';
 import type { ControlSurface } from '../../src/engine/control/ControlService';
 import type { UsageState } from '../../src/engine/chat/usage';
 import { ControlPage } from '../../src/ui/controlPage';
-import type { ControlState, ModelsSurface, UsageHistorySurface, UsageHistoryView } from '../../src/ui/messages';
+import type { ControlState, ModelsSurface, ServerSurface, ServerView, UsageHistorySurface, UsageHistoryView } from '../../src/ui/messages';
 
 function fakeAdapter(id: string): AgentAdapter {
 	return {
@@ -97,6 +97,60 @@ describe('ControlPage usage history', () => {
 	it('ignores a retention the page asks for when the host keeps no history', async () => {
 		const { page } = setup();
 		await expect(page.handle({ type: 'setRetentionDays', days: 14 })).resolves.toBeUndefined();
+	});
+});
+
+describe('ControlPage server', () => {
+	const VIEW: ServerView = { port: 8791, savedPort: 8791, url: 'http://127.0.0.1:8791/?token=abc', portFromEnv: false, alive: true };
+
+	function withServer(overrides: Partial<ServerView> = {}) {
+		const view = { ...VIEW, ...overrides };
+		const server: ServerSurface = { view: () => view, setPort: vi.fn(async () => { }), restart: vi.fn() };
+		const surface = fake();
+		const host = { openExternal: vi.fn(async () => { }), copyToClipboard: vi.fn(async () => { }) };
+		const page = new ControlPage(surface.control, host, undefined, undefined, server);
+		const states: ControlState[] = [];
+		page.onState(state => { states.push(state); });
+		return { page, server, states };
+	}
+
+	it('offers no server view when the host does not describe its server', async () => {
+		expect((await setup().page.state()).server).toBeUndefined();
+	});
+
+	it('carries the server in the snapshot', async () => {
+		expect((await withServer().page.state()).server).toEqual(VIEW);
+	});
+
+	it('saves the port the page chose, then redraws', async () => {
+		const { page, server, states } = withServer();
+		await page.handle({ type: 'setServerPort', port: 9100 });
+		expect(server.setPort).toHaveBeenCalledWith(9100);
+		expect(states.length).toBeGreaterThan(0);
+	});
+
+	it.each([0, 70_000, 80.5, Number.NaN, -1])('does not save %s as the port', async port => {
+		const { page, server } = withServer();
+		await page.handle({ type: 'setServerPort', port });
+		expect(server.setPort).not.toHaveBeenCalled();
+	});
+
+	it('does not save a port while ACP_HUB_PORT names it', async () => {
+		const { page, server } = withServer({ portFromEnv: true });
+		await page.handle({ type: 'setServerPort', port: 9100 });
+		expect(server.setPort).not.toHaveBeenCalled();
+	});
+
+	it('restarts the server when the page asks', async () => {
+		const { page, server } = withServer();
+		await page.handle({ type: 'restartServer' });
+		expect(server.restart).toHaveBeenCalledTimes(1);
+	});
+
+	it('ignores both actions when the host has no server surface', async () => {
+		const { page } = setup();
+		await expect(page.handle({ type: 'setServerPort', port: 9100 })).resolves.toBeUndefined();
+		await expect(page.handle({ type: 'restartServer' })).resolves.toBeUndefined();
 	});
 });
 

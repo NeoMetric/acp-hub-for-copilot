@@ -110,10 +110,35 @@ export interface UsageHistorySurface {
 	onDidChange(listener: () => void): () => void;
 }
 
+/** The server the page runs from, as the header and the Server settings view show it. */
+export interface ServerView {
+	/** The port the server listens on now. */
+	port: number;
+	/** The port saved for the next start; it differs from `port` until the server restarts. */
+	savedPort: number;
+	/** The control page's address with the token, for the header link. */
+	url: string;
+	/** `ACP_HUB_PORT` names the port, so the saved one is ignored. */
+	portFromEnv: boolean;
+	/** Whether the server answers; the sidebar sets it to false when its link to the server drops. */
+	alive: boolean;
+}
+
+/** What the server tells the page about itself, and lets it change. */
+export interface ServerSurface {
+	view(): ServerView;
+	/** Saves the port for the next start. */
+	setPort(port: number): Promise<void>;
+	/** Stops the server, ending every session; a window starts it again on the saved port. */
+	restart(): void;
+}
+
 /** Everything the page draws, in one snapshot that names no host. */
 export interface ControlState {
 	agents: AgentCardState[];
 	globalSettings?: SettingView[];
+	/** Present when the host can describe its server. */
+	server?: ServerView;
 	/** Present when the host can rename providers and models. */
 	models?: ModelsView;
 	/** Present when the host keeps a history of what the turns spent. */
@@ -137,7 +162,11 @@ export type FromWebview =
 	| { type: 'setProviderName'; agentId: string; name: string }
 	| { type: 'setModelName'; agentId: string; model: string; name: string }
 	| { type: 'refreshModels' }
-	| { type: 'setRetentionDays'; days: number };
+	| { type: 'setRetentionDays'; days: number }
+	| { type: 'setServerPort'; port: number }
+	| { type: 'restartServer' }
+	/** Only a window can answer this: it starts the server its sidebar is not reaching. */
+	| { type: 'startServer' };
 
 /** Everything the page asks a host to do; the same message travels over either transport. */
 export type ControlAction = FromWebview;

@@ -680,3 +680,79 @@ describe('a server that runs on its own', () => {
 		expect(spawn).not.toHaveBeenCalled();
 	});
 });
+
+describe('the port the link looks for the server on', () => {
+	function savePort(root: string, port: number): void {
+		fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ acpHub: { server: { port } } }));
+	}
+
+	function probing(urls: string[]): typeof fetch {
+		return (async (input: string | URL | Request) => {
+			urls.push(String(input));
+			throw new Error('refused');
+		}) as unknown as typeof fetch;
+	}
+
+	it('is the port saved in config.json, read again each time, and the server is left to read it itself', async () => {
+		vi.stubEnv('ACP_HUB_PORT', '1234');
+		try {
+			const root = storeRoot();
+			savePort(root, 9100);
+			const urls: string[] = [];
+			const spawned: SpawnOptions[] = [];
+			const refusing = neverStarting() as unknown as (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+			const spawn = ((command: string, args: readonly string[], options: SpawnOptions) => {
+				spawned.push(options);
+				return refusing(command, args, options);
+			}) as unknown as ServerLinkDeps['spawn'];
+			const link = new ServerLink({
+				root, serverScript: STUB, extensionDir: path.dirname(STUB), log, serverLog: log, retryMs: 10, spawn, fetch: probing(urls),
+			});
+			links.push(link);
+
+			await link.ensure();
+
+			expect(urls[0]).toBe('http://127.0.0.1:9100/health');
+			expect(spawned[0]?.env?.ACP_HUB_PORT, 'the server reads config.json, so no port is forced on it').toBeUndefined();
+
+			savePort(root, 9200);
+			urls.length = 0;
+			await link.ensure();
+
+			expect(urls[0]).toBe('http://127.0.0.1:9200/health');
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it('is 8791 when nothing is saved', async () => {
+		const urls: string[] = [];
+		const link = new ServerLink({
+			root: storeRoot(), serverScript: STUB, extensionDir: path.dirname(STUB), log, serverLog: log, retryMs: 10, spawn: neverStarting(), fetch: probing(urls),
+		});
+		links.push(link);
+
+		await link.ensure();
+
+		expect(urls[0]).toBe('http://127.0.0.1:8791/health');
+	});
+
+	it('is the port a test names, which the server is then told', async () => {
+		const spawned: SpawnOptions[] = [];
+		const refusing = neverStarting() as unknown as (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+		const spawn = ((command: string, args: readonly string[], options: SpawnOptions) => {
+			spawned.push(options);
+			return refusing(command, args, options);
+		}) as unknown as ServerLinkDeps['spawn'];
+		const root = storeRoot();
+		savePort(root, 9100);
+		const link = new ServerLink({
+			root, port: 9300, serverScript: STUB, extensionDir: path.dirname(STUB), log, serverLog: log, retryMs: 10, spawn, fetch: probing([]),
+		});
+		links.push(link);
+
+		await link.ensure();
+
+		expect(spawned[0]?.env?.ACP_HUB_PORT).toBe('9300');
+	});
+});

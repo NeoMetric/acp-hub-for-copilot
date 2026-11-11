@@ -19,7 +19,7 @@ import type { ChatMessage, ChatRequest, ChatRole, Part, ToolDef } from '../../en
 import type { StreamEvent } from '../../engine/model/stream';
 import type { Log } from '../../engine/ports/host';
 import { ControlPage } from '../../ui/controlPage';
-import type { ControlAction, ControlState, ModelsSurface, UsageHistorySurface } from '../../ui/messages';
+import type { ControlAction, ControlState, ModelsSurface, ServerSurface, UsageHistorySurface } from '../../ui/messages';
 import { ACTION_ROUTE, EVENTS_ROUTE, STATE_ROUTE } from '../../ui/transport';
 import { rememberExtras, ToolCallParking, type RequestExtras } from './host';
 import { createModelsSurface } from './modelsSurface';
@@ -116,6 +116,8 @@ export interface ControlPageOptions {
 	readonly openExternal?: (url: string) => Promise<void>;
 	/** Copies text for the page; a server has no clipboard, so it logs it by default. */
 	readonly copyToClipboard?: (text: string) => Promise<void>;
+	/** What the page shows of this server, and lets the user change; without it the page has no server view. */
+	readonly server?: ServerSurface;
 	/** The built page bundle; `dist/sidebar.js`, beside `dist/server.js`, by default. */
 	readonly bundle?: string;
 	/** The page's stylesheet; `media/sidebar.css` next to the bundles by default. */
@@ -159,7 +161,7 @@ function openPage(options: ControlPageOptions, log: Log, models: ModelsSurface |
 	const control = new ControlPage(options.control, {
 		openExternal: options.openExternal ?? (async url => { log(`The page shows this sign-in URL: ${url}`); }),
 		copyToClipboard: options.copyToClipboard ?? (async text => { log(`The page asked to copy: ${text}`); }),
-	}, models, usage);
+	}, models, usage, options.server);
 	return { control, bundle: options.bundle ?? pageBundlePath(), style: options.style ?? pageStylePath() };
 }
 

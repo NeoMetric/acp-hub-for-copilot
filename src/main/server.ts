@@ -9,14 +9,13 @@ import type { ToolBridge } from '../engine/chat/types';
 import { McpBridge, type McpToolResult } from '../engine/mcp/bridge';
 import type { Part } from '../engine/model/chat';
 import { storageRoot } from '../engine/store/paths';
+import { loadConfig, serverPortOf } from '../hosts/http/config';
 import { ownerOfToken, stderrLog } from '../hosts/http/host';
 import { createServer } from '../hosts/http/server';
 import { idleMsOf, watchIdle } from './idle';
 import { exitWithParent } from './parent';
+import { createServerSurface } from './serverSurface';
 import { serverToken } from './token';
-
-/** The port the server listens on when the operator names none. */
-const DEFAULT_PORT = 8791;
 
 /** How long a closing server waits for requests that never end, such as a stream no client reads. */
 const SHUTDOWN_GRACE_MS = 5_000;
@@ -64,11 +63,11 @@ function signalOf(token: CancellationToken): AbortSignal {
 	return controller.signal;
 }
 
-/** The port `ACP_HUB_PORT` names, or the default; a value that is not a port is a start-up mistake. */
-function portOf(value: string | undefined): number {
+/** The port `ACP_HUB_PORT` names, or else the saved one; a value that is not a port is a start-up mistake. */
+function portOf(value: string | undefined, saved: number): number {
 	const text = value?.trim();
 	if (!text) {
-		return DEFAULT_PORT;
+		return saved;
 	}
 	const port = Number(text);
 	if (!Number.isInteger(port) || port < 0 || port > 65_535) {
@@ -82,9 +81,10 @@ function portOf(value: string | undefined): number {
  * loopback binding, and the shutdown that stops the agents on the way out.
  */
 export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<typeof createServer> {
-	const port = portOf(env.ACP_HUB_PORT);
 	// The same root the extension uses, so an agent installed in one gateway is installed in both.
 	const root = storageRoot(env);
+	const config = loadConfig(root, stderrLog);
+	const port = portOf(env.ACP_HUB_PORT, serverPortOf(config));
 	// The token both the extension and any other client send: the operator's, or the stored one,
 	// or the one this server makes now, so a hand-started server is never open to a tokenless client.
 	const token = serverToken(root, env);
@@ -100,11 +100,14 @@ export function startServer(env: NodeJS.ProcessEnv = process.env): ReturnType<ty
 		// A window names the extension folder it started the server from; a hand-started server reads it from where it runs.
 		extensionDir: env.ACP_HUB_EXTENSION_DIR?.trim() || undefined,
 	});
-	const server = createServer({ composition, token, page: { control: composition.control }, onShutdown: () => stop('SIGTERM') });
+	let boundPort = port;
+	const surface = createServerSurface({ config, token, env, port: () => boundPort, stop: () => stop('SIGTERM') });
+	const server = createServer({ composition, token, page: { control: composition.control, server: surface }, onShutdown: () => stop('SIGTERM') });
 
 	server.listen(port, '127.0.0.1', () => {
 		const address = server.address();
 		const bound = typeof address === 'object' && address !== null ? address.port : port;
+		boundPort = bound;
 		stderrLog(`ACP Hub server listening on http://127.0.0.1:${bound} with a bearer token.`);
 		// A window that started this server reads its output or its log file; the token stays out of both.
 		if (!process.argv.includes(EXIT_WITH_PARENT_FLAG) && !process.argv.includes(DETACHED_FLAG)) {

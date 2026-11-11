@@ -6,7 +6,7 @@
 import type { AgentAdapter } from '../core/adapter';
 import { canUninstall } from '../core/installers';
 import type { ControlSurface } from '../engine/control/ControlService';
-import type { AgentCardState, ControlAction, ControlState, ModelsSurface, SettingValue, SettingView, UsageHistorySurface } from './messages';
+import type { AgentCardState, ControlAction, ControlState, ModelsSurface, ServerSurface, SettingValue, SettingView, UsageHistorySurface } from './messages';
 
 /** What the page asks of the host it runs in; neither part touches a window or a DOM. */
 export interface ControlPageHost {
@@ -72,7 +72,7 @@ export class ControlPage {
 	private refreshing = false;
 	private modelsQueue: Promise<void> = Promise.resolve();
 
-	constructor(private readonly control: ControlSurface, private readonly host: ControlPageHost, private readonly models?: ModelsSurface, private readonly usage?: UsageHistorySurface) {
+	constructor(private readonly control: ControlSurface, private readonly host: ControlPageHost, private readonly models?: ModelsSurface, private readonly usage?: UsageHistorySurface, private readonly server?: ServerSurface) {
 		control.onUsageChange(agentId => {
 			// A read that proves the account makes an earlier sign-in complaint stale.
 			if (control.usage(agentId).signedIn === true) {
@@ -122,6 +122,25 @@ export class ControlPage {
 
 		if (action.type === 'setProviderName' || action.type === 'setModelName' || action.type === 'refreshModels') {
 			await this.runModels(action);
+			return;
+		}
+
+		if (action.type === 'setServerPort') {
+			const port = action.port;
+			if (this.server && !this.server.view().portFromEnv && Number.isInteger(port) && port >= 1 && port <= 65_535) {
+				await this.server.setPort(port);
+				await this.publish();
+			}
+			return;
+		}
+
+		if (action.type === 'restartServer') {
+			this.server?.restart();
+			return;
+		}
+
+		if (action.type === 'startServer') {
+			// A page served over HTTP is answered by the server already, so only a window starts one.
 			return;
 		}
 
@@ -217,6 +236,7 @@ export class ControlPage {
 			globalSettings,
 			...(this.models ? { models: await this.models.view(), notice: this.notice, refreshing: this.refreshing } : {}),
 			...(this.usage ? { usage: await this.usage.view() } : {}),
+			...(this.server ? { server: this.server.view() } : {}),
 		};
 	}
 
