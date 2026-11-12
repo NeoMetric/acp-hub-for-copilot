@@ -87,7 +87,7 @@ describe('syncModels', () => {
 
 		const config = read(providersFile);
 		expect(config.providers).toEqual([{ name: 'Claude Agent', type: 'openai', baseUrl: `${endpoint.baseUrl}/v1`, bearerToken: 'secret' }]);
-		expect(config.models).toEqual([{ id: 'Fast-one', provider: 'Claude Agent', wireModel: 'claude/sonnet' }]);
+		expect(config.models).toEqual([{ id: 'Fast-one', provider: 'Claude Agent', wireModel: 'claude/sonnet', capabilities: { limits: { max_context_window_tokens: 1100, max_prompt_tokens: 1000, max_output_tokens: 100 } } }]);
 		expect(outcome).toMatchObject({ refreshed: ['claude'], providers: 1, models: 1, problems: [], reloadNeeded: false });
 		expect(read(packageJson).contributes.languageModelChatProviders[0].displayName).toBe('Claude Agent');
 	});
@@ -100,8 +100,20 @@ describe('syncModels', () => {
 		await syncModels(deps);
 
 		const [withEfforts, without] = read(providersFile).models;
-		expect(withEfforts.capabilities).toEqual({ supports: { reasoning_effort: ['low', 'high', 'max'] } });
-		expect(without).not.toHaveProperty('capabilities');
+		const limits = { max_context_window_tokens: 1100, max_prompt_tokens: 1000, max_output_tokens: 100 };
+		expect(withEfforts.capabilities).toEqual({ supports: { reasoning_effort: ['low', 'high', 'max'] }, limits });
+		expect(without.capabilities).toEqual({ limits });
+	});
+
+	it("writes the context window the server reports as the CLI's capabilities.limits", async () => {
+		const wire = wireOf('sonnet', 'Big one');
+		wire.acp!.maxInputTokens = 968_000;
+		wire.acp!.maxOutputTokens = 32_000;
+		const { deps, providersFile } = await setup([wire]);
+
+		await syncModels(deps);
+
+		expect(read(providersFile).models[0].capabilities.limits).toEqual({ max_context_window_tokens: 1_000_000, max_prompt_tokens: 968_000, max_output_tokens: 32_000 });
 	});
 
 	it('shows the provider name the user chose', async () => {

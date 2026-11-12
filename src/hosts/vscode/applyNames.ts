@@ -25,7 +25,14 @@ export const CLI_EFFORT_LEVELS: readonly string[] = ['none', 'minimal', 'low', '
 export interface CliProvider {
 	readonly name: string;
 	/** `efforts` are the levels the model offers; the CLI's `/model` picker steps through them with the arrow keys. */
-	readonly models: ReadonlyArray<{ readonly name: string; readonly wireModel: string; readonly efforts?: readonly string[] }>;
+	readonly models: ReadonlyArray<{
+		readonly name: string;
+		readonly wireModel: string;
+		readonly efforts?: readonly string[];
+		/** The room the server reports for the model; without it the CLI assumes a small default window and compacts early. */
+		readonly maxInputTokens?: number;
+		readonly maxOutputTokens?: number;
+	}>;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -60,11 +67,13 @@ export function writeCliProviders(options: {
 		for (const model of provider.models) {
 			const id = uniqueId(model.name.replace(/[\s/]+/g, '-'), taken);
 			taken.add(id);
+			const supports = model.efforts?.length ? { reasoning_effort: [...model.efforts] } : undefined;
+			const limits = limitsOf(model.maxInputTokens, model.maxOutputTokens);
 			models.push({
 				id,
 				provider: provider.name,
 				wireModel: model.wireModel,
-				...(model.efforts?.length ? { capabilities: { supports: { reasoning_effort: [...model.efforts] } } } : {}),
+				...(supports || limits ? { capabilities: { ...(supports ? { supports } : {}), ...(limits ? { limits } : {}) } } : {}),
 			});
 		}
 	}
@@ -99,6 +108,14 @@ export function writeVendorNames(options: { packageJson: string; names: Readonly
 	const body = JSON.stringify(manifest, null, indent).replace(/\n/g, eol);
 	fs.writeFileSync(options.packageJson, text.endsWith('\n') ? `${body}${eol}` : body, 'utf8');
 	return true;
+}
+
+/** The CLI's `capabilities.limits`: the window is the prompt and the output together, as the model picker counts it. */
+function limitsOf(maxInput: number | undefined, maxOutput: number | undefined): JsonObject | undefined {
+	if (!maxInput || maxInput <= 0 || !maxOutput || maxOutput <= 0) {
+		return undefined;
+	}
+	return { max_context_window_tokens: maxInput + maxOutput, max_prompt_tokens: maxInput, max_output_tokens: maxOutput };
 }
 
 function readConfig(file: string): JsonObject {

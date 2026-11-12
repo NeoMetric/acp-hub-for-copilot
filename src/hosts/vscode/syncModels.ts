@@ -59,7 +59,7 @@ export async function syncModels(deps: SyncModelsDeps): Promise<SyncOutcome> {
 		if (models.length > 0) {
 			providers.push({
 				name: deps.names.providerName(agent.id, agent.displayName),
-				models: models.map(wire => ({ name: wire.acp!.name, wireModel: wire.id, efforts: cliEffortsOf(wire.acp!.efforts) })),
+				models: models.map(wire => ({ name: wire.acp!.name, wireModel: wire.id, efforts: cliEffortsOf(wire.acp!.efforts), maxInputTokens: wire.acp!.maxInputTokens, maxOutputTokens: wire.acp!.maxOutputTokens })),
 			});
 		}
 	}

@@ -55,6 +55,18 @@ describe('writeCliProviders', () => {
 		expect(config.models[1]).not.toHaveProperty('capabilities');
 	});
 
+	it('writes a model\'s token limits under capabilities.limits, the window being prompt plus output', () => {
+		const file = tempFile('providers.json');
+
+		writeCliProviders({
+			file, ...BASE, previous: [],
+			providers: [{ name: 'P', models: [{ name: 'A', wireModel: 'p/a', maxInputTokens: 168_000, maxOutputTokens: 32_000 }] }],
+		});
+
+		const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+		expect(config.models[0].capabilities).toEqual({ limits: { max_context_window_tokens: 200_000, max_prompt_tokens: 168_000, max_output_tokens: 32_000 } });
+	});
+
 	it('keeps entries it did not write and replaces the ones it wrote before, and the legacy acp-hub ones', () => {
 		const file = tempFile('providers.json', JSON.stringify({
 			providers: [{ name: 'mine', type: 'openai', baseUrl: 'http://x' }, { name: 'Old Claude', type: 'openai', baseUrl: 'http://old' }, { name: 'acp-hub', type: 'openai', baseUrl: 'http://old' }],
