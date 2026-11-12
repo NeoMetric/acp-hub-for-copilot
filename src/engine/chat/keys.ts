@@ -61,6 +61,12 @@ export function guidanceHashOf(guidance: string | undefined): string {
 	return shortHash(squashGuidance(guidance));
 }
 
+/** A message fingerprint as one short log line: tool output and file contents would otherwise fill the log across many lines. */
+export function fingerprintPreview(fingerprint: string | undefined, limit = 200): string {
+	const flat = (fingerprint ?? '').replace(/\s+/g, ' ').trim();
+	return flat.length > limit ? `${flat.slice(0, limit)}… (${flat.length} characters)` : flat;
+}
+
 /** The line in which Copilot names the mode the chat runs in, and the block that holds its instructions. */
 const MODE_LINE = /^You are currently running in "(.+)" mode\./;
 const MODE_BLOCK = /<modeInstructions>[\s\S]*?<\/modeInstructions>/g;

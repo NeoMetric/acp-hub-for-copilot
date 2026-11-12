@@ -6,7 +6,7 @@
 import type { Log } from '../ports/host';
 import type { ToolDef } from '../model/chat';
 import { findCheckpoint, findForkSource, hashAll, isPrefixOf, mismatchOf, SAVED_SESSION_VERSION, shortHash, toolsHashOf, type ReuseCheck, type SavedSession, type SavedSessionStore } from './sessionStore';
-import { describeToolChange, guidanceChangeOf, guidanceHashOf, guidanceLineHashes, toolChangeOf } from './keys';
+import { describeToolChange, fingerprintPreview, guidanceChangeOf, guidanceHashOf, guidanceLineHashes, toolChangeOf } from './keys';
 import type { ChatContext, ChatSession, Reuse } from './types';
 
 /**
@@ -42,7 +42,7 @@ export function findReusable(saved: SavedSessionStore, key: string, fingerprints
 		log(`[reuse] Saved session ${own.sessionId} found under this key but not usable: ${reason}.`, 'warn');
 		const first = own.history.findIndex((hash, index) => hash !== incoming[index]);
 		if (first >= 0 && first < incoming.length) {
-			log(`[reuse] First differing message is #${first} of ${incoming.length}: saved hash ${own.history[first]}, now ${incoming[first]}, text now: ${fingerprints[first].replace(/\s+/g, ' ')}`, 'warn');
+			log(`[reuse] First differing message is #${first} of ${incoming.length}: saved hash ${own.history[first]}, now ${incoming[first]}, text now: ${fingerprintPreview(fingerprints[first])}`, 'warn');
 		}
 	} else {
 		log(canFork ? '[reuse] Nothing saved under this key; looking for a session this chat was forked from.' : '[reuse] Nothing saved under this key.', 'debug');

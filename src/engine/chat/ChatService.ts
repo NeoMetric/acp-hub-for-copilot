@@ -20,7 +20,7 @@ import { ChatError } from './ChatError';
 import { countsOf } from './checkpoints';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './heldCalls';
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, maxChatSessions, WARM_SESSION_IDLE_MS } from './idle';
-import { describeToolChange, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, toolChangeOf, toolsDiffer } from './keys';
+import { describeToolChange, fingerprintPreview, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, toolChangeOf, toolsDiffer } from './keys';
 import { carriesToolResults, DEFAULT_TRANSCRIPT_OPTIONS, diverged, lastUserMessageIndex, persistentFingerprints, skillContextAfterReply, userWordsAfterReply, type TranscriptOptions } from './messages';
 import { acpModelValue, effortFor } from './modelOptions';
 import { PromptArchive } from './promptArchive';
@@ -421,10 +421,10 @@ export class ChatService {
 		// message to send, so it is handled as an edit of the last turn.
 		if (session.history.length >= fingerprints.length || diverged(session.history, fingerprints)) {
 			const at = session.history.findIndex((fingerprint, index) => fingerprint !== fingerprints[index]);
-			this.log(`Chat history changed for ${key}. The session had seen ${session.history.length} message(s), the request has ${fingerprints.length}; ${at < 0 ? 'the request adds nothing to what the session had seen' : `the first difference is message #${at + 1}, shown in full next`}.`, 'warn');
+			this.log(`Chat history changed for ${key}. The session had seen ${session.history.length} message(s), the request has ${fingerprints.length}; ${at < 0 ? 'the request adds nothing to what the session had seen' : `the first difference is message #${at + 1}, shown next`}.`, 'warn');
 			if (at >= 0) {
-				this.log(`[reuse] Message #${at + 1} was: ${session.history[at] ?? ''}`, 'warn');
-				this.log(`[reuse] Message #${at + 1} is now: ${fingerprints[at] ?? ''}`, 'warn');
+				this.log(`[reuse] Message #${at + 1} was: ${fingerprintPreview(session.history[at])}`, 'warn');
+				this.log(`[reuse] Message #${at + 1} is now: ${fingerprintPreview(fingerprints[at])}`, 'warn');
 			}
 			// The session is left for a fork of the turn the edit still agrees with; with none, or
 			// when the fork fails, the chat gets a new session and its messages restored.
