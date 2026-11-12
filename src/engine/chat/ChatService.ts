@@ -21,7 +21,7 @@ import { countsOf } from './checkpoints';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './heldCalls';
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, maxChatSessions, WARM_SESSION_IDLE_MS } from './idle';
 import { describeToolChange, fingerprintPreview, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, toolChangeOf, toolsDiffer } from './keys';
-import { carriesToolResults, DEFAULT_TRANSCRIPT_OPTIONS, diverged, lastUserMessageIndex, persistentFingerprints, skillContextAfterReply, userWordsAfterReply, type TranscriptOptions } from './messages';
+import { carriesToolResults, DEFAULT_TRANSCRIPT_OPTIONS, diverged, lastUserMessageIndex, persistentFingerprints, settledPrefixOf, skillContextAfterReply, userWordsAfterReply, type TranscriptOptions } from './messages';
 import { acpModelValue, effortFor } from './modelOptions';
 import { PromptArchive } from './promptArchive';
 import { findEditFork, findReusable, promptHashOf } from './reuse';
@@ -381,6 +381,7 @@ export class ChatService {
 			await this.turns.drive(key, session, sink, signal, fingerprints, lastUser);
 			return;
 		}
+		const abandoned = session?.turn !== undefined;
 		if (session?.turn) {
 			this.log(`The pending turn for ${key} was abandoned; cancelling it.`, 'warn');
 			await this.turns.abort(session);
@@ -416,6 +417,16 @@ export class ChatService {
 		// reload, agent restart), and the agent has no other memory of it.
 		let startIndex = session.history.length === 0 ? lastUser : session.history.length;
 		let restoreContext = session.history.length === 0;
+
+		// A turn that was abandoned leaves only its tool results behind: the client rewrote the result of a call
+		// it stopped waiting for. The session keeps everything before them, so it goes on from there; a new
+		// session, or a fork under a new id, would miss the cache for agents that write the id into their prompt.
+		const settled = abandoned && session.history.length > 0 ? settledPrefixOf(session.history, fingerprints) : undefined;
+		if (settled !== undefined && lastUser >= settled) {
+			this.log(`The abandoned turn of ${key} left only tool results behind; keeping the session and going on after message #${settled}.`, 'warn');
+			session.history.length = settled;
+			startIndex = settled;
+		}
 
 		// A request with nothing past what the session has seen is a retry or a regenerate: there is no new
 		// message to send, so it is handled as an edit of the last turn.

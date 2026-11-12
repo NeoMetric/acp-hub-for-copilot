@@ -203,6 +203,24 @@ export function diverged(history: readonly string[], fingerprints: readonly stri
 }
 
 /**
+ * Where an abandoned turn leaves the chat that the session has really seen: the index of the first
+ * message the request changed, when it and every message the session had after it are tool results
+ * and nothing else. The client rewrote the result of a call it stopped waiting for (the user stopped
+ * the chat, say), so the turn that ended is the only thing that differs and the session still holds
+ * everything before it. Any other change is an edit of the conversation, and has no such point.
+ */
+export function settledPrefixOf(history: readonly string[], fingerprints: readonly string[]): number | undefined {
+	const at = history.findIndex((entry, index) => entry !== fingerprints[index]);
+	if (at < 0 || at >= fingerprints.length) {
+		return undefined;
+	}
+	return history.slice(at).every(entry => TOOL_RESULT_ONLY.test(entry)) ? at : undefined;
+}
+
+/** A fingerprint of a message that holds tool results and no text, image or call (see `fingerprint`). */
+const TOOL_RESULT_ONLY = /^\d+:::result:/;
+
+/**
  * The newest user message that says something. Messages that only carry tool
  * results are skipped, as there is nothing in them to forward as a prompt.
  */

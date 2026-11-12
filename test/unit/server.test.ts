@@ -466,6 +466,31 @@ describe('the HTTP server', () => {
 		expect(done.choices[0].message.content).toBe('tool:two');
 	});
 
+	it('goes on in the same session when the client rewrites the result of a call it stopped waiting for', async () => {
+		const logs: string[] = [];
+		const url = await start({ log: message => logs.push(message) });
+		const model = await firstModel(url);
+		const ask = (messages: unknown[]): Promise<Response> => post(`${url}/v1/chat/completions`, { model, tools: [TOOL], messages });
+		const user = { role: 'user', content: 'tool2' };
+		const first = (await bodyOf(await ask([user]))).choices[0].message.tool_calls[0];
+		const call = { role: 'assistant', content: null, tool_calls: [first] };
+		// The second call is parked when the user stops the chat.
+		await bodyOf(await ask([user, call, { role: 'tool', tool_call_id: first.id, content: 'one' }]));
+
+		const body = await bodyOf(await ask([
+			user,
+			call,
+			{ role: 'user', content: 'The result of the tool call arrived after this chat had stopped waiting for it: one' },
+			{ role: 'user', content: 'continue' },
+		]));
+
+		expect(body.choices[0].message.content).toBe('hello');
+		expect(logs.some(line => line.includes('left only tool results behind'))).toBe(true);
+		expect(logs.some(line => line.includes('Chat history changed')), 'the chat was not treated as edited').toBe(false);
+		// One session for the warm-up lookup and one for the chat; a rebuilt chat would open a third.
+		expect(logs.filter(line => line.includes('Opened ACP session'))).toHaveLength(2);
+	});
+
 	it('refuses a tool result whose call no chat is waiting for', async () => {
 		const url = await start();
 		const model = await firstModel(url);
