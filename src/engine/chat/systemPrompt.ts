@@ -76,11 +76,13 @@ export function buildSystemPromptAppend(input: AppendInput): string | undefined 
 	if (input.guidance) {
 		sections.push(input.guidance);
 	}
+	sections.push(...customFilesSections(input.customFiles ?? [], carried));
+	// Last, because it follows the tools a chat offers, which can differ between chats: a prompt
+	// cached by prefix is then lost only from here on.
 	const toolArguments = toolArgumentsSection(input.toolArguments);
 	if (toolArguments) {
 		sections.push(toolArguments);
 	}
-	sections.push(...customFilesSections(input.customFiles ?? [], carried));
 
 	return sections.length === 0 ? undefined : [introOf(input.toolAccess), ...sections].join('\n\n');
 }

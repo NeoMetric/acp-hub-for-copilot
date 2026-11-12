@@ -108,6 +108,17 @@ describe('buildSystemPromptAppend', () => {
 		expect(text).not.toContain('- view:');
 	});
 
+	it('puts the tool arguments last, so a different set of tools changes only the end of the prompt', () => {
+		const text = buildSystemPromptAppend({
+			customFiles: [file('instructions', 'ts', { applyTo: '**/*.ts' })],
+			guidance: '<environment_context>Go.</environment_context>',
+			toolArguments: [{ name: 'view', required: ['path'] }],
+		})!;
+
+		expect(text.indexOf('## Instruction files for specific files')).toBeLessThan(text.indexOf('## Tool arguments'));
+		expect(text.indexOf('Go.')).toBeLessThan(text.indexOf('## Instruction files for specific files'));
+	});
+
 	it('adds no tool arguments section when no tool requires an argument', () => {
 		expect(buildSystemPromptAppend({ toolArguments: [{ name: 'view', required: [] }] })).toBeUndefined();
 	});

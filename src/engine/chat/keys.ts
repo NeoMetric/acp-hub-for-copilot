@@ -61,6 +61,41 @@ export function guidanceHashOf(guidance: string | undefined): string {
 	return shortHash(squashGuidance(guidance));
 }
 
+/** The id a host writes into the path of the session folder of a chat. */
+const SESSION_FOLDER_ID = /session-state\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i;
+const SESSION_CONTEXT_BLOCK = /<session_context>[\s\S]*?<\/session_context>/g;
+
+/**
+ * Splits the guidance of the host into what every chat shares and what names this chat.
+ * The session prompt leads the conversation, so one changed character in it makes the
+ * model's cache miss for all of it. The host writes the id of the chat's session folder into
+ * its guidance, and a prompt that carried it would never be served from the cache for a new
+ * chat. The shared part goes into the session prompt; the part about this chat goes in the
+ * message that opens the session, which follows the cached prompt.
+ */
+export function splitChatGuidance(guidance: string | undefined): { shared: string | undefined; perChat: string | undefined } {
+	if (guidance === undefined) {
+		return { shared: undefined, perChat: undefined };
+	}
+	const own: string[] = [];
+	let shared = guidance.replace(SESSION_CONTEXT_BLOCK, block => {
+		own.push(block);
+		return '';
+	});
+	// A host that writes the folder outside such a block has its line moved on its own.
+	shared = shared.split('\n').filter(line => {
+		if (!SESSION_FOLDER_ID.test(line)) {
+			return true;
+		}
+		own.push(line.trim());
+		return false;
+	}).join('\n');
+	if (own.length === 0) {
+		return { shared: guidance, perChat: undefined };
+	}
+	return { shared: shared.replace(/\n{3,}/g, '\n\n').trim() || undefined, perChat: own.join('\n\n') };
+}
+
 /** A message fingerprint as one short log line: tool output and file contents would otherwise fill the log across many lines. */
 export function fingerprintPreview(fingerprint: string | undefined, limit = 200): string {
 	const flat = (fingerprint ?? '').replace(/\s+/g, ' ').trim();

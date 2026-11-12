@@ -20,7 +20,7 @@ import { ChatError } from './ChatError';
 import { countsOf } from './checkpoints';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './heldCalls';
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, maxChatSessions, WARM_SESSION_IDLE_MS } from './idle';
-import { describeToolChange, fingerprintPreview, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, toolChangeOf, toolsDiffer } from './keys';
+import { describeToolChange, fingerprintPreview, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, splitChatGuidance, toolChangeOf, toolsDiffer } from './keys';
 import { carriesToolResults, DEFAULT_TRANSCRIPT_OPTIONS, diverged, lastUserMessageIndex, persistentFingerprints, settledPrefixOf, skillContextAfterReply, userWordsAfterReply, type TranscriptOptions } from './messages';
 import { acpModelValue, effortFor } from './modelOptions';
 import { PromptArchive } from './promptArchive';
@@ -450,8 +450,10 @@ export class ChatService {
 		}
 
 		const blocks = buildPromptBlocks(messages, startIndex, lastUser, restoreContext, session, this.log, transcriptOptions, {
-			// The context of the chat is carried only by the prompt that opens a session.
-			chatContext: restoreContext ? this.deps.host.chatWideContextOf(messages.slice(0, lastUser)) : undefined,
+			// The context of the chat is carried only by the prompt that opens a session. What the guidance says
+			// about this chat alone, such as its session folder, is left out of the session prompt to keep it
+			// the same for every chat, so it comes here, after the part that is cached.
+			chatContext: restoreContext ? [session.hasPrompt ? splitChatGuidance(session.context.guidance).perChat : undefined, this.deps.host.chatWideContextOf(messages.slice(0, lastUser))].filter(Boolean).join('\n\n') || undefined : undefined,
 			stripHostSections: this.deps.host.stripHostSections,
 		});
 		if (blocks.length === 0) {
@@ -721,7 +723,7 @@ export class ChatService {
 			// would only be paid for in tokens.
 			let systemPromptAppend = tools.length === 0
 				? undefined
-				: await this.buildSessionPrompt(tools, context.folders, context.guidance);
+				: await this.buildSessionPrompt(tools, context.folders, splitChatGuidance(context.guidance).shared);
 			lap?.(`session prompt built (${systemPromptAppend?.length ?? 0} character(s))`);
 			// The prompt leads the conversation, so a reworded one misses the cache for all of it. A policy
 			// that opens a stored conversation with the prompt it began with is sent that one; what changed
@@ -747,6 +749,8 @@ export class ChatService {
 				reportEachModelCall: this.reportsEachModelCall,
 			};
 			const promptHash = promptHashOf(systemPromptAppend);
+			// The same hash for two new chats means the model's cache can serve the prompt of the second.
+			this.log(`Session prompt hash ${promptHash} (${systemPromptAppend?.length ?? 0} character(s)).`);
 
 			let acp: AgentSession | undefined;
 			let reused: ChatSession['reused'];

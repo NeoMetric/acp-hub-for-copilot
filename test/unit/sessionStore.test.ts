@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import type { StateStore } from '../../src/engine/ports/state';
 import { guidanceChangeOf, guidanceLineHashes } from '../../src/engine/chat/keys';
 import { guidanceChangeBlock } from '../../src/engine/chat/assemble';
-import { mergeGuidanceChange } from '../../src/engine/chat/keys';
+import { mergeGuidanceChange, splitChatGuidance } from '../../src/engine/chat/keys';
 import { describeToolChange, toolChangeOf } from '../../src/engine/chat/keys';
 import { findCheckpoint, findForkSource, hashAll, isPrefixOf, messageFingerprintOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/engine/chat/sessionStore';
 
@@ -297,5 +297,36 @@ describe('SavedSessionStore', () => {
 		const store = new SavedSessionStore(undefined, 'test.savedSessions');
 		store.save(saved('k', ['u1']));
 		expect(store.all()).toEqual([]);
+	});
+});
+
+describe('splitChatGuidance', () => {
+	const folder = (id: string): string => `<session_context>\nSession folder: c:/Users/me/.copilot/session-state/${id}\n\nContents:\n- files/\n</session_context>`;
+	const guidance = (id: string): string => `Rules of the host.\n\n${folder(id)}\n\n<git_commit_trailer>\nCo-authored-by: Copilot\n</git_commit_trailer>`;
+	const first = '2286601f-d0d5-4d73-9762-f7ecef8248fd';
+	const second = '9a99ab0d-0341-4b20-b3ce-f0499abbc44a';
+
+	it('leaves the same shared text for two chats whose guidance differs only in the session folder', () => {
+		const one = splitChatGuidance(guidance(first));
+		const other = splitChatGuidance(guidance(second));
+
+		expect(one.shared).toBe(other.shared);
+		expect(one.shared).toBe('Rules of the host.\n\n<git_commit_trailer>\nCo-authored-by: Copilot\n</git_commit_trailer>');
+	});
+
+	it('returns the session context of the chat whole', () => {
+		expect(splitChatGuidance(guidance(first)).perChat).toBe(folder(first));
+	});
+
+	it('moves a line that names the session folder outside a session context block', () => {
+		const split = splitChatGuidance(`Rules.\nSession folder: c:/x/session-state/${first}\nMore rules.`);
+
+		expect(split.shared).toBe('Rules.\nMore rules.');
+		expect(split.perChat).toBe(`Session folder: c:/x/session-state/${first}`);
+	});
+
+	it('changes nothing when the guidance names no session folder', () => {
+		expect(splitChatGuidance('Rules.\n\nMore rules.')).toEqual({ shared: 'Rules.\n\nMore rules.', perChat: undefined });
+		expect(splitChatGuidance(undefined)).toEqual({ shared: undefined, perChat: undefined });
 	});
 });

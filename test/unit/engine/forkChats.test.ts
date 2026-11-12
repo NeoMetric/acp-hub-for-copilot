@@ -841,3 +841,38 @@ describe('starting an agent again that the idle shutdown stopped', () => {
 		expect(agent.created).toHaveLength(created);
 	});
 });
+
+describe('the session prompt of a new chat', () => {
+	const contextOf = (id: string): string => `<session_context>\nSession folder: c:/Users/me/.copilot/session-state/${id}\n</session_context>`;
+	const rulesOf = (id: string): ChatMessage => system(`Rules of the host.\n\n${contextOf(id)}\n\nMore rules.`);
+	const ids = ['2286601f-d0d5-4d73-9762-f7ecef8248fd', '9a99ab0d-0341-4b20-b3ce-f0499abbc44a'];
+
+	it.each([['Claude', claudeAdapter], ['Codex', codexAdapter], ['Google', googleAdapter]])('is the same for two chats of %s whose guidance differs only in the session folder', async (_name, adapter) => {
+		const { agent, send } = harness(adapter);
+
+		await send([rulesOf(ids[0]), user('hello')], 'chat-one');
+		await send([rulesOf(ids[1]), user('hello')], 'chat-two');
+
+		const [one, other] = [...agent.openedWith.values()];
+		expect(one).toBeDefined();
+		expect(one).toBe(other);
+		expect(one).not.toContain('session-state');
+	});
+
+	it('gives the agent the session folder of the chat in the message that opens the session', async () => {
+		const { agent, send } = harness();
+
+		await send([rulesOf(ids[1]), user('hello')], 'chat-two');
+
+		expect(agent.prompts[0].texts.join('\n')).toContain(contextOf(ids[1]));
+	});
+
+	it('does not repeat the session folder in the next message of the chat', async () => {
+		const { agent, send } = harness();
+
+		await send([rulesOf(ids[0]), user('hello')], 'chat-one');
+		await send([rulesOf(ids[0]), user('hello'), assistant('reply 1'), user('again')], 'chat-one');
+
+		expect(agent.prompts[1].texts.join('\n')).not.toContain('session-state');
+	});
+});
