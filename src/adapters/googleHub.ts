@@ -80,6 +80,9 @@ export async function startHub(agy: string, cwd: string): Promise<Hub> {
 	const launch = hubCommand(agy, ['--hub', `--hub-port=${port}`, `--csrf_token=${token}`, `--app_data_dir=${APP_DATA_DIR}`, `--add-dir=${cwd}`]);
 	const child = cp.spawn(launch.command, launch.args, {
 		cwd,
+		// The hub would otherwise start `agy --bg-updater` now and then, which runs `agy --version` in a
+		// console of its own that Windows Terminal shows as a flashing window. The extension updates the CLI itself.
+		env: { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: '1' },
 		stdio: 'ignore',
 		windowsHide: true,
 		...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
