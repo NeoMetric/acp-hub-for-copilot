@@ -11,6 +11,35 @@ const small: RegistryFile = {
 	],
 };
 
+/** Exactly what the released 0.0.6 manifest contributed and 1.0.0 does not. */
+const LEGACY_SETTINGS = [
+	'acpHub.resume.transcriptDetail',
+	'acpHub.resume.transcriptMaxCharacters',
+	'acpHub.resume.transcriptMaxToolResultCharacters',
+	'acpHub.agents.claude.enabled',
+	'acpHub.agents.claude.idleTimeoutSeconds',
+	'acpHub.agents.claude.idleShutdownMinutes',
+	'acpHub.agents.claude.dumpRequests',
+	'acpHub.agents.claude.authPreference',
+	'acpHub.agents.claude.toolSearch',
+	'acpHub.agents.claude.replaceSystemPrompt',
+	'acpHub.agents.codex.enabled',
+	'acpHub.agents.codex.idleTimeoutSeconds',
+	'acpHub.agents.codex.idleShutdownMinutes',
+	'acpHub.agents.codex.dumpRequests',
+	'acpHub.agents.codex.authPreference',
+	'acpHub.agents.codex.maxContextWindow',
+	'acpHub.agents.codex.replaceSystemPrompt',
+	'acpHub.agents.google.enabled',
+	'acpHub.agents.google.idleTimeoutSeconds',
+	'acpHub.agents.google.idleShutdownMinutes',
+	'acpHub.agents.google.dumpRequests',
+	'acpHub.agents.google.authPreference',
+	'acpHub.agents.google.command',
+	'acpHub.agents.google.args',
+	'acpHub.agents.google.useAgentBuiltInTools',
+];
+
 describe('vendors', () => {
 	it('names a vendor after the agent id', () => {
 		expect(vendorOf('one')).toBe('One Agent');
@@ -54,10 +83,30 @@ describe('vendors', () => {
 			.toEqual({ type: 'boolean', deprecationMessage: 'Moved to the ACP Hub store.' });
 	});
 
+	it('deprecates exactly the settings the released 0.0.6 contributed', () => {
+		const properties = packageJson.contributes.configuration.properties as Record<string, Record<string, unknown>>;
+		const deprecated = Object.entries(properties)
+			.filter(([, value]) => typeof value.deprecationMessage === 'string')
+			.map(([key]) => key)
+			.sort();
+		expect(deprecated).toEqual([...LEGACY_SETTINGS].sort());
+	});
+
+	it('gives every deprecated setting a type and no default', () => {
+		const properties = packageJson.contributes.configuration.properties as Record<string, Record<string, unknown>>;
+		for (const key of LEGACY_SETTINGS) {
+			expect(properties[key], key).toBeDefined();
+			expect(properties[key].type, key).toBeDefined();
+			expect(properties[key].default, key).toBeUndefined();
+			expect(properties[key].deprecationMessage, key).toContain('ACP Hub');
+		}
+	});
+
 	it('contributes only the settings the extension itself reads', () => {
 		const properties = packageJson.contributes.configuration.properties as Record<string, Record<string, unknown>>;
-		// The design: the port, the warm-up and the process model are the server's, so the window keeps only how it runs one.
-		expect(Object.keys(properties).sort()).toEqual(['acpHub.server.autoStart', 'acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes']);
+		// The design: the port and the process model are the server's, so the window keeps only how it runs one; the
+		// settings a previous version contributed stay as deprecated signposts, never as the source of a value.
+		expect(Object.keys(properties).sort()).toEqual([...LEGACY_SETTINGS, 'acpHub.server.autoStart', 'acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes'].sort());
 		expect(properties['acpHub.server.detached']).toMatchObject({ type: 'boolean', default: true });
 		expect(properties['acpHub.server.idleTimeoutMinutes']).toMatchObject({ type: 'number', default: 30, minimum: 0 });
 		// Whether a window starts a server by itself is the window's business, never the server's.

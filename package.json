@@ -138,6 +138,109 @@
 					"description": "Start the ACP Hub server when this window loads, and whenever the sidebar or a model list looks for one. Turn it off to start the server only when you ask for it: a chat message, the sidebar's **Start server** button, or `node <extensions folder>/dist/server.js` in a terminal. A running server is used either way; this only decides whether a window starts one by itself. Applies after a window reload.",
 					"default": true,
 					"type": "boolean"
+				},
+				"acpHub.resume.transcriptDetail": {
+					"type": "string",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.resume.transcriptMaxCharacters": {
+					"type": "number",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.resume.transcriptMaxToolResultCharacters": {
+					"type": "number",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.claude.enabled": {
+					"type": "boolean",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.claude.idleTimeoutSeconds": {
+					"type": "number",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.claude.idleShutdownMinutes": {
+					"type": "number",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.claude.dumpRequests": {
+					"type": "boolean",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.claude.authPreference": {
+					"type": "string",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.claude.toolSearch": {
+					"type": "string",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.claude.replaceSystemPrompt": {
+					"type": "boolean",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.codex.enabled": {
+					"type": "boolean",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.codex.idleTimeoutSeconds": {
+					"type": "number",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.codex.idleShutdownMinutes": {
+					"type": "number",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.codex.dumpRequests": {
+					"type": "boolean",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.codex.authPreference": {
+					"type": "string",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.codex.maxContextWindow": {
+					"type": "boolean",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.codex.replaceSystemPrompt": {
+					"type": "boolean",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.google.enabled": {
+					"type": "boolean",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.google.idleTimeoutSeconds": {
+					"type": "number",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.google.idleShutdownMinutes": {
+					"type": "number",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.google.dumpRequests": {
+					"type": "boolean",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.google.authPreference": {
+					"type": "string",
+					"deprecationMessage": "Moved to the ACP Hub store. The value you saved was carried into config.json the first time 1.0.0 ran; change it in the ACP Hub sidebar or the control page."
+				},
+				"acpHub.agents.google.command": {
+					"type": "string",
+					"deprecationMessage": "No longer used. The Google agent always runs the Antigravity CLI that ACP Hub installs; this value is ignored."
+				},
+				"acpHub.agents.google.args": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"deprecationMessage": "No longer used. The Google agent always runs the Antigravity CLI that ACP Hub installs; this value is ignored."
+				},
+				"acpHub.agents.google.useAgentBuiltInTools": {
+					"type": "boolean",
+					"deprecationMessage": "No longer used. The Google agent always runs the Antigravity CLI that ACP Hub installs; this value is ignored."
 				}
 			}
 		}
