@@ -44,6 +44,16 @@ describe('vendors', () => {
 		expect(properties['acpHub.server.port']).toEqual({ type: 'number', default: 8791 });
 	});
 
+	it('keeps a setting the extension declares as deprecated, so an older version is explained rather than unknown', () => {
+		const result = applyRegistry({ contributes: { configuration: { properties: {
+			'acpHub.agents.claude.enabled': { type: 'boolean', deprecationMessage: 'Moved to the ACP Hub store.' },
+			'acpHub.agents.claude.idleTimeoutSeconds': { type: 'number' },
+		} } } }, small) as { contributes: { configuration: { properties: Record<string, unknown> } } };
+		expect(Object.keys(result.contributes.configuration.properties)).toEqual(['acpHub.agents.claude.enabled']);
+		expect(result.contributes.configuration.properties['acpHub.agents.claude.enabled'])
+			.toEqual({ type: 'boolean', deprecationMessage: 'Moved to the ACP Hub store.' });
+	});
+
 	it('contributes only the settings the extension itself reads', () => {
 		const properties = packageJson.contributes.configuration.properties as Record<string, Record<string, unknown>>;
 		// The design: the port, the warm-up and the process model are the server's, so the window keeps only how it runs one.
