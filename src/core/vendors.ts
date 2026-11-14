@@ -40,7 +40,9 @@ export function activationEventsOf(registry: RegistryFile): string[] {
  * vendors and the activation events. An agent's settings are no longer
  * contributed — the sidebar and the store's `config.json` hold them — so the
  * ones a previous version generated are dropped, and every setting the
- * extension itself declares stays as it is.
+ * extension itself declares stays as it is. A setting it declares as
+ * deprecated carries a `deprecationMessage`, so it is hand-written and stays
+ * while everything generated goes.
  */
 export function applyRegistry(packageJson: JsonObject, registry: RegistryFile): JsonObject {
 	const contributes = { ...(packageJson.contributes as JsonObject) };
@@ -53,7 +55,7 @@ export function applyRegistry(packageJson: JsonObject, registry: RegistryFile): 
 		contributes.configuration = {
 			...configuration,
 			properties: Object.fromEntries(
-				Object.entries(configuration.properties).filter(([key]) => !key.startsWith(AGENT_SETTING_PREFIX)),
+				Object.entries(configuration.properties).filter(([key, value]) => !key.startsWith(AGENT_SETTING_PREFIX) || typeof value.deprecationMessage === 'string'),
 			),
 		};
 	}

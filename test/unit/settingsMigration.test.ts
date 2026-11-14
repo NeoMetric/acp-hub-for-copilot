@@ -119,6 +119,86 @@ describe('the settings migration', () => {
 		expect(lines.join('\n')).toContain('the disk is full');
 	});
 
+	it('names the settings left in settings.json, which the hub reads from its own store now', async () => {
+		const root = tempRoot();
+		const store = createFileStore(root);
+		const lines: string[] = [];
+
+		await migrateSettingsOnce({
+			// google.command is not a section the migration reads, so it is left to the manifest's deprecation message.
+			saved: savedFrom({ 'agents.claude.toolSearch': 'off', 'resume.transcriptDetail': 'brief', 'agents.google.command': 'agy' }),
+			config: new FileConfig(configFileOf(root)),
+			agents,
+			state: store.state,
+			log: message => { lines.push(message); },
+		});
+
+		const line = lines.find(text => text.includes('settings.json still sets'));
+		expect(line).toBeDefined();
+		expect(line).toContain('2 ACP Hub settings');
+		expect(line).toContain('acpHub.agents.claude.toolSearch');
+		expect(line).toContain('acpHub.resume.transcriptDetail');
+		expect(line).toContain('ACP Hub sidebar');
+		expect(line).not.toContain('acpHub.agents.google.command');
+	});
+
+	it('names five settings and counts the rest', async () => {
+		const root = tempRoot();
+		const store = createFileStore(root);
+		const lines: string[] = [];
+
+		await migrateSettingsOnce({
+			saved: savedFrom({
+				'agents.claude.enabled': true,
+				'agents.claude.idleTimeoutSeconds': 60,
+				'agents.claude.toolSearch': 'off',
+				'agents.codex.enabled': true,
+				'agents.codex.idleTimeoutSeconds': 60,
+				'resume.transcriptDetail': 'brief',
+			}),
+			config: new FileConfig(configFileOf(root)),
+			agents,
+			state: store.state,
+			log: message => { lines.push(message); },
+		});
+
+		const line = lines.find(text => text.includes('settings.json still sets'));
+		expect(line).toBeDefined();
+		expect(line).toContain('6 ACP Hub settings');
+		expect(line).toContain('and 1 more');
+	});
+
+	it('names the settings in settings.json even when a copy fails', async () => {
+		const root = tempRoot();
+		const store = createFileStore(root);
+		const lines: string[] = [];
+		const failing = {
+			get: () => undefined,
+			set: async (): Promise<void> => { throw new Error('the disk is full'); },
+		};
+
+		await migrateSettingsOnce({
+			saved: savedFrom({ 'agents.codex.enabled': false }),
+			config: failing,
+			agents,
+			state: store.state,
+			log: message => { lines.push(message); },
+		});
+
+		expect(store.state.get(SETTINGS_MIGRATION_MARKER)).toBeUndefined();
+		expect(lines.join('\n')).toContain('settings.json still sets 1 ACP Hub setting');
+	});
+
+	it('says nothing about settings.json when the user saved nothing', async () => {
+		const root = tempRoot();
+		const store = createFileStore(root);
+		const lines: string[] = [];
+
+		await migrateSettingsOnce({ saved: () => undefined, config: new FileConfig(configFileOf(root)), agents, state: store.state, log: message => { lines.push(message); } });
+
+		expect(lines.join('\n')).not.toContain('settings.json');
+	});
+
 	it('marks the migration done when the user saved nothing', async () => {
 		const root = tempRoot();
 		const store = createFileStore(root);
