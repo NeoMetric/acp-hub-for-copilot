@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1
+
+- New screenshot of the sidebar in the README. Nothing else changed.
+
 ## 1.0.0
 
 This release moves the agents out of the extension host into one local ACP Hub server that every window, a browser page and any OpenAI-compatible client share. The extension is a client of that server's API again, the control page shows and sets the server it runs from, and the sidebar draws that same page. The list below is everything that changed since 0.0.6.
