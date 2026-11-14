@@ -67,17 +67,18 @@ export async function migrateSettingsOnce(options: MigrateSettingsOptions): Prom
 			options.log(`Could not carry the setting acpHub.${section} into the shared store: ${messageOf(error)}`, 'warn');
 		}
 	}
-	if (failed > 0) {
-		return true;
-	}
 	if (copied > 0) {
 		options.log(`Carried ${copied} ${copied === 1 ? 'setting' : 'settings'} of the previous version into the shared store.`);
 	}
 	// The values stay in settings.json and are no longer read from there, so the one run that could tell the user says so.
+	// It says so whether or not a copy landed: the line describes settings.json, and a failed copy is retried next time.
 	if (present.length > 0) {
 		const named = present.slice(0, 5).join(', ');
 		const rest = present.length - 5;
 		options.log(`settings.json still sets ${present.length} ACP Hub setting${present.length === 1 ? '' : 's'} the hub reads from its own store now (${named}${rest > 0 ? `, and ${rest} more` : ''}); set ${present.length === 1 ? 'it' : 'them'} from the ACP Hub sidebar.`);
+	}
+	if (failed > 0) {
+		return true;
 	}
 	await options.state.update(SETTINGS_MIGRATION_MARKER, true);
 	return true;

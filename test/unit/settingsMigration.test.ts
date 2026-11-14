@@ -168,6 +168,27 @@ describe('the settings migration', () => {
 		expect(line).toContain('and 1 more');
 	});
 
+	it('names the settings in settings.json even when a copy fails', async () => {
+		const root = tempRoot();
+		const store = createFileStore(root);
+		const lines: string[] = [];
+		const failing = {
+			get: () => undefined,
+			set: async (): Promise<void> => { throw new Error('the disk is full'); },
+		};
+
+		await migrateSettingsOnce({
+			saved: savedFrom({ 'agents.codex.enabled': false }),
+			config: failing,
+			agents,
+			state: store.state,
+			log: message => { lines.push(message); },
+		});
+
+		expect(store.state.get(SETTINGS_MIGRATION_MARKER)).toBeUndefined();
+		expect(lines.join('\n')).toContain('settings.json still sets 1 ACP Hub setting');
+	});
+
 	it('says nothing about settings.json when the user saved nothing', async () => {
 		const root = tempRoot();
 		const store = createFileStore(root);
