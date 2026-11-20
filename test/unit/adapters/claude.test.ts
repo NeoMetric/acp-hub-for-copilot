@@ -1,4 +1,7 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
+import { accountAdapter } from '../../../src/core/accounts';
 import { describe, expect, it } from 'vitest';
 import { claudeAdapter, modelCallUsageOf } from '../../../src/adapters/claude';
 import { claudeUsage } from '../../../src/adapters/claudeUsage';
@@ -33,6 +36,35 @@ describe('claudeAdapter', () => {
 		});
 		expect(claudeAdapter.usage).toBe(claudeUsage);
 		expect(claudeAdapter.settings.map(setting => setting.key)).toEqual(['idleTimeoutSeconds', 'idleShutdownMinutes', 'dumpRequests', 'authPreference', 'toolSearch', 'defaultEffort', 'showThinking', 'replaceSystemPrompt', 'maxChatSessions']);
+	});
+
+	it('points an extra account at its own config folder', () => {
+		const account = accountAdapter(claudeAdapter, { id: 'claude-work', name: 'Work' });
+		const ctx = { ...launchContext(), storageDir: 'C:/hub/agents/claude-work' };
+		expect(account.launch(ctx).env.CLAUDE_CONFIG_DIR).toBe(path.join('C:/hub/agents/claude-work', 'claude-config'));
+	});
+
+	it('leaves the default account on its own config', () => {
+		expect(claudeAdapter.launch(launchContext()).env.CLAUDE_CONFIG_DIR).toBeUndefined();
+	});
+
+	it('drops inherited Anthropic credentials for an extra account', () => {
+		const account = accountAdapter(claudeAdapter, { id: 'claude-work', name: 'Work' });
+		expect(account.launch(launchContext()).unsetEnv).toEqual(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+		const keyed = account.launch(launchContext({}, 'sk-ant-x'));
+		expect(keyed.env.ANTHROPIC_API_KEY).toBe('sk-ant-x');
+		expect(keyed.unsetEnv).toEqual(['ANTHROPIC_AUTH_TOKEN']);
+	});
+
+	it('checks the sign-in of the folder it was given', () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acphub-claude-'));
+		try {
+			fs.writeFileSync(path.join(dir, '.credentials.json'), '{}');
+			expect(claudeAdapter.signInCompleted!(0, { CLAUDE_CONFIG_DIR: dir })).toBe(true);
+			expect(claudeAdapter.signInCompleted!(Date.now() + 60_000, { CLAUDE_CONFIG_DIR: dir })).toBe(false);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it('lists its sign-in methods', () => {

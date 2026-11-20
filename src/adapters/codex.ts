@@ -244,6 +244,8 @@ export const codexAdapter: AgentAdapter = {
 	usage: codexUsage,
 	sessionPolicy,
 	mergeConfig,
+	// Its storageDir already gives each account its own codex-home, so no extra variable is needed.
+	accounts: { environment: () => ({}), inheritedCredentials: ['CODEX_API_KEY', 'OPENAI_API_KEY'] },
 	sessionParams,
 	// The config of its home names the bridge, and Codex refuses a session whose config names a server with no transport.
 	declaresBridgeOnModelLookup: true,
