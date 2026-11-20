@@ -1,8 +1,12 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter, InstallContext } from '../../src/core/adapter';
+import { accountAdapter } from '../../src/core/accounts';
 import { RpcError } from '../../src/engine/acp/protocol';
 import { UsageStore } from '../../src/engine/chat/usage';
-import { ControlService, type ControlHost, type ControlServiceOptions, type SettingValue } from '../../src/engine/control/ControlService';
+import { ControlService, type ConfigValue, type ControlHost, type ControlServiceOptions } from '../../src/engine/control/ControlService';
 import type { ConfigReader, SecretStore, StateStore } from '../../src/engine/ports/state';
 
 class MemoryState implements StateStore {
@@ -98,7 +102,7 @@ function setup(overrides: Partial<ControlServiceOptions> = {}) {
 	const state = new MemoryState();
 	const secrets = new MemorySecrets();
 	const config = new MemoryConfig();
-	const written: Array<{ key: string; value: SettingValue }> = [];
+	const written: Array<{ key: string; value: ConfigValue }> = [];
 	const host = hostCallbacks();
 	const options: ControlServiceOptions = {
 		adapters: [installable('a'), adapter('b')],
@@ -328,5 +332,107 @@ describe('ControlService', () => {
 	it('refuses an agent it does not drive', async () => {
 		const { service } = setup();
 		await expect(service.installState('nope')).rejects.toThrow('Unknown agent: nope');
+	});
+});
+
+describe('ControlService accounts', () => {
+	const support = { environment: (dir: string) => ({ HOME_DIR: dir }), inheritedCredentials: ['KEY'] };
+
+	function withAccount(platform: NodeJS.Platform = 'win32', stored: unknown[] = []) {
+		const base = adapter('base', { accounts: support });
+		const adapters = [base];
+		const calls: string[] = [];
+		const host = hostCallbacks({
+			accountAdded: vi.fn(),
+			closeSessions: vi.fn(async (id: string) => { calls.push(`close ${id}`); }),
+			accountRemoved: vi.fn(async (id: string) => { calls.push(`removed ${id}`); }),
+		});
+		const made = setup({ adapters, host, platform });
+		if (stored.length > 0) { made.config.values.set('accounts.base', stored); }
+		return { ...made, base, calls };
+	}
+
+	it('adds an account record and tells the host', async () => {
+		const { service, written, host } = withAccount();
+		await service.addAccount('base', 'Work');
+		expect(written).toContainEqual({ key: 'accounts.base', value: [{ id: 'base-work', name: 'Work' }] });
+		expect(host.accountAdded).toHaveBeenCalledWith(expect.objectContaining({ id: 'base-work', accountName: 'Work' }));
+		expect(host.refreshAgent).toHaveBeenCalledWith('base-work');
+	});
+
+	it('refuses an account for an agent that has none, or off Windows', async () => {
+		const plain = setup({ platform: 'win32' });
+		await expect(plain.service.addAccount('b', 'Work')).rejects.toThrow();
+		const mac = withAccount('darwin');
+		await expect(mac.service.addAccount('base', 'Work')).rejects.toThrow();
+		expect(mac.service.supportsAccounts('base')).toBe(false);
+	});
+
+	it('refuses a name that collides with an adapter id', async () => {
+		const { service } = withAccount();
+		await expect(service.addAccount('base', 'Default')).rejects.toThrow();
+	});
+
+	it('removeAccount closes sessions before deleting the folder', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-'));
+		try {
+			const folder = path.join(root, 'base-work');
+			fs.mkdirSync(folder);
+			const record = { id: 'base-work', name: 'Work' };
+			const { service, calls, state, secrets, written, host, base, options } = withAccount('win32', [record]);
+			(options.adapters as AgentAdapter[]).push(accountAdapter(base, record));
+			(options.install as { storageDir: string }).storageDir = root;
+			await secrets.set('base-work', 'k');
+			for (const key of ['signedIn.base-work', 'server.models.base-work', 'acpHub.savedSessions.base-work', 'acpHub.forkNotice.base-work']) {
+				await state.update(key, 'x');
+			}
+			(host.accountRemoved as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => {
+				calls.push(`removed ${id}`, `folder exists: ${fs.existsSync(folder)}`);
+			});
+
+			await service.removeAccount('base-work');
+
+			expect(calls).toEqual(['close base-work', 'removed base-work', 'folder exists: true']);
+			expect(fs.existsSync(folder)).toBe(false);
+			expect(await secrets.get('base-work')).toBeUndefined();
+			for (const key of ['signedIn.base-work', 'server.models.base-work', 'acpHub.savedSessions.base-work', 'acpHub.forkNotice.base-work']) {
+				expect(state.get(key)).toBeUndefined();
+			}
+			expect(written).toContainEqual({ key: 'agents.base-work', value: undefined });
+			expect(written).toContainEqual({ key: 'accounts.base', value: [] });
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it('refuses to remove the default account', async () => {
+		const { service } = withAccount();
+		await expect(service.removeAccount('base')).rejects.toThrow();
+	});
+
+	it('refuses to uninstall an account copy', async () => {
+		const { service, base, options } = withAccount();
+		(options.adapters as AgentAdapter[]).push(accountAdapter(base, { id: 'base-work', name: 'Work' }));
+		await expect(service.uninstall('base-work')).rejects.toThrow();
+	});
+
+	it('writes a shared setting under the type', async () => {
+		const { service, base, options, written } = withAccount();
+		(options.adapters as AgentAdapter[]).push(accountAdapter(base, { id: 'base-work', name: 'Work' }));
+		await service.writeSetting('base-work', 'level', 'high');
+		await service.writeSetting('base-work', 'authPreference', 'oauth');
+		expect(written).toEqual([
+			{ key: 'agents.base.level', value: 'high' },
+			{ key: 'agents.base-work.authPreference', value: 'oauth' },
+		]);
+	});
+
+	it('switches every account of a type off at once', async () => {
+		const { service, written, host } = withAccount('win32', [{ id: 'base-work', name: 'Work' }]);
+		await service.setAccountsEnabled('base', false);
+		expect(written).toEqual([{ key: 'agents.base.accountsEnabled', value: false }]);
+		expect(host.refreshAgent).toHaveBeenCalledWith('base');
+		expect(host.refreshAgent).toHaveBeenCalledWith('base-work');
+		expect(service.accountsEnabled('base')).toBe(true);
 	});
 });

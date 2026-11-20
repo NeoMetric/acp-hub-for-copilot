@@ -27,6 +27,15 @@ describe('ModelNames', () => {
 		expect(names.overrides().providers).toEqual({ claude: 'Work Claude' });
 	});
 
+	it('forgets every name of an agent', async () => {
+		const names = new ModelNames(memoryState());
+		await names.setProvider('claude', 'Work Claude', DEFAULTS);
+		await names.setProvider('codex', 'Work Codex', DEFAULTS);
+		await names.setModel('claude', 'a', 'Fast one', MODELS);
+		await names.forget('claude');
+		expect(names.overrides()).toEqual({ providers: { codex: 'Work Codex' }, models: {} });
+	});
+
 	it('stores a model name per agent and model', async () => {
 		const names = new ModelNames(memoryState());
 		await names.setModel('claude', 'a', 'Fast one', MODELS);

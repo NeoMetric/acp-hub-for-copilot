@@ -265,6 +265,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 		settings: host.settings,
 		usage,
 		install,
+		platform,
 		writeConfig: async (key, value) => {
 			await host.writeSetting(key, value);
 			// A setting decides how the agents launch, so the launch read is forgotten.

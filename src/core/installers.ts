@@ -109,6 +109,10 @@ export function canUninstall(adapter: AgentAdapter): boolean {
 
 /** Deletes the agent's folder in the extension's global storage, including its state. The caller stops the agent first. */
 export async function uninstallAgent(adapter: AgentAdapter, env: InstallEnvironment): Promise<void> {
+	if (adapter.accountName) {
+		// An account copy shares the type's program folder, which this would delete.
+		throw new Error(`${adapter.displayName} is an account; remove the account instead of uninstalling.`);
+	}
 	if (!canUninstall(adapter)) {
 		throw new Error(`${adapter.displayName} was not installed by this extension.`);
 	}

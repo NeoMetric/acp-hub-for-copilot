@@ -75,6 +75,14 @@ export class ModelNames {
 		await this.state.update(MODEL_NAMES_KEY, next);
 	}
 
+	/** Drops every name chosen for an agent, as when its account is removed. */
+	async forget(agentId: string): Promise<void> {
+		const next = this.overrides();
+		delete next.providers[agentId];
+		delete next.models[agentId];
+		await this.state.update(MODEL_NAMES_KEY, next);
+	}
+
 	/** Names one model of an agent, or restores its own name when `name` is empty; `models` holds the agent's models with their own names. */
 	async setModel(agentId: string, value: string, name: string, models: ReadonlyArray<{ value: string; name: string }>): Promise<void> {
 		const cleaned = cleanName(name);

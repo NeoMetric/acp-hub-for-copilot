@@ -80,6 +80,14 @@ describe('uninstallAgent', () => {
 		await expect(uninstallAgent(npmAdapter(), env)).resolves.toBeUndefined();
 	});
 
+	it('refuses to uninstall an account copy, which shares the type folder', async () => {
+		fakeNpmCi({ withEntry: true });
+		await installAgent(npmAdapter(), env);
+		const copy = accountAdapter(npmAdapter(), { id: 'demo-work', name: 'Work' });
+		await expect(uninstallAgent(copy, env)).rejects.toThrow('account');
+		expect(fs.existsSync(path.join(env.storageDir, 'demo'))).toBe(true);
+	});
+
 	it('refuses to remove a CLI the extension did not install', async () => {
 		const cli = { id: 'cli', displayName: 'Cli', install: { kind: 'existing-cli', command: 'cli' } } as unknown as AgentAdapter;
 		expect(canUninstall(cli)).toBe(false);

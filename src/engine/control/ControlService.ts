@@ -3,7 +3,11 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { ACCOUNTS_ENABLED_KEY, PER_ACCOUNT_SETTINGS, accountAdapter, accountId, accountsKey, accountsSupported, readAccounts, typeIdOf, validateAccountName, type AccountRecord } from '../../core/accounts';
 import type { AgentAdapter, AgentSettings, LaunchContext } from '../../core/adapter';
+import { ModelNames } from '../models/modelNames';
 import { signInWithApiKey, signOut as clearCredentials } from '../../core/auth';
 import { getInstallState, installAgent, uninstallAgent, type InstallEnvironment, type InstallState } from '../../core/installers';
 import { readAgentSettings, settingKey } from '../../core/settings';
@@ -12,6 +16,9 @@ import type { ConfigReader, SecretStore, StateStore } from '../ports/state';
 
 /** A value a setting holds; the same kinds the agent adapters declare. */
 export type SettingValue = string | number | boolean | string[];
+
+/** What the host's configuration can be written with: a setting, an account list, or `undefined` to remove the key. */
+export type ConfigValue = SettingValue | AccountRecord[] | undefined;
 
 /** What signing an agent in produced. */
 export interface SignInOutcome {
@@ -78,6 +85,16 @@ export interface ControlSurface {
 	writeGlobalSetting(key: string, value: SettingValue): Promise<void>;
 	isEnabled(agentId: string): boolean;
 	setEnabled(agentId: string, enabled: boolean): Promise<void>;
+	/** Whether the agent can run as extra accounts here. */
+	supportsAccounts(typeId: string): boolean;
+	/** The extra accounts stored for the agent type. */
+	accounts(typeId: string): AccountRecord[];
+	/** Rejects with the reason when the name cannot be used. */
+	addAccount(typeId: string, name: string): Promise<void>;
+	removeAccount(accountId: string): Promise<void>;
+	/** The card switch for every extra account of the type (default on). */
+	accountsEnabled(typeId: string): boolean;
+	setAccountsEnabled(typeId: string, enabled: boolean): Promise<void>;
 	usage(agentId: string): UsageState;
 	refreshUsage(agentId: string, force?: boolean): Promise<void>;
 	/**
@@ -109,8 +126,10 @@ export interface ControlServiceOptions {
 	/** Where the agents are installed, and where the installs report what they do. */
 	readonly install: InstallEnvironment;
 	/** Writes one setting of the host's configuration; `key` is the name without the `acpHub.` prefix. */
-	writeConfig(key: string, value: SettingValue): Promise<void>;
+	writeConfig(key: string, value: ConfigValue): Promise<void>;
 	readonly host: ControlHost;
+	/** The platform the extra accounts are checked against; this process's by default. */
+	readonly platform?: NodeJS.Platform;
 }
 
 /**
@@ -162,6 +181,9 @@ export class ControlService implements ControlSurface {
 
 	async uninstall(agentId: string): Promise<boolean> {
 		const adapter = this.adapter(agentId);
+		if (adapter.accountName) {
+			throw new Error(`${adapter.displayName} is an account; remove the account instead of uninstalling.`);
+		}
 		if (this.options.host.confirmUninstall && !await this.options.host.confirmUninstall(adapter)) {
 			return false;
 		}
@@ -231,7 +253,8 @@ export class ControlService implements ControlSurface {
 	}
 
 	async writeSetting(agentId: string, key: string, value: SettingValue): Promise<void> {
-		await this.options.writeConfig(settingKey(agentId, key), value);
+		const owner = PER_ACCOUNT_SETTINGS.has(key) ? agentId : typeIdOf(this.adapter(agentId));
+		await this.options.writeConfig(settingKey(owner, key), value);
 	}
 
 	readGlobalSetting(key: string): SettingValue | undefined {
@@ -249,6 +272,66 @@ export class ControlService implements ControlSurface {
 	async setEnabled(agentId: string, enabled: boolean): Promise<void> {
 		await this.options.writeConfig(settingKey(agentId, 'enabled'), enabled);
 		this.options.host.refreshAgent?.(agentId);
+	}
+
+	supportsAccounts(typeId: string): boolean {
+		return accountsSupported(this.adapter(typeId), this.platform);
+	}
+
+	accounts(typeId: string): AccountRecord[] {
+		return readAccounts(this.options.settings, typeId);
+	}
+
+	async addAccount(typeId: string, name: string): Promise<void> {
+		const base = this.adapter(typeId);
+		if (!accountsSupported(base, this.platform)) {
+			throw new Error(`${base.displayName} cannot run as more than one account here.`);
+		}
+		const existing = this.accounts(typeId);
+		const taken = new Set([...this.options.adapters.map(item => item.id), ...existing.map(record => record.id)]);
+		const problem = validateAccountName(name, existing, taken, typeId);
+		if (problem) { throw new Error(problem); }
+		const record: AccountRecord = { id: accountId(typeId, name), name: name.trim() };
+		await this.options.writeConfig(accountsKey(typeId), [...existing, record]);
+		this.options.host.accountAdded?.(accountAdapter(base, record));
+		this.options.host.refreshAgent?.(record.id);
+	}
+
+	async removeAccount(accountIdToRemove: string): Promise<void> {
+		const adapter = this.adapter(accountIdToRemove);
+		if (!adapter.accountName) {
+			throw new Error(`${adapter.displayName} is not an extra account.`);
+		}
+		const id = adapter.id;
+		const typeId = typeIdOf(adapter);
+		const { host, state } = this.options;
+		await host.closeSessions?.(id);
+		await host.accountRemoved?.(id);
+		// Windows keeps a program's files locked for a moment after it exits.
+		await fs.promises.rm(path.join(this.options.install.storageDir, id), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+		await this.options.secrets.delete(id);
+		for (const key of [`signedIn.${id}`, `server.models.${id}`, `acpHub.savedSessions.${id}`, `acpHub.forkNotice.${id}`]) {
+			await state.update(key, undefined);
+		}
+		await new ModelNames(state).forget(id);
+		await this.options.writeConfig(`agents.${id}`, undefined);
+		await this.options.writeConfig(accountsKey(typeId), this.accounts(typeId).filter(record => record.id !== id));
+	}
+
+	accountsEnabled(typeId: string): boolean {
+		return this.options.settings.get<boolean>(settingKey(typeId, ACCOUNTS_ENABLED_KEY)) ?? true;
+	}
+
+	async setAccountsEnabled(typeId: string, enabled: boolean): Promise<void> {
+		await this.options.writeConfig(settingKey(typeId, ACCOUNTS_ENABLED_KEY), enabled);
+		this.options.host.refreshAgent?.(typeId);
+		for (const record of this.accounts(typeId)) {
+			this.options.host.refreshAgent?.(record.id);
+		}
+	}
+
+	private get platform(): NodeJS.Platform {
+		return this.options.platform ?? process.platform;
 	}
 
 	usage(agentId: string): UsageState {
