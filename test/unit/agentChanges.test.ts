@@ -66,7 +66,8 @@ describe('the agents whose card changed what the picker may offer', () => {
 		expect(offeredIn(stateOf(type(), account({ enabled: false })), 'base-work')).toBe(false);
 		expect(offeredIn(stateOf(type(), account({ install: 'not-installed' })), 'base-work')).toBe(false);
 		expect(offeredIn(stateOf(type()), 'base-work')).toBe(false);
-		expect(offeredIn(stateOf(type({ accountsEnabled: false })), 'base')).toBe(true);
+		expect(offeredIn(stateOf(type({ accountsEnabled: false })), 'base')).toBe(false);
+		expect(offeredIn(stateOf(type()), 'base')).toBe(true);
 	});
 
 	it('a busy line or a usage figure alone does not count', () => {

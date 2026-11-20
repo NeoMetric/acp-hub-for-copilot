@@ -305,10 +305,15 @@ export class ControlService implements ControlSurface {
 		const id = adapter.id;
 		const typeId = typeIdOf(adapter);
 		const { host, state } = this.options;
+		const root = path.resolve(this.options.install.storageDir);
+		const folder = path.resolve(root, id);
+		if (path.dirname(folder) !== root) {
+			throw new Error(`The account "${id}" does not have a valid id, so nothing was removed.`);
+		}
 		await host.closeSessions?.(id);
 		await host.accountRemoved?.(id);
 		// Windows keeps a program's files locked for a moment after it exits.
-		await fs.promises.rm(path.join(this.options.install.storageDir, id), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+		await fs.promises.rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
 		await this.options.secrets.delete(id);
 		for (const key of [`signedIn.${id}`, `server.models.${id}`, `acpHub.savedSessions.${id}`, `acpHub.forkNotice.${id}`]) {
 			await state.update(key, undefined);

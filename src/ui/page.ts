@@ -44,6 +44,8 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 	/** Accounts whose removal waits for a second click, and the name typed to add one, by agent type. */
 	const confirmRemove = new Set<string>();
 	const nameDrafts = new Map<string, string>();
+	/** The name last sent with addAccount, by type id, until an account of that name shows up. */
+	const pendingAdds = new Map<string, string>();
 
 		function toggle(set: Set<string>, value: string | undefined, on: boolean): void {
 			if (value === undefined) {
@@ -74,7 +76,8 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 
 	function addAccount(agentId: string): void {
 		const name = nameDrafts.get(agentId) ?? '';
-		nameDrafts.delete(agentId);
+		// The draft stays until the state shows the account, so a refused name is not lost.
+		pendingAdds.set(agentId, name.trim().toLowerCase());
 		transport.send({ type: 'addAccount', agentId, name });
 		draw();
 	}
@@ -381,6 +384,12 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 
 	transport.onState(state => {
 		agents = state.agents;
+		for (const [typeId, name] of pendingAdds) {
+			if (agents.some(agent => agent.accountOf === typeId && agent.accountName?.trim().toLowerCase() === name)) {
+				pendingAdds.delete(typeId);
+				nameDrafts.delete(typeId);
+			}
+		}
 		globalSettings = state.globalSettings ?? [];
 		models = state.models;
 		usage = state.usage;

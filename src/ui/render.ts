@@ -165,10 +165,10 @@ function renderSettingsPanel(agent: AgentCardState): string {
 }
 
 /** What an operation on an entry shows under it: its busy text, the sign-in page it waits for, and its error. */
-function renderStatus(agent: AgentCardState): string {
+function renderStatus(agent: AgentCardState, showError = true): string {
 	const id = escapeHtml(agent.id);
 	const busy = agent.busy ? `<div class="note">${escapeHtml(agent.busy)}</div>` : '';
-	const error = agent.error ? `<div class="error">${escapeHtml(agent.error)}</div>` : '';
+	const error = showError && agent.error ? `<div class="error">${escapeHtml(agent.error)}</div>` : '';
 	const signInUrl = agent.signInUrl
 		? `<div class="note">${escapeHtml(agent.signInUrl.message)}</div>`
 			+ `<div class="note">Browser did not open? Paste this URL into any browser:</div>`
@@ -223,7 +223,7 @@ function renderAccountSettingsPanel(type: AgentCardState, accounts: AgentCardSta
 		let remove = '';
 		if (entry.accountName !== undefined) {
 			remove = ui.confirmRemove?.has(entry.id)
-				? `<div class="note">Remove ${escapeHtml(entry.accountName)} and its sign-in?</div>`
+				? `<div class="note">Remove ${escapeHtml(entry.accountName)} ? Its sign-in, API key and saved chats are deleted.</div>`
 					+ `<div class="actions"><button class="secondary" data-action="confirmRemoveAccount" data-agent="${entryId}"${disabled}>Yes, remove</button>`
 					+ `<button class="secondary" data-action="cancelRemoveAccount" data-agent="${entryId}">Keep</button></div>`
 				: `<button class="secondary" data-action="removeAccount" data-agent="${entryId}"${disabled}>Remove account</button>`;
@@ -252,14 +252,17 @@ function renderAccountCard(type: AgentCardState, accounts: AgentCardState[], set
 			+ `<label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${entryId}"${entry.enabled ? ' checked' : ''}> Enabled</label></div>`
 			+ `<div class="actions">${renderAccount(entry)}</div>`
 			+ (keyEntry.has(entry.id) ? renderKeyEntry(entry) : '')
-			+ renderStatus(entry)
+			+ renderStatus(entry, entry.accountOf !== undefined)
 			+ renderUsage(entry)
 			+ `</div>`;
 	}).join('');
+	// The type entry's error comes from adding or removing an account, so it belongs to the card, not to the Default row.
+	const cardError = type.error ? `<div class="error">${escapeHtml(type.error)}</div>` : '';
 	return `<section class="card" data-agent="${id}">`
 		+ `<div class="card-head"><h2>${escapeHtml(type.displayName)}</h2>`
 		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setAccountsEnabled" data-agent="${id}"${type.accountsEnabled ? ' checked' : ''}> Accounts</label>${renderGear(type, settingsOpen)}</div></div>`
 		+ `<div class="actions">${renderInstall(type)}</div>`
+		+ cardError
 		+ rows
 		+ (settingsOpen ? renderAccountSettingsPanel(type, accounts, ui) : '')
 		+ `</section>`;

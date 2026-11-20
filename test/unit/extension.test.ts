@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
 	registered: [] as Array<{ vendor: string; provider: unknown }>,
 	/** The dependencies each provider was built with, in registry order. */
 	providers: [] as ProviderDeps[],
+	providersDisposed: [] as string[],
 	/** The agents whose models the window asked the workbench to list again, in order. */
 	refreshed: [] as string[],
 	published: 0,
@@ -187,7 +188,7 @@ vi.mock('../../src/hosts/vscode/serverProvider', () => ({
 			return Promise.resolve();
 		}
 		refresh() { mocks.refreshed.push(this.deps.agentId); }
-		dispose() { }
+		dispose() { mocks.providersDisposed.push(this.deps.agentId); }
 	},
 }));
 vi.mock('../../src/sidebar/relay', () => ({
@@ -241,6 +242,7 @@ beforeEach(() => {
 	mocks.failVendor = undefined;
 	mocks.registered.length = 0;
 	mocks.providers.length = 0;
+	mocks.providersDisposed.length = 0;
 	mocks.refreshed.length = 0;
 	mocks.published = 0;
 	mocks.linkDeps.length = 0;
@@ -402,6 +404,7 @@ describe('the extension is a client of the server', () => {
 		expect(() => activateOnce()).not.toThrow();
 
 		expect(mocks.logged.some(entry => entry.level === 'warn' && entry.message.includes('claude-work'))).toBe(true);
+		expect(mocks.providersDisposed).toEqual(['claude-work']);
 	});
 
 	it('registers a provider for an account the server reports later, once', () => {

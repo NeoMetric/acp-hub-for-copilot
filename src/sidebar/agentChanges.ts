@@ -22,9 +22,6 @@ export function offeredIn(state: ControlState, agentId: string): boolean {
 	if (!agent) {
 		return false;
 	}
-	if (agent.accountOf === undefined) {
-		return agent.install === 'installed' && agent.enabled;
-	}
 	return agent.install === 'installed' && agent.enabled && typeSwitchOn(state, agent);
 }
 

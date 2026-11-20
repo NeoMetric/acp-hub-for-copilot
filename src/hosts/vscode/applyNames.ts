@@ -126,7 +126,8 @@ export function syncAccountVendors(options: {
 	const current = contributes.languageModelChatProviders ?? [];
 	const next = [
 		...current.filter(entry => entry.vendor !== undefined && options.baseVendors.has(entry.vendor)),
-		...options.vendors.map(entry => ({ vendor: entry.vendor, displayName: entry.displayName })),
+		// A heading renamed on the Models page stays; only a new vendor gets the default.
+		...options.vendors.map(entry => ({ vendor: entry.vendor, displayName: current.find(item => item.vendor === entry.vendor)?.displayName ?? entry.displayName })),
 	];
 	if (JSON.stringify(next) === JSON.stringify(current)) {
 		return false;

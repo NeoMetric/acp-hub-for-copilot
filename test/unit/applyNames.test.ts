@@ -197,6 +197,16 @@ describe('syncAccountVendors', () => {
 		expect(syncAccountVendors({ packageJson: file, vendors, baseVendors: base })).toBe(false);
 	});
 
+	it('keeps the heading the user gave an account vendor', () => {
+		const manifest = { contributes: { languageModelChatProviders: [{ vendor: 'Claude Agent · Work', displayName: 'Work Claude' }] } };
+		const file = tempFile('package.json', `${JSON.stringify(manifest, null, '\t')}\n`);
+		const vendors = [{ vendor: 'Claude Agent · Work', displayName: 'Claude Agent · Work' }];
+
+		expect(syncAccountVendors({ packageJson: file, vendors, baseVendors: base })).toBe(false);
+
+		expect(JSON.parse(fs.readFileSync(file, 'utf8')).contributes.languageModelChatProviders[0].displayName).toBe('Work Claude');
+	});
+
 	it('reads a manifest with a byte order mark and CRLF line endings', () => {
 		const manifest = { contributes: { languageModelChatProviders: [{ vendor: 'Claude Agent', displayName: 'Claude Agent' }] } };
 		const file = tempFile('package.json', `${BOM}${JSON.stringify(manifest, null, '  ').replace(/\n/g, '\r\n')}\r\n`);

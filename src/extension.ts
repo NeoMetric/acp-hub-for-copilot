@@ -134,11 +134,15 @@ export function activate(context: vscode.ExtensionContext): void {
 			windowFolder: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? agentsDir,
 			isOffered: () => drawn ? offeredIn(drawn, agentId) : undefined,
 		});
+		let registration: vscode.Disposable;
+		try {
+			registration = vscode.lm.registerLanguageModelChatProvider(vendor, provider);
+		} catch (error) {
+			provider.dispose();
+			throw error;
+		}
 		providers.set(agentId, provider);
-		context.subscriptions.push(
-			vscode.lm.registerLanguageModelChatProvider(vendor, provider),
-			provider,
-		);
+		context.subscriptions.push(registration, provider);
 		// The Agents window only lists what the workbench resolved, so the models are asked for once.
 		void provider.publishModels();
 	};

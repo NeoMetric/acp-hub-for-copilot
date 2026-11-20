@@ -16,6 +16,9 @@ export const ACCOUNTS_ENABLED_KEY = 'accountsEnabled';
 
 const MAX_NAME_LENGTH = 20;
 
+/** A stored id is a folder name too, so it may hold nothing that can leave the account folder. */
+const ID_SHAPE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
 /** The key the records of a type are stored under, without the `acpHub.` prefix. */
 export function accountsKey(typeId: string): string {
 	return `accounts.${typeId}`;
@@ -90,7 +93,7 @@ export function readAccounts(config: ConfigReader, typeId: string, warn: (messag
 		const record = entry as Partial<AccountRecord> | null;
 		if (typeof record !== 'object' || record === null || typeof record.id !== 'string' || typeof record.name !== 'string') {
 			warn(`An entry of acpHub.${accountsKey(typeId)} is not an account and was ignored.`);
-		} else if (!record.id.startsWith(`${typeId}-`) || record.id.includes('/')) {
+		} else if (!record.id.startsWith(`${typeId}-`) || !ID_SHAPE.test(record.id)) {
 			warn(`The account "${record.id}" does not have a valid id and was ignored.`);
 		} else if (seen.has(record.id)) {
 			warn(`The account "${record.id}" is listed twice; the later entry was ignored.`);

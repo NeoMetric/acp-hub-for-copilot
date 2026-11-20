@@ -453,6 +453,15 @@ describe('account cards', () => {
 		const html = renderCards([base(), work()], gear, [], new Set(), { confirmRemove: new Set(['base-work']) });
 		expect(html).toContain('data-action="confirmRemoveAccount" data-agent="base-work"');
 		expect(html).not.toContain('data-action="removeAccount"');
+		expect(html).toContain('sign-in, API key and saved chats are deleted');
+	});
+
+	it('shows an add or remove error once, above the rows, not in the Default row', () => {
+		const html = renderCards([{ ...base(), error: 'An account with this name already exists.' }, work()]);
+		expect(html.match(/already exists/g)).toHaveLength(1);
+		expect(html.indexOf('already exists')).toBeLessThan(html.indexOf('data-account="base"'));
+		const rowError = renderCards([base(), { ...work(), error: 'Sign-in failed' }]);
+		expect(rowError.indexOf('Sign-in failed')).toBeGreaterThan(rowError.indexOf('data-account="base-work"'));
 	});
 
 	it('keeps the typed account name across a redraw', () => {
@@ -496,7 +505,7 @@ describe('the account controls of the page', () => {
 		deliver({ agents: [type, extra] });
 		sent.length = 0;
 		const click = (action: string, agent: string) => listeners.get('click')?.({ target: { closest: () => ({ disabled: false, dataset: { action, agent } }) } });
-		return { root, sent, click, listeners };
+		return { root, sent, click, listeners, deliver };
 	}
 
 	it('sends removeAccount only after the confirmation', () => {
@@ -514,5 +523,19 @@ describe('the account controls of the page', () => {
 		listeners.get('input')?.({ target: { dataset: { accountName: 'true', agent: 'base' }, value: 'Work 2' } });
 		click('addAccount', 'base');
 		expect(sent).toEqual([{ type: 'addAccount', agentId: 'base', name: 'Work 2' }]);
+	});
+
+	it('keeps the typed name until the account appears in the state', () => {
+		const { root, click, listeners, deliver } = mount();
+		click('toggleSettings', 'base');
+		listeners.get('input')?.({ target: { dataset: { accountName: 'true', agent: 'base' }, value: 'Work 2' } });
+		click('addAccount', 'base');
+		expect(root.innerHTML).toContain('value="Work 2"');
+
+		deliver({ agents: [{ ...type, error: 'An account with this name already exists.' }, extra] });
+		expect(root.innerHTML).toContain('value="Work 2"');
+
+		deliver({ agents: [type, extra, card({ id: 'base-work-2', accountOf: 'base', accountName: 'Work 2', removable: false })] });
+		expect(root.innerHTML).not.toContain('value="Work 2"');
 	});
 });

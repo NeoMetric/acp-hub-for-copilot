@@ -428,11 +428,35 @@ describe('ControlService accounts', () => {
 	});
 
 	it('switches every account of a type off at once', async () => {
-		const { service, written, host } = withAccount('win32', [{ id: 'base-work', name: 'Work' }]);
+		const { service, written, host, config } = withAccount('win32', [{ id: 'base-work', name: 'Work' }]);
 		await service.setAccountsEnabled('base', false);
+		config.values.set('agents.base.accountsEnabled', false);
 		expect(written).toEqual([{ key: 'agents.base.accountsEnabled', value: false }]);
 		expect(host.refreshAgent).toHaveBeenCalledWith('base');
 		expect(host.refreshAgent).toHaveBeenCalledWith('base-work');
-		expect(service.accountsEnabled('base')).toBe(true);
+		expect(service.accountsEnabled('base')).toBe(false);
+	});
+
+	it('refuses a name whose id an adapter already has', async () => {
+		const { service, options } = withAccount();
+		(options.adapters as AgentAdapter[]).push(adapter('base-work'));
+		await expect(service.addAccount('base', 'Work')).rejects.toThrow('already exists');
+	});
+
+	it('refuses to remove an account whose id leaves the account folder', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-'));
+		try {
+			const victim = path.join(root, 'victim');
+			fs.mkdirSync(victim);
+			fs.mkdirSync(path.join(root, 'agents'));
+			const bad = 'base-..\\..\\..\\victim';
+			const { service, base, options } = withAccount();
+			(options.adapters as AgentAdapter[]).push(accountAdapter(base, { id: bad, name: 'Bad' }));
+			(options.install as { storageDir: string }).storageDir = path.join(root, 'agents');
+			await expect(service.removeAccount(bad)).rejects.toThrow();
+			expect(fs.existsSync(victim)).toBe(true);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

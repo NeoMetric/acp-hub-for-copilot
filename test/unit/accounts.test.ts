@@ -83,13 +83,16 @@ describe('accounts', () => {
 				{ id: 'claude-work', name: 'Work again' },
 				{ id: 'codex-home', name: 'Home' },
 				{ id: 'claude-a/b', name: 'Slash' },
+				{ id: 'claude-..\\..\\x', name: 'Back' },
+				{ id: 'claude-..', name: 'Dots' },
+				{ id: 'claude-Work2', name: 'Upper' },
 				{ id: 5, name: 'Bad' },
 				'text',
 				{ id: 'claude-team', name: 'Team' },
 			],
 		}), 'claude', message => warnings.push(message));
 		expect(records).toEqual([{ id: 'claude-work', name: 'Work' }, { id: 'claude-team', name: 'Team' }]);
-		expect(warnings).toHaveLength(5);
+		expect(warnings).toHaveLength(8);
 		expect(readAccounts(config({}), 'claude')).toEqual([]);
 	});
 });
