@@ -424,6 +424,51 @@ describe('the extension is a client of the server', () => {
 		expect(deps?.isOffered?.()).toBe(true);
 	});
 
+	it('keeps the account groups and saved models while the server is away', async () => {
+		onWindows();
+		storeWorkAccount();
+		prepareExtensionFolder();
+		mocks.answer = 'Reload Window';
+		activateOnce(1);
+		await new Promise(resolve => setTimeout(resolve, 10));
+		const manifest = path.join(extensionDir, 'package.json');
+		const before = fs.readFileSync(manifest, 'utf8');
+		const prompts = mocks.info.length;
+
+		for (const listener of mocks.relayListeners) {
+			listener({ agents: [], linkError: 'The server is not reachable.' });
+		}
+		await new Promise(resolve => setTimeout(resolve, 10));
+
+		expect(fs.readFileSync(manifest, 'utf8')).toBe(before);
+		expect(mocks.info).toHaveLength(prompts);
+		for (const deps of mocks.providers) {
+			expect(deps.isOffered?.(), deps.agentId).toBeUndefined();
+		}
+	});
+
+	it('asks for the reload once when the same healthy state is drawn again', async () => {
+		onWindows();
+		prepareExtensionFolder();
+		mocks.answer = 'Reload Window';
+		activateOnce(1);
+		await new Promise(resolve => setTimeout(resolve, 10));
+		const prompts = mocks.info.length;
+		const state = { agents: [
+			{ id: 'claude', displayName: 'Claude Agent', vendor: 'Claude Agent', install: 'installed', enabled: true, accountsEnabled: true },
+			{ id: 'claude-work', displayName: 'Claude Agent · Work', vendor: 'Claude Agent · Work', install: 'installed', enabled: true, accountOf: 'claude', accountName: 'Work' },
+		] };
+
+		for (let round = 0; round < 2; round++) {
+			for (const listener of mocks.relayListeners) {
+				listener(state);
+			}
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
+
+		expect(mocks.info).toHaveLength(prompts + 1);
+	});
+
 	it('does not build an in-host ChatService', () => {
 		const text = source();
 		expect(text).not.toMatch(/engine\/chat/);

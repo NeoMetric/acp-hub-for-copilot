@@ -212,6 +212,10 @@ export function activate(context: vscode.ExtensionContext): void {
 	// An agent that was installed, uninstalled, switched on or off, signed in or given a key changes
 	// which models the picker may offer, so that agent's provider is asked to list them again.
 	const unsubscribeCards = relay.onState(state => {
+		// A server that is away says nothing about accounts or offered agents: keep the groups and saved lists.
+		if (state.linkError !== undefined || state.agents.length === 0) {
+			return;
+		}
 		// The server's entries are the truth about accounts: a new one gets its provider, a gone one is no longer offered.
 		accountVendors.clear();
 		for (const entry of state.agents.filter(agent => agent.accountOf !== undefined)) {
