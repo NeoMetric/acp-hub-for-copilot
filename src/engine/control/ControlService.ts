@@ -49,6 +49,10 @@ export interface ControlHost {
 	prepareAgent?(agentId: string): Promise<boolean>;
 	/** Sends a prompt to the running agent, for a usage source that reads the account that way. */
 	askAgent?(agentId: string, prompt: string): Promise<string | undefined>;
+	/** An account was added: the host builds its chat service and lists the adapter. */
+	accountAdded?(adapter: AgentAdapter): void;
+	/** An account was removed: the host closes its chat service and drops the adapter. */
+	accountRemoved?(accountId: string): Promise<void>;
 }
 
 /** Every operation the page performs, as one surface both hosts can offer. */

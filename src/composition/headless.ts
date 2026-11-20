@@ -6,10 +6,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentAdapter, AgentSettings, LaunchContext } from '../core/adapter';
+import { accountAdapter, accountsSupported, isServing, readAccounts } from '../core/accounts';
 import { ADAPTERS } from '../core/agents';
 import { signIn } from '../core/auth';
 import { findInstalled } from '../core/installers';
-import { readAgentSettings, settingKey } from '../core/settings';
+import { readAgentSettings } from '../core/settings';
 import { createSessionPrompt, type PromptWorkspace } from '../core/systemPrompt';
 import { ChatService } from '../engine/chat/ChatService';
 import { readTranscriptOptions, type TranscriptOptions } from '../engine/chat/messages';
@@ -50,6 +51,8 @@ export interface HeadlessCompositionOptions {
 	readonly promptsDir?: string;
 	/** The agents this gateway serves: the registry by default, and the one under test in a test. */
 	readonly adapters?: readonly AgentAdapter[];
+	/** The platform the extra accounts are checked against; this process's by default. */
+	readonly platform?: NodeJS.Platform;
 }
 
 /** One host, the adapters it can drive, and the chat use case of each. */
@@ -81,6 +84,10 @@ export interface HeadlessGateways extends HeadlessComposition {
 	transcriptOptions(): TranscriptOptions;
 	/** The context windows an agent reported for its models, which the model list serves. */
 	reportedWindowsOf(agentId: string): ReadonlyMap<string, number>;
+	/** Serves one more account: builds its chat service and adds it to {@link adapters}. */
+	addAccountAdapter(adapter: AgentAdapter): void;
+	/** Stops serving an account: closes its chat service and drops it from {@link adapters}. */
+	removeAccountAdapter(accountId: string): Promise<void>;
 }
 
 /** Writes the request as a JSON file in `folder` when the agent's `dumpRequests` setting is on; a failure is logged, never thrown. */
@@ -103,8 +110,18 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 	const root = path.resolve(options.root);
 	const log = options.log ?? stderrLog;
 	const extensionDir = options.extensionDir ?? process.cwd();
-	const adapters = options.adapters ?? ADAPTERS;
+	const platform = options.platform ?? process.platform;
+	// One array, changed in place, so everything holding it sees accounts come and go.
+	const adapters: AgentAdapter[] = [...(options.adapters ?? ADAPTERS)];
 	const host = createHeadlessHost({ root, log, owner: options.owner });
+	for (const base of [...adapters]) {
+		const warn = (message: string): void => withScope(log, base.id)(message, 'warn');
+		if (accountsSupported(base, platform)) {
+			adapters.push(...readAccounts(host.settings, base.id, warn).map(record => accountAdapter(base, record)));
+		} else if (!base.accountName && readAccounts(host.settings, base.id).length > 0) {
+			warn('Extra accounts are only available on Windows; the stored accounts are ignored.');
+		}
+	}
 	const agentsDir = agentsRoot(root);
 	/** Where the agents are installed, and where an install reports what it does. */
 	const install = {
@@ -122,7 +139,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 	});
 	const usageHistory = createUsageHistorySurface({
 		ledger,
-		agents: adapters.map(adapter => ({ id: adapter.id, displayName: adapter.displayName })),
+		agents: () => adapters.map(adapter => ({ id: adapter.id, displayName: adapter.displayName })),
 		writeRetention: days => host.writeSetting('usage.retentionDays', days),
 	});
 	/** The context windows each agent reported, which narrow the windows its models are served with. */
@@ -175,7 +192,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 	};
 
 	const services = new Map<string, ChatService>();
-	for (const adapter of adapters) {
+	const addService = (adapter: AgentAdapter): void => {
 		// What the extension's provider hands its chat service, mirrored over this host:
 		// the customization prompt, the transcript settings, the cache and usage figures
 		// the page shows, an expired sign-in and the request dump.
@@ -184,7 +201,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 			host,
 			bridge: options.bridge,
 			resolveLaunch: () => resolveLaunch(adapter),
-			isEnabled: () => host.settings.get<boolean>(settingKey(adapter.id, 'enabled')) !== false,
+			isEnabled: () => isServing(adapter, host.settings),
 			client: { onSignInUrl: prompt => control.reportSignInUrl(adapter.id, prompt) },
 			buildSessionPrompt: createSessionPrompt(log, adapter.systemPrompt, workspaceOf, options.promptsDir),
 			transcriptOptions,
@@ -215,7 +232,28 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 				}
 			},
 		}));
+	};
+	for (const adapter of adapters) {
+		addService(adapter);
 	}
+
+	const addAccountAdapter = (adapter: AgentAdapter): void => {
+		if (services.has(adapter.id)) {
+			return;
+		}
+		addService(adapter);
+		adapters.push(adapter);
+	};
+	const removeAccountAdapter = async (accountId: string): Promise<void> => {
+		const index = adapters.findIndex(adapter => adapter.id === accountId);
+		const service = services.get(accountId);
+		if (index >= 0) {
+			adapters.splice(index, 1);
+		}
+		services.delete(accountId);
+		reportedWindows.delete(accountId);
+		await service?.close();
+	};
 
 	// The same operations the sidebar drives, over this host's store, agents and
 	// settings, so the browser page installs, signs in and configures as the
@@ -255,8 +293,16 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 				// A server has no terminal to open, so the page hands over the command to run in one.
 				const terminal = adapter.auth.find(method => method.kind === 'oauth-browser' && method.terminalCommand);
 				if (terminal?.kind === 'oauth-browser' && terminal.terminalCommand) {
-					const command = ['node', `"${launch.entryPath}"`, ...terminal.terminalCommand].join(' ');
-					return { ok: false, message: `This server has no terminal to sign in with. Run this in one, then choose Refresh usage: ${command}` };
+					let command = ['node', `"${launch.entryPath}"`, ...terminal.terminalCommand].join(' ');
+					let where = 'one';
+					if (adapter.accountName && adapter.accounts) {
+						// The account keeps its own sign-in in a folder the variables name, so the command sets them first.
+						command = Object.entries(adapter.accounts.environment(launch.storageDir))
+							.map(([name, value]) => `$env:${name}='${value.replace(/'/g, "''")}'; `)
+							.join('') + command;
+						where = 'a PowerShell terminal (it is a PowerShell command)';
+					}
+					return { ok: false, message: `This server has no terminal to sign in with. Run this in ${where}, then choose Refresh usage: ${command}` };
 				}
 				return { ok: false, message: `${adapter.displayName} signs in with an API key; save one on this page.` };
 			},
@@ -278,6 +324,8 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 				}
 			},
 			askAgent: (agentId, prompt) => services.get(agentId)?.askAgent(prompt) ?? Promise.resolve(undefined),
+			accountAdded: adapter => addAccountAdapter(adapter),
+			accountRemoved: accountId => removeAccountAdapter(accountId),
 		},
 	});
 
@@ -285,6 +333,8 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 		host,
 		adapters,
 		serviceOf: agentId => services.get(agentId),
+		addAccountAdapter,
+		removeAccountAdapter,
 		control,
 		usage,
 		ledger,

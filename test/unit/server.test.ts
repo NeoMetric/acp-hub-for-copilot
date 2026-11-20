@@ -8,7 +8,8 @@ import type { AddressInfo } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { HeadlessComposition } from '../../src/composition/headless';
+import { createHeadlessComposition, type HeadlessComposition } from '../../src/composition/headless';
+import { accountAdapter } from '../../src/core/accounts';
 import type { AgentAdapter } from '../../src/core/adapter';
 import { nativeSessionPolicy } from '../../src/core/nativeSessionPolicy';
 import type { CancellationToken } from '../../src/engine/acp/emitter';
@@ -286,6 +287,36 @@ describe('the HTTP server', () => {
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ refreshed: [adapter.id] });
+	});
+
+	it('routes an account\'s model and forgets a removed one', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-server-'));
+		const loopback = new McpBridge(NO_LOG);
+		const gateways = createHeadlessComposition({ root, log: NO_LOG, adapters: [mockAdapter()], bridge: toolsOver(loopback) });
+		const server = createServer({ composition: gateways });
+		await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()));
+		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+		cleanups.push(async () => {
+			const closed = new Promise<void>(resolve => server.close(() => resolve()));
+			server.closeAllConnections();
+			await closed;
+			await gateways.close();
+			loopback.dispose();
+			try {
+				fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+			} catch {
+				// Left to the temp folder's own clean-up.
+			}
+		});
+
+		gateways.addAccountAdapter(accountAdapter(gateways.adapters[0], { id: 'mock-work', name: 'Work' }));
+		const listed = await (await fetch(`${url}/v1/models`)).json() as { data: Array<{ id: string }> };
+		expect(listed.data.some(entry => entry.id.startsWith('mock-work/'))).toBe(true);
+
+		await gateways.removeAccountAdapter('mock-work');
+		const response = await post(`${url}/v1/chat/completions`, chat('mock-work/x'));
+		expect(response.status).toBe(404);
+		expect(JSON.stringify(await response.json())).toContain('Unknown agent \\"mock-work\\"');
 	});
 
 	it('refuses the refresh route to a method it does not serve', async () => {

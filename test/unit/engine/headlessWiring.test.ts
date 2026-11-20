@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHeadlessComposition, type HeadlessGateways } from '../../../src/composition/headless';
 import type { AgentAdapter } from '../../../src/core/adapter';
+import { accountAdapter } from '../../../src/core/accounts';
 import type { ChatRequest } from '../../../src/engine/model/chat';
 import type { ControlState } from '../../../src/ui/messages';
 import { ControlPage } from '../../../src/ui/controlPage';
@@ -54,6 +55,30 @@ function gateway(mode = 'normal', usage?: AgentAdapter['usage']): HeadlessGatewa
 	return composition;
 }
 
+/** A gateway over an agent that can run as several accounts, with `config.json` already holding `acpHub`. */
+function accountGateway(acpHub: Record<string, unknown>, platform: NodeJS.Platform, log: (message: string, level?: string) => void = () => undefined): HeadlessGateways {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-wiring-'));
+	fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ acpHub }));
+	const composition = createHeadlessComposition({
+		root,
+		log,
+		platform,
+		adapters: [{ ...mockAdapter(), accounts: { environment: dir => ({ MOCK_HOME: path.join(dir, 'home') }), inheritedCredentials: [] } }],
+		bridge: {
+			registerSession: () => Promise.resolve({ url: 'http://127.0.0.1:1/mcp', token: 'token' }),
+			updateTools: () => undefined,
+			unregisterSession: () => undefined,
+		},
+	});
+	cleanups.push(async () => {
+		await composition.close();
+		fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+	});
+	return composition;
+}
+
+const WORK = { accounts: { mock: [{ id: 'mock-work', name: 'Work' }] } };
+
 function request(chatId: string, text = 'hi'): ChatRequest {
 	return { chatId, cwd: process.cwd(), messages: [{ role: 'user', parts: [{ type: 'text', text }] }], tools: [], model: 'mock-model' };
 }
@@ -66,6 +91,52 @@ afterEach(async () => {
 });
 
 describe('headless composition wiring', () => {
+	it('builds a service for each stored account', () => {
+		const composition = accountGateway(WORK, 'win32');
+
+		expect(composition.adapters.map(a => a.id)).toEqual(['mock', 'mock-work']);
+		expect(composition.serviceOf('mock-work')).toBeDefined();
+	});
+
+	it('ignores stored accounts off Windows', () => {
+		const logs: string[] = [];
+		const composition = accountGateway(WORK, 'linux', (message, level) => { if (level === 'warn') { logs.push(message); } });
+
+		expect(composition.adapters.map(a => a.id)).toEqual(['mock']);
+		expect(logs).toHaveLength(1);
+	});
+
+	it('skips account records it cannot use', () => {
+		const warnings: string[] = [];
+		const composition = accountGateway({
+			accounts: { mock: [{ id: 'mock/x', name: 'X' }, { id: 'mock-y' }, { id: 'mock-work', name: 'Work' }, { id: 'mock-work', name: 'Again' }] },
+		}, 'win32', (message, level) => { if (level === 'warn') { warnings.push(message); } });
+
+		expect(composition.adapters.map(a => a.id)).toEqual(['mock', 'mock-work']);
+		expect(warnings.length).toBeGreaterThan(0);
+	});
+
+	it('enables an account only when its type is on', () => {
+		const composition = accountGateway({ ...WORK, agents: { mock: { accountsEnabled: false } } }, 'win32');
+
+		expect(composition.serviceOf('mock-work')!.enabled).toBe(false);
+	});
+
+	it('adds and removes an account service at runtime in the same list', async () => {
+		const composition = accountGateway({}, 'win32');
+		const list = composition.adapters;
+		const added = accountAdapter(list[0], { id: 'mock-late', name: 'Late' });
+
+		composition.addAccountAdapter(added);
+		expect(composition.adapters).toBe(list);
+		expect(list.map(a => a.id)).toEqual(['mock', 'mock-late']);
+		expect(composition.serviceOf('mock-late')).toBeDefined();
+
+		await composition.removeAccountAdapter('mock-late');
+		expect(list.map(a => a.id)).toEqual(['mock']);
+		expect(composition.serviceOf('mock-late')).toBeUndefined();
+	});
+
 	it('records a finished turn in the usage the page shows', async () => {
 		const composition = gateway();
 

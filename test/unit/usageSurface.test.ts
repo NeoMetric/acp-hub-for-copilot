@@ -32,7 +32,7 @@ function surfaceOf(root: string, written: number[] = []): { surface: ReturnType<
 	const ledger = new UsageLedger({ root, retainDays: 30, now: () => at(11, 10, 20), flushDelayMs: 60_000 });
 	const deps: UsageSurfaceDeps = {
 		ledger,
-		agents: [{ id: 'claude', displayName: 'Claude Agent' }],
+		agents: () => [{ id: 'claude', displayName: 'Claude Agent' }],
 		writeRetention: async days => { written.push(days); },
 	};
 	return { surface: createUsageHistorySurface(deps), ledger };
@@ -72,6 +72,20 @@ describe('the usage history view', () => {
 		expect(index).toBeGreaterThanOrEqual(0);
 		expect(view.agents[index]?.name).toBe('retired-agent');
 		expect(view.days.some(point => point.a === index)).toBe(true);
+	});
+
+	it('names an agent added after the surface was built', async () => {
+		const root = store();
+		const ledger = new UsageLedger({ root, retainDays: 30, now: () => at(11, 10, 20), flushDelayMs: 60_000 });
+		const agents = [{ id: 'claude', displayName: 'Claude Agent' }];
+		const surface = createUsageHistorySurface({ ledger, agents: () => agents, writeRetention: async () => { } });
+		turn(ledger, '/repo/app', 5, 'claude-work');
+		expect((await surface.view()).agents[0]?.name).toBe('claude-work');
+
+		agents.push({ id: 'claude-work', displayName: 'Claude Agent · Work' });
+		await ledger.flush();
+
+		expect((await surface.view()).agents[0]?.name).toBe('Claude Agent · Work');
 	});
 
 	it('names a workspace by its last path segment and keeps the full path as the id', async () => {
