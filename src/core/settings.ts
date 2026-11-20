@@ -1,3 +1,4 @@
+import { PER_ACCOUNT_SETTINGS, typeIdOf } from './accounts';
 import type { AgentAdapter, AgentSettings, SettingSpec } from './adapter';
 
 /** The part of vscode.WorkspaceConfiguration that is read here. */
@@ -40,7 +41,7 @@ export function readAgentSettings(adapter: AgentAdapter, config: ConfigReader): 
 	const warnings: string[] = [];
 
 	for (const spec of adapter.settings) {
-		const name = settingKey(adapter.id, spec.key);
+		const name = settingKey(PER_ACCOUNT_SETTINGS.has(spec.key) ? adapter.id : typeIdOf(adapter), spec.key);
 		const value = config.get<unknown>(name);
 
 		if (value === undefined || value === null) {

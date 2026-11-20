@@ -76,6 +76,16 @@ export interface LaunchSpec {
 	args: string[];
 	env: Record<string, string>;
 	shell?: boolean;
+	/** Names removed from the inherited environment before `env` is applied. */
+	unsetEnv?: string[];
+}
+
+/** What an agent needs to run as more than one account. */
+export interface AccountSupport {
+	/** The variables that give an extra account its own sign-in state; `storageDir` is the account's own folder. */
+	environment(storageDir: string): Record<string, string>;
+	/** Credential variables of the surrounding environment that an extra account must not inherit. */
+	inheritedCredentials: readonly string[];
 }
 
 export type AuthMethodSpec =
@@ -203,6 +213,12 @@ export interface AgentAdapter {
 	id: string;
 	displayName: string;
 	vendor: string;
+	/** The id whose folder holds the program; absent means `id`. */
+	installId?: string;
+	/** Set only on the copy that stands for an extra account. */
+	accountName?: string;
+	/** Present when the agent can run as several accounts. */
+	accounts?: AccountSupport;
 	install: InstallSpec;
 	launch(ctx: LaunchContext): LaunchSpec;
 	findCommandOverride?(settings: AgentSettings): string | undefined;
