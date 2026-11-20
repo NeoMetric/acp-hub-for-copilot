@@ -91,6 +91,10 @@ Proposed design: **client profiles** (`vscode-copilot`, `copilot-cli`, `generic`
 
 Security note: tool outputs and file contents remain the usual injection vector; the client still executes tools and shows its own confirmations. The gateway adds requirements for localhost-only binding with token auth, and untrusted workspaces must keep contributing no customization files.
 
+## Accounts
+
+An extra account (Claude or Codex, Windows only) is served as its own agent. Account `Work` on Claude has the agent id `claude-work`, its models are `claude-work/<model>` in `/v1/models`, and **ACP Hub: Sync Models** writes it to the CLI's `providers.json` as the provider `Claude Agent · Work` (the VS Code picker group has the same name). A switched-off account, or one whose agent has **Accounts** off, is not listed. Reload the VS Code window after adding or removing an account.
+
 ## Open questions
 
 - Is terminal use with VS Code closed actually required? If not, A is enough.

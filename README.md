@@ -75,6 +75,17 @@ The optional extension (`acp-hub-for-copilot`, from a VSIX or the Marketplace) n
 - **Models view.** The control page's **Models** view sets the provider name of each agent and the name of each of its models. Press the pencil beside an agent's name to edit its provider name and all its model names together, then Save (an empty field keeps the agent's own name); a saved name reaches the pickers on the next **ACP Hub: Sync Models**. **Refresh** reads the agents' models again.
 - **Usage view.** The control page's **Usage** view charts what the turns spent: a stacked area of fresh input, cache read, cache write and output tokens, over today, 7 days, 30 days or the whole retention window. Every agent and every workspace can be left in or out with the checkboxes, and **Keep history for** sets how many days the server keeps (1 to 365, 30 by default); lowering it deletes the older days for good. The days are kept in `usage/` under the store root, one small file per day, and recording starts with this version: usage from before it was never stored.
 
+## Accounts
+
+Claude and Codex can have more than one account (Windows only for now). Antigravity cannot: its login lives in a single Windows Credential Manager entry.
+
+- **Add.** Each agent keeps one card. Open its ⚙, type a name under **+ Add account** and press **Add**. A name is 1 to 20 letters, digits, spaces or hyphens, and not `Default`. The account you already had shows as **Default**.
+- **Per account.** Every account row has its own switch, sign-in or **Use API key**, and usage bars. The **Accounts** switch in the card head turns every account of that agent off. Switching an account off hides its models at once, with no reload.
+- **Claude sign-in.** For an extra account the sidebar shows a PowerShell command that sets `CLAUDE_CONFIG_DIR` for it. An extra account never uses an API key inherited from the environment, only the key saved for that account (the same holds for Codex).
+- **Ids.** An account named `Work` on Claude has the agent id `claude-work`, so its models are `claude-work/<model>`. The VS Code picker shows the group `Claude Agent · Work`, and a subagent's model list names its models `Claude Agent · Work/<model>`. For the Copilot CLI, run **ACP Hub: Sync Models** and the provider `Claude Agent · Work` appears.
+- **Reload.** VS Code reads the picker groups at startup, so after you add or remove an account (and once after each extension update) it asks to reload the window.
+- **Remove.** **Remove account** in the ⚙ asks once more, then deletes that account's login, saved API key, saved chats and its folder `%USERPROFILE%\.acp-hub\agents\<accountId>`.
+
 ## Settings and usage
 
 Configure each agent from its card on the control page, or by editing `<root>/config.json`. The page shows available plan limits and both last-turn and cumulative cache hit rates. Usage reporting varies by agent.

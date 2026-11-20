@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Multiple accounts for Claude and Codex (Windows only). In an agent's ⚙, **+ Add account** adds a named account (1 to 20 letters, digits, spaces or hyphens; not `Default`); the existing one shows as **Default**. Each account has its own switch, sign-in or API key, usage bars and chats, and the card's **Accounts** switch turns all of an agent's accounts off. An account `Work` on Claude is the agent `claude-work`, with models `claude-work/<model>`, the picker group `Claude Agent · Work` and, after **ACP Hub: Sync Models**, the Copilot CLI provider `Claude Agent · Work`. Extra accounts never use API keys inherited from the environment. **Remove account** deletes the account's login, saved key, chats and its folder under `.acp-hub\agents`. VS Code asks to reload the window after an account is added or removed, and once after this update. Antigravity does not support extra accounts.
+
 ## 1.0.1
 
 - New screenshot of the sidebar in the README. Nothing else changed.
