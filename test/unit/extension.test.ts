@@ -27,6 +27,7 @@ interface ProviderDeps {
 	state: { get<T>(key: string): T | undefined; update(key: string, value: unknown): Promise<void> };
 	log: (message: string, level?: string) => void;
 	windowFolder(): string;
+	isOffered?: () => boolean | undefined;
 }
 
 /** What the sidebar's relay was built with. */
@@ -43,6 +44,8 @@ const mocks = vi.hoisted(() => ({
 	config: {} as Record<string, unknown>,
 	/** The folders the window has open, as `workspace.workspaceFolders` answers them. */
 	folders: undefined as undefined | Array<{ uri: { fsPath: string } }>,
+	/** A vendor whose registration the workbench refuses. */
+	failVendor: undefined as string | undefined,
 	/** The vendor of every provider the window registered, in registration order. */
 	registered: [] as Array<{ vendor: string; provider: unknown }>,
 	/** The dependencies each provider was built with, in registry order. */
@@ -91,8 +94,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock('vscode', () => {
 	const disposable = () => ({ dispose() { } });
 	return {
+		ExtensionMode: { Production: 1, Development: 2, Test: 3 },
 		lm: {
 			registerLanguageModelChatProvider: (vendor: string, provider: unknown) => {
+				if (mocks.failVendor === vendor) {
+					throw new Error('registration refused');
+				}
 				mocks.registered.push({ vendor, provider });
 				return disposable();
 			},
@@ -231,6 +238,7 @@ beforeEach(() => {
 	extensionDir = path.join(root, 'extension');
 	process.env.ACP_HUB_HOME = root;
 	mocks.folders = undefined;
+	mocks.failVendor = undefined;
 	mocks.registered.length = 0;
 	mocks.providers.length = 0;
 	mocks.refreshed.length = 0;
@@ -265,6 +273,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+	Object.defineProperty(process, 'platform', realPlatform);
 	delete process.env.ACP_HUB_HOME;
 	delete process.env.COPILOT_PROVIDERS_CONFIG;
 	vi.unstubAllGlobals();
@@ -277,8 +286,9 @@ afterEach(async () => {
 	}
 });
 
-function contextOf() {
+function contextOf(extensionMode = 2) {
 	return {
+		extensionMode,
 		subscriptions: [] as Array<{ dispose(): unknown }>,
 		globalStorageUri: { fsPath: globalStorage },
 		extensionUri: { fsPath: extensionDir },
@@ -288,9 +298,17 @@ function contextOf() {
 	} as never;
 }
 
-function activateOnce(): void {
-	activate(contextOf());
+function activateOnce(extensionMode?: number): void {
+	activate(contextOf(extensionMode));
 }
+
+/** Stores one extra Claude account the way the server's config keeps it. */
+function storeWorkAccount(): void {
+	fs.writeFileSync(path.join(root, 'config.json'), JSON.stringify({ acpHub: { accounts: { claude: [{ id: 'claude-work', name: 'Work' }] } } }));
+}
+
+const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+const onWindows = (): void => { Object.defineProperty(process, 'platform', { ...realPlatform, value: 'win32' }); };
 
 /** The extension folder as an installed one looks: a manifest for the headings, and a CLI file of the test's own. */
 function prepareExtensionFolder(headings: Record<string, string> = {}): void {
@@ -326,6 +344,84 @@ describe('the extension is a client of the server', () => {
 		expect(mocks.providers.map(deps => deps.vendor)).toEqual(mocks.registered.map(entry => entry.vendor));
 		// The Agents window lists nothing a provider does not republish.
 		expect(mocks.published).toBe(3);
+	});
+
+	it('registers a provider for each stored account', () => {
+		onWindows();
+		storeWorkAccount();
+
+		activateOnce();
+
+		expect(mocks.registered.map(entry => entry.vendor)).toContain('Claude Agent · Work');
+		const deps = mocks.providers.find(entry => entry.agentId === 'claude-work');
+		expect(deps?.vendor).toBe('Claude Agent · Work');
+		expect(deps?.isOffered?.()).toBeUndefined();
+	});
+
+	it('ignores stored accounts off Windows', () => {
+		Object.defineProperty(process, 'platform', { ...realPlatform, value: 'linux' });
+		storeWorkAccount();
+
+		activateOnce();
+
+		expect(mocks.registered.map(entry => entry.vendor)).toEqual(['Claude Agent', 'Codex Agent', 'Google Agent']);
+	});
+
+	it('activation adds missing account vendors and asks for a reload', async () => {
+		onWindows();
+		storeWorkAccount();
+		prepareExtensionFolder();
+		mocks.answer = 'Reload Window';
+
+		activateOnce(1);
+		await new Promise(resolve => setTimeout(resolve, 10));
+
+		const vendors = JSON.parse(fs.readFileSync(path.join(extensionDir, 'package.json'), 'utf8')).contributes.languageModelChatProviders.map((entry: { vendor: string }) => entry.vendor);
+		expect(vendors).toContain('Claude Agent · Work');
+		expect(mocks.info.at(-1)).toEqual(['Reload the window to update the account groups in the model picker.', 'Reload Window']);
+		expect(mocks.executed).toContain('workbench.action.reloadWindow');
+	});
+
+	it('leaves the manifest alone unless the extension is installed', () => {
+		onWindows();
+		storeWorkAccount();
+		prepareExtensionFolder();
+		const before = fs.readFileSync(path.join(extensionDir, 'package.json'), 'utf8');
+
+		activateOnce(2);
+
+		expect(fs.readFileSync(path.join(extensionDir, 'package.json'), 'utf8')).toBe(before);
+		expect(mocks.info).toEqual([]);
+	});
+
+	it('a failed provider registration is logged, not thrown', () => {
+		onWindows();
+		storeWorkAccount();
+		mocks.failVendor = 'Claude Agent · Work';
+
+		expect(() => activateOnce()).not.toThrow();
+
+		expect(mocks.logged.some(entry => entry.level === 'warn' && entry.message.includes('claude-work'))).toBe(true);
+	});
+
+	it('registers a provider for an account the server reports later, once', () => {
+		onWindows();
+		activateOnce();
+		const draw = (): void => {
+			for (const listener of mocks.relayListeners) {
+				listener({ agents: [
+					{ id: 'claude', displayName: 'Claude Agent', vendor: 'Claude Agent', install: 'installed', enabled: true, accountsEnabled: true },
+					{ id: 'claude-work', displayName: 'Claude Agent · Work', vendor: 'Claude Agent · Work', install: 'installed', enabled: true, accountOf: 'claude', accountName: 'Work' },
+				] });
+			}
+		};
+
+		draw();
+		draw();
+
+		expect(mocks.registered.filter(entry => entry.vendor === 'Claude Agent · Work')).toHaveLength(1);
+		const deps = mocks.providers.find(entry => entry.agentId === 'claude-work');
+		expect(deps?.isOffered?.()).toBe(true);
 	});
 
 	it('does not build an in-host ChatService', () => {

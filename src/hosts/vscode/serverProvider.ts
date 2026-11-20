@@ -28,6 +28,8 @@ export interface ServerProviderDeps {
 	readonly log: Log;
 	/** The window's own folder, which roots a chat whose folders this machine does not have. */
 	windowFolder(): string;
+	/** Whether the sidebar's state lets the picker offer this agent; `false` offers nothing, `undefined` (state not known yet) keeps the saved list. */
+	readonly isOffered?: () => boolean | undefined;
 }
 
 /**
@@ -58,6 +60,10 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 
 	async provideLanguageModelChatInformation(_options: vscode.PrepareLanguageModelChatModelOptions, token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
 		if (token.isCancellationRequested) {
+			return [];
+		}
+		if (this.deps.isOffered?.() === false) {
+			this.offered = undefined;
 			return [];
 		}
 		const saved = this.savedModels();

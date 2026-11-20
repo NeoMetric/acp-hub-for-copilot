@@ -161,8 +161,9 @@ async function waitUntil(ready: () => boolean, what: string, timeoutMs = 3_000):
 const logs: string[] = [];
 const log: Log = message => { logs.push(message); };
 
-function providerOf(overrides: { agentId?: string; link?: FakeLink; state?: StateStore; windowFolder?: string; log?: Log } = {}): ServerProvider {
+function providerOf(overrides: { agentId?: string; link?: FakeLink; state?: StateStore; windowFolder?: string; log?: Log; isOffered?: () => boolean | undefined } = {}): ServerProvider {
 	return new ServerProvider({
+		isOffered: overrides.isOffered,
 		agentId: overrides.agentId ?? 'claude',
 		vendor: 'Test Agent',
 		link: overrides.link ?? new FakeLink(() => unavailable),
@@ -228,6 +229,30 @@ describe('ServerProvider models', () => {
 
 		expect(models.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent']);
 		expect(state.keys().length).toBe(writes);
+	});
+
+	it('offers nothing for a switched-off account, even with a saved list', async () => {
+		const state = new MemoryState();
+		await state.update(modelsStateKey('claude'), [savedEntry('claude', 'sonnet')]);
+		let offered: boolean | undefined = true;
+		const provider = providerOf({ link: new FakeLink(() => unavailable), state, isOffered: () => offered });
+		expect(await provider.provideLanguageModelChatInformation(modelsOptions, token())).toHaveLength(2);
+
+		offered = false;
+
+		expect(await provider.provideLanguageModelChatInformation(modelsOptions, token())).toEqual([]);
+		offered = true;
+		expect((await provider.provideLanguageModelChatInformation(modelsOptions, token())).map(model => model.id)).toEqual(['sonnet', 'sonnet::agent']);
+	});
+
+	it('offers the saved list while the state is unknown', async () => {
+		const state = new MemoryState();
+		await state.update(modelsStateKey('claude'), [savedEntry('claude', 'sonnet')]);
+		const provider = providerOf({ link: new FakeLink(() => unavailable), state, isOffered: () => undefined });
+
+		const models = await provider.provideLanguageModelChatInformation(modelsOptions, token());
+
+		expect(models.map(model => model.id)).toEqual(['sonnet', 'sonnet::agent']);
 	});
 
 	it('ignores a saved entry in a shape it cannot show', async () => {

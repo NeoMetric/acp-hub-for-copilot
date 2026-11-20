@@ -103,11 +103,45 @@ export function writeVendorNames(options: { packageJson: string; names: Readonly
 	if (!changed) {
 		return false;
 	}
+	writeManifest(options.packageJson, text, manifest);
+	return true;
+}
+
+/**
+ * Makes the manifest list one picker group per account: the entries of the base
+ * vendors stay as they are (with the names the user gave them), and every other
+ * entry is replaced by `vendors`. Answers whether the file changed.
+ */
+export function syncAccountVendors(options: {
+	packageJson: string;
+	vendors: ReadonlyArray<{ vendor: string; displayName: string }>;
+	baseVendors: ReadonlySet<string>;
+}): boolean {
+	const text = withoutBom(fs.readFileSync(options.packageJson, 'utf8'));
+	const manifest = JSON.parse(text) as JsonObject;
+	const contributes = manifest.contributes as { languageModelChatProviders?: Array<{ vendor?: string; displayName?: string }> } | undefined;
+	if (!contributes) {
+		return false;
+	}
+	const current = contributes.languageModelChatProviders ?? [];
+	const next = [
+		...current.filter(entry => entry.vendor !== undefined && options.baseVendors.has(entry.vendor)),
+		...options.vendors.map(entry => ({ vendor: entry.vendor, displayName: entry.displayName })),
+	];
+	if (JSON.stringify(next) === JSON.stringify(current)) {
+		return false;
+	}
+	contributes.languageModelChatProviders = next;
+	writeManifest(options.packageJson, text, manifest);
+	return true;
+}
+
+/** Writes the manifest back with the indentation and line endings it had. */
+function writeManifest(file: string, text: string, manifest: JsonObject): void {
 	const indent = /^([ \t]+)"/m.exec(text)?.[1] ?? '\t';
 	const eol = text.includes('\r\n') ? '\r\n' : '\n';
 	const body = JSON.stringify(manifest, null, indent).replace(/\n/g, eol);
-	fs.writeFileSync(options.packageJson, text.endsWith('\n') ? `${body}${eol}` : body, 'utf8');
-	return true;
+	fs.writeFileSync(file, text.endsWith('\n') ? `${body}${eol}` : body, 'utf8');
 }
 
 /** The CLI's `capabilities.limits`: the window is the prompt and the output together, as the model picker counts it. */
