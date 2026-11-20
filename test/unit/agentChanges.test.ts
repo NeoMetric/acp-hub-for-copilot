@@ -6,6 +6,7 @@ function card(overrides: Partial<AgentCardState> = {}): AgentCardState {
 	return {
 		id: 'one',
 		displayName: 'One',
+		vendor: 'v',
 		install: 'installed',
 		removable: true,
 		signedIn: 'yes',

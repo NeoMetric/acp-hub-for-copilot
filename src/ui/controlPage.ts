@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AgentAdapter } from '../core/adapter';
+import { PER_ACCOUNT_SETTINGS, typeIdOf } from '../core/accounts';
 import { canUninstall } from '../core/installers';
 import type { ControlSurface } from '../engine/control/ControlService';
 import type { AgentCardState, ControlAction, ControlState, ModelsSurface, ServerSurface, SettingValue, SettingView, UsageHistorySurface } from './messages';
@@ -158,6 +159,18 @@ export class ControlPage {
 		}
 
 		switch (action.type) {
+			case 'addAccount':
+				await this.runBusy(adapter, undefined, () => this.control.addAccount(adapter.id, action.name));
+				return;
+			case 'removeAccount': {
+				// A refusal lands on the card of the account's type, which is the card on screen.
+				const owner = this.control.agents().find(item => item.id === typeIdOf(adapter)) ?? adapter;
+				await this.runBusy(owner, undefined, () => this.control.removeAccount(adapter.id));
+				return;
+			}
+			case 'setAccountsEnabled':
+				await this.runBusy(adapter, undefined, () => this.control.setAccountsEnabled(adapter.id, action.enabled));
+				return;
 			case 'addAgent':
 			case 'removeAgent': {
 				await this.ensureVisibleAgents();
@@ -174,7 +187,8 @@ export class ControlPage {
 				await this.install(adapter);
 				return;
 			case 'uninstall':
-				if (!this.installing.has(adapter.id)) {
+				// An account copy shares the program of its type, so it has nothing of its own to remove.
+				if (!adapter.accountName && !this.installing.has(adapter.id)) {
 					await this.runBusy(adapter, 'Uninstalling...', async () => { await this.control.uninstall(adapter.id); });
 				}
 				return;
@@ -340,26 +354,34 @@ export class ControlPage {
 		const settings = this.control.readSettings(adapter.id);
 		const keyMethod = adapter.auth.find(method => method.kind === 'api-key');
 
-		const settingViews: SettingView[] = adapter.settings.map(spec => ({
-			key: spec.key,
-			label: spec.label,
-			description: spec.description,
-			type: spec.type,
-			value: settings[spec.key] ?? spec.default,
-			options: spec.options,
-			optionDescriptions: spec.optionDescriptions,
-		}));
+		const isAccount = !!adapter.accountName;
+		const typeId = typeIdOf(adapter);
+		const settingViews: SettingView[] = adapter.settings
+			.filter(spec => !isAccount || PER_ACCOUNT_SETTINGS.has(spec.key))
+			.map(spec => ({
+				key: spec.key,
+				label: spec.label,
+				description: spec.description,
+				type: spec.type,
+				value: settings[spec.key] ?? spec.default,
+				options: spec.options,
+				optionDescriptions: spec.optionDescriptions,
+				...(PER_ACCOUNT_SETTINGS.has(spec.key) ? { perAccount: true } : {}),
+			}));
 
 		return {
 			id: adapter.id,
 			displayName: adapter.displayName,
-			install: this.installing.has(adapter.id) ? 'installing' : installState,
-			removable: canUninstall(adapter),
+			vendor: adapter.vendor,
+			...(isAccount ? { accountOf: typeId, accountName: adapter.accountName } : {}),
+			...(!isAccount && this.control.supportsAccounts(adapter.id) ? { accountsEnabled: this.control.accountsEnabled(adapter.id) } : {}),
+			install: this.installing.has(typeId) ? 'installing' : installState,
+			removable: !isAccount && canUninstall(adapter),
 			signedIn: signedIn === undefined ? 'unknown' : signedIn ? 'yes' : 'no',
 			hasSavedKey,
 			apiKey: keyMethod?.kind === 'api-key' ? { label: keyMethod.label, keyPrefix: keyMethod.keyPrefix } : undefined,
 			enabled: this.control.isEnabled(adapter.id),
-			visible: this.visibleAgents!.has(adapter.id),
+			visible: this.visibleAgents!.has(typeId),
 			settings: settingViews,
 			usage: {
 				status: usage.status,
@@ -389,7 +411,7 @@ export class ControlPage {
 		}
 		const installed: string[] = [];
 		for (const adapter of this.control.agents()) {
-			if (await this.control.installState(adapter.id) === 'installed') {
+			if (!adapter.accountName && await this.control.installState(adapter.id) === 'installed') {
 				installed.push(adapter.id);
 			}
 		}

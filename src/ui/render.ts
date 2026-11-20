@@ -164,9 +164,9 @@ function renderSettingsPanel(agent: AgentCardState): string {
 	return `<div class="settings">${settings}${uninstall}</div>`;
 }
 
-function renderCard(agent: AgentCardState, settingsOpen: boolean, keyOpen: boolean): string {
+/** What an operation on an entry shows under it: its busy text, the sign-in page it waits for, and its error. */
+function renderStatus(agent: AgentCardState): string {
 	const id = escapeHtml(agent.id);
-	const checked = agent.enabled ? ' checked' : '';
 	const busy = agent.busy ? `<div class="note">${escapeHtml(agent.busy)}</div>` : '';
 	const error = agent.error ? `<div class="error">${escapeHtml(agent.error)}</div>` : '';
 	const signInUrl = agent.signInUrl
@@ -176,18 +176,92 @@ function renderCard(agent: AgentCardState, settingsOpen: boolean, keyOpen: boole
 			+ `<div class="actions"><button data-action="copySignInUrl" data-agent="${id}">Copy URL</button>`
 			+ `<button class="secondary" data-action="openSignInUrl" data-agent="${id}">Open in browser</button></div>`
 		: '';
-	const gear = `<button class="icon-button" data-action="toggleSettings" data-agent="${id}" aria-label="Settings for ${escapeHtml(agent.displayName)}" aria-expanded="${settingsOpen}" title="Settings">⚙</button>`;
+	return busy + signInUrl + error;
+}
+
+function renderGear(agent: AgentCardState, settingsOpen: boolean): string {
+	return `<button class="icon-button" data-action="toggleSettings" data-agent="${escapeHtml(agent.id)}" aria-label="Settings for ${escapeHtml(agent.displayName)}" aria-expanded="${settingsOpen}" title="Settings">⚙</button>`;
+}
+
+function renderCard(agent: AgentCardState, settingsOpen: boolean, keyOpen: boolean): string {
+	const id = escapeHtml(agent.id);
+	const checked = agent.enabled ? ' checked' : '';
 
 	return `<section class="card" data-agent="${id}">`
 		+ `<div class="card-head"><h2>${escapeHtml(agent.displayName)}</h2>`
-		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${id}"${checked}> Enabled</label>${gear}</div></div>`
+		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${id}"${checked}> Enabled</label>${renderGear(agent, settingsOpen)}</div></div>`
 		+ `<div class="actions">${renderInstall(agent)}${renderAccount(agent)}</div>`
 		+ (keyOpen ? renderKeyEntry(agent) : '')
-		+ busy
-		+ signInUrl
-		+ error
+		+ renderStatus(agent)
 		+ renderUsage(agent)
 		+ (settingsOpen ? renderSettingsPanel(agent) : '')
+		+ `</section>`;
+}
+
+/** The page-local state of the account controls, which a redraw must not lose. */
+export interface AccountUi {
+	/** Account ids whose Remove account button was pressed once and now asks for confirmation. */
+	readonly confirmRemove?: ReadonlySet<string>;
+	/** The name typed in each agent's add-account field, by type id. */
+	readonly nameDrafts?: ReadonlyMap<string, string>;
+}
+
+/** More extra accounts than this earns the note about the processes each one runs. */
+const ACCOUNT_NOTE_THRESHOLD = 10;
+
+function entryName(entry: AgentCardState): string {
+	return entry.accountName ?? 'Default';
+}
+
+function renderAccountSettingsPanel(type: AgentCardState, accounts: AgentCardState[], ui: AccountUi): string {
+	const id = escapeHtml(type.id);
+	const disabled = type.busy ? ' disabled' : '';
+	const shared = type.settings.filter(setting => !setting.perAccount).map(setting => renderSetting(type.id, setting)).join('');
+	const perAccount = [type, ...accounts].map(entry => {
+		const settings = entry.settings.filter(setting => setting.perAccount).map(setting => renderSetting(entry.id, setting)).join('');
+		const entryId = escapeHtml(entry.id);
+		let remove = '';
+		if (entry.accountName !== undefined) {
+			remove = ui.confirmRemove?.has(entry.id)
+				? `<div class="note">Remove ${escapeHtml(entry.accountName)} and its sign-in?</div>`
+					+ `<div class="actions"><button class="secondary" data-action="confirmRemoveAccount" data-agent="${entryId}"${disabled}>Yes, remove</button>`
+					+ `<button class="secondary" data-action="cancelRemoveAccount" data-agent="${entryId}">Keep</button></div>`
+				: `<button class="secondary" data-action="removeAccount" data-agent="${entryId}"${disabled}>Remove account</button>`;
+		}
+		return `<div class="account-settings"><div class="account-name">${escapeHtml(entryName(entry))}</div>${settings}${remove}</div>`;
+	}).join('');
+	const uninstall = type.removable && type.install === 'installed'
+		? `<button class="secondary uninstall" data-action="uninstall" data-agent="${id}"${disabled}>Uninstall agent</button>`
+		: '';
+	const draft = ui.nameDrafts?.get(type.id) ?? '';
+	const add = `<div class="add-account"><input type="text" aria-label="New account name" data-account-name="true" data-agent="${id}" maxlength="20" autocomplete="off" spellcheck="false" value="${escapeHtml(draft)}">`
+		+ `<button data-action="addAccount" data-agent="${id}"${disabled}>Add</button></div>`;
+	const crowded = accounts.length > ACCOUNT_NOTE_THRESHOLD
+		? '<div class="note">Each account runs its own processes, so many accounts use more memory.</div>'
+		: '';
+	return `<div class="settings">${shared}<h3 class="per-account">Per account</h3>${perAccount}${add}${crowded}${uninstall}</div>`;
+}
+
+/** One card for an agent that has accounts: a row for Default and one for each extra account. */
+function renderAccountCard(type: AgentCardState, accounts: AgentCardState[], settingsOpen: boolean, keyEntry: ReadonlySet<string>, ui: AccountUi): string {
+	const id = escapeHtml(type.id);
+	const rows = [type, ...accounts].map(entry => {
+		const entryId = escapeHtml(entry.id);
+		return `<div class="account-row" data-account="${entryId}">`
+			+ `<div class="account-head"><span class="account-name">${escapeHtml(entryName(entry))}</span>`
+			+ `<label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${entryId}"${entry.enabled ? ' checked' : ''}> Enabled</label></div>`
+			+ `<div class="actions">${renderAccount(entry)}</div>`
+			+ (keyEntry.has(entry.id) ? renderKeyEntry(entry) : '')
+			+ renderStatus(entry)
+			+ renderUsage(entry)
+			+ `</div>`;
+	}).join('');
+	return `<section class="card" data-agent="${id}">`
+		+ `<div class="card-head"><h2>${escapeHtml(type.displayName)}</h2>`
+		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setAccountsEnabled" data-agent="${id}"${type.accountsEnabled ? ' checked' : ''}> Accounts</label>${renderGear(type, settingsOpen)}</div></div>`
+		+ `<div class="actions">${renderInstall(type)}</div>`
+		+ rows
+		+ (settingsOpen ? renderAccountSettingsPanel(type, accounts, ui) : '')
 		+ `</section>`;
 }
 
@@ -423,9 +497,13 @@ function renderGlobalSettings(settings: SettingView[], open: boolean): string {
 	return `<details class="global-settings"${open ? ' open' : ''}><summary>Settings for all agents</summary><div class="settings">${settings.map(setting => renderSetting(undefined, setting)).join('')}</div></details>`;
 }
 
-export function renderCards(agents: AgentCardState[], openSettings: ReadonlySet<string> = new Set(), globalSettings: SettingView[] = [], keyEntry: ReadonlySet<string> = new Set()): string {
-	const cards = agents.filter(agent => agent.visible).map(agent => renderCard(agent, openSettings.has(agent.id), keyEntry.has(agent.id))).join('');
-	const available = agents.filter(agent => !agent.visible);
+export function renderCards(agents: AgentCardState[], openSettings: ReadonlySet<string> = new Set(), globalSettings: SettingView[] = [], keyEntry: ReadonlySet<string> = new Set(), accountUi: AccountUi = {}): string {
+	// An extra account is a row inside its type's card, never a card or an entry of Add agent.
+	const types = agents.filter(agent => agent.accountOf === undefined);
+	const cards = types.filter(agent => agent.visible).map(agent => agent.accountsEnabled !== undefined
+		? renderAccountCard(agent, agents.filter(item => item.accountOf === agent.id), openSettings.has(agent.id), keyEntry, accountUi)
+		: renderCard(agent, openSettings.has(agent.id), keyEntry.has(agent.id))).join('');
+	const available = types.filter(agent => !agent.visible);
 	const choices = available.map(agent => `<button class="secondary add-choice" data-action="addAgent" data-agent="${escapeHtml(agent.id)}">${escapeHtml(agent.displayName)}</button>`).join('');
 	const addAgent = available.length ? `<details class="add-agent"><summary>+ Add agent</summary>${choices}</details>` : '';
 	return renderGlobalSettings(globalSettings, openSettings.has(GLOBAL_SETTINGS_ID)) + cards + addAgent;

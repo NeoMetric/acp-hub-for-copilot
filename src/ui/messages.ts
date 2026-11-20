@@ -15,6 +15,8 @@ export interface SettingView {
 	value: SettingValue;
 	options?: string[];
 	optionDescriptions?: string[];
+	/** Set when each account of the agent keeps its own value. */
+	perAccount?: boolean;
 }
 
 export type InstallView = 'installed' | 'not-installed' | 'installing';
@@ -53,6 +55,14 @@ export interface AgentCardState {
 	/** A page the user has to open to finish signing in, with the agent's instructions for it. */
 	signInUrl?: { url: string; message: string };
 	error?: string;
+	/** The picker group id of this entry. */
+	vendor: string;
+	/** Set on an extra account's entry: the id of its agent type. */
+	accountOf?: string;
+	/** Set on an extra account's entry: the name the user gave it. */
+	accountName?: string;
+	/** Set only on a type entry that supports accounts; its presence means "draw as an account card". */
+	accountsEnabled?: boolean;
 }
 
 /** The names the Models page edits: each agent's provider and its models, with the name the agent itself gives them. */
@@ -165,6 +175,10 @@ export type FromWebview =
 	| { type: 'addAgent' | 'removeAgent'; agentId: string }
 	| { type: 'saveApiKey'; agentId: string; key: string }
 	| { type: 'setEnabled'; agentId: string; enabled: boolean }
+	/** `agentId` is the type id. */
+	| { type: 'addAccount'; agentId: string; name: string }
+	| { type: 'removeAccount'; agentId: string }
+	| { type: 'setAccountsEnabled'; agentId: string; enabled: boolean }
 	| { type: 'setSetting'; agentId: string; key: string; value: SettingValue }
 	| { type: 'setProviderName'; agentId: string; name: string }
 	| { type: 'setModelName'; agentId: string; model: string; name: string }

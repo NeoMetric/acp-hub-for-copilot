@@ -19,6 +19,7 @@ function stateOf(card: Partial<AgentCardState> = {}): ControlState {
 		agents: [{
 			id: 'a',
 			displayName: 'Agent A',
+			vendor: 'v',
 			install: 'installed',
 			removable: true,
 			signedIn: 'yes',

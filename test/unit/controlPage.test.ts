@@ -449,3 +449,79 @@ describe('ControlPage usage refresh', () => {
 		await vi.waitFor(() => expect(states.length).toBeGreaterThan(before));
 	});
 });
+
+describe('ControlPage accounts', () => {
+	function accountAdapter(id: string, extra: Record<string, unknown> = {}): AgentAdapter {
+		return {
+			id,
+			displayName: `Agent ${id}`,
+			vendor: id,
+			install: { kind: 'npm' },
+			auth: [],
+			settings: [
+				{ key: 'level', type: 'string', label: 'Level', description: '', default: 'low' },
+				{ key: 'authPreference', type: 'enum', label: 'Auth', description: '', default: 'auto', options: ['auto', 'key'] },
+			],
+			...extra,
+		} as unknown as AgentAdapter;
+	}
+	function withAccounts(overrides: Partial<ControlSurface> = {}) {
+		const work = accountAdapter('base-work', {
+			vendor: 'base · Work',
+			accountName: 'Work',
+			installId: 'base',
+			settings: [{ key: 'authPreference', type: 'enum', label: 'Auth', description: '', default: 'auto', options: ['auto', 'key'] }],
+		});
+		return setup({
+			agents: () => [accountAdapter('base'), work],
+			visibleAgents: () => ['base'],
+			supportsAccounts: id => id === 'base',
+			...overrides,
+		});
+	}
+
+	it('lists an account after its type, with only its own settings', async () => {
+		const { page, last } = withAccounts();
+		await page.handle({ type: 'ready' });
+		const { agents } = last();
+		expect(agents.map(a => a.id)).toEqual(['base', 'base-work']);
+		const work = agents[1];
+		expect(work.accountOf).toBe('base');
+		expect(work.accountName).toBe('Work');
+		expect(work.vendor).toMatch(/· Work$/);
+		expect(work.removable).toBe(false);
+		expect(work.accountsEnabled).toBeUndefined();
+		expect(work.settings.map(s => s.key)).toEqual(['authPreference']);
+		expect(work.settings.every(s => s.perAccount)).toBe(true);
+		expect(agents[0].accountsEnabled).toBe(true);
+		expect(agents[0].settings.find(s => s.key === 'level')!.perAccount).toBeFalsy();
+		expect(agents[0].settings.find(s => s.key === 'authPreference')!.perAccount).toBe(true);
+	});
+
+	it('runs addAccount and shows a refused name as the card error', async () => {
+		const addAccount = vi.fn(async (_id: string, name: string) => { if (name === 'bad') { throw new Error('Name is taken.'); } });
+		const { page, card } = withAccounts({ addAccount });
+		await page.handle({ type: 'addAccount', agentId: 'base', name: 'bad' });
+		expect(addAccount).toHaveBeenCalledWith('base', 'bad');
+		expect(card('base').error).toBe('Name is taken.');
+		await page.handle({ type: 'addAccount', agentId: 'base', name: 'Work' });
+		expect(card('base').error).toBeUndefined();
+	});
+
+	it('runs removeAccount and setAccountsEnabled', async () => {
+		const removeAccount = vi.fn(async () => { });
+		const setAccountsEnabled = vi.fn(async () => { });
+		const { page } = withAccounts({ removeAccount, setAccountsEnabled });
+		await page.handle({ type: 'removeAccount', agentId: 'base-work' });
+		await page.handle({ type: 'setAccountsEnabled', agentId: 'base', enabled: false });
+		expect(removeAccount).toHaveBeenCalledWith('base-work');
+		expect(setAccountsEnabled).toHaveBeenCalledWith('base', false);
+	});
+
+	it('ignores uninstall for an account', async () => {
+		const uninstall = vi.fn(async () => true);
+		const { page } = withAccounts({ uninstall });
+		await page.handle({ type: 'uninstall', agentId: 'base-work' });
+		expect(uninstall).not.toHaveBeenCalled();
+	});
+});

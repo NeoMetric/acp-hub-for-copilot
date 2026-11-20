@@ -41,6 +41,7 @@ const SAMPLE: ControlState = {
 		{
 			id: 'a',
 			displayName: 'Agent A',
+			vendor: 'v',
 			install: 'installed',
 			removable: true,
 			signedIn: 'yes',
@@ -53,6 +54,7 @@ const SAMPLE: ControlState = {
 		{
 			id: 'b',
 			displayName: 'Agent B',
+			vendor: 'v',
 			install: 'installing',
 			installPercent: 30,
 			removable: false,
