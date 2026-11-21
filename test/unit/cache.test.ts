@@ -207,7 +207,7 @@ describe('cache miss detection', () => {
 		now = 30_000;
 		measure(tracker, turn(800, 2, 21_000));
 
-		expect(tracker.misses).toEqual({ unexpected: 1, expired: 0, lostTokens: 20_500 - 800 });
+		expect(tracker.misses).toEqual({ unexpected: 1, expired: 0, lostTokens: 20_500 - 800, expiredLostTokens: 0 });
 	});
 
 	it('counts a miss after the cache lifetime apart', () => {
@@ -217,7 +217,7 @@ describe('cache miss detection', () => {
 		now = 6 * 60_000;
 		measure(tracker, turn(0, 2, 21_000));
 
-		expect(tracker.misses).toMatchObject({ unexpected: 0, expired: 1 });
+		expect(tracker.misses).toEqual({ unexpected: 0, expired: 1, lostTokens: 0, expiredLostTokens: 20_500 });
 	});
 
 	it('does not count a call whose prompt shrank, as after a compaction', () => {

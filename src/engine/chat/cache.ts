@@ -84,8 +84,10 @@ export interface MissStats {
 	readonly unexpected: number;
 	/** Calls that lost it after the chat sat idle longer than the cache lives; nothing to fix. */
 	readonly expired: number;
-	/** Tokens that were billed at full price for lack of the cache. */
+	/** Tokens the unexpected misses billed at full price for lack of the cache. */
 	readonly lostTokens: number;
+	/** Tokens the misses after idle billed at full price, kept apart since nothing caused them. */
+	readonly expiredLostTokens: number;
 }
 
 /**
@@ -155,6 +157,7 @@ export class CacheTracker {
 	private unexpectedMisses = 0;
 	private expiredMisses = 0;
 	private lostTokens = 0;
+	private expiredLostTokens = 0;
 
 	constructor(private readonly now: () => number = Date.now) { }
 
@@ -207,11 +210,12 @@ export class CacheTracker {
 		const now = this.now();
 		const miss = detectMiss(this.baselines.get(chatId), call, now);
 		if (miss) {
-			this.lostTokens += miss.lostTokens;
 			if (miss.expired) {
 				this.expiredMisses += 1;
+				this.expiredLostTokens += miss.lostTokens;
 			} else {
 				this.unexpectedMisses += 1;
+				this.lostTokens += miss.lostTokens;
 			}
 		}
 		this.baselines.delete(chatId);
@@ -224,7 +228,7 @@ export class CacheTracker {
 	/** Misses among the calls of chats that were already running; `undefined` until one was seen. */
 	get misses(): MissStats | undefined {
 		return this.unexpectedMisses + this.expiredMisses > 0
-			? { unexpected: this.unexpectedMisses, expired: this.expiredMisses, lostTokens: this.lostTokens }
+			? { unexpected: this.unexpectedMisses, expired: this.expiredMisses, lostTokens: this.lostTokens, expiredLostTokens: this.expiredLostTokens }
 			: undefined;
 	}
 
@@ -278,6 +282,7 @@ export class CacheTracker {
 		this.unexpectedMisses = 0;
 		this.expiredMisses = 0;
 		this.lostTokens = 0;
+		this.expiredLostTokens = 0;
 	}
 }
 
