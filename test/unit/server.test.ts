@@ -7,11 +7,12 @@ import * as fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHeadlessComposition, type HeadlessComposition } from '../../src/composition/headless';
 import { accountAdapter } from '../../src/core/accounts';
 import type { AgentAdapter } from '../../src/core/adapter';
 import { nativeSessionPolicy } from '../../src/core/nativeSessionPolicy';
+import { AgentClient } from '../../src/engine/acp/agentClient';
 import type { CancellationToken } from '../../src/engine/acp/emitter';
 import { ChatService } from '../../src/engine/chat/ChatService';
 import type { ToolBridge } from '../../src/engine/chat/types';
@@ -287,6 +288,18 @@ describe('the HTTP server', () => {
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({ refreshed: [adapter.id] });
+	});
+
+	it('asks the agent again on every refresh, not only the first', async () => {
+		const url = await start({ adapter: mockAdapter() });
+		const created = vi.spyOn(AgentClient.prototype, 'createSession');
+		cleanups.push(async () => created.mockRestore());
+
+		await post(`${url}/v1/models/refresh`);
+		const second = await post(`${url}/v1/models/refresh`);
+
+		expect(await second.json()).toEqual({ refreshed: [adapter.id] });
+		expect(created).toHaveBeenCalledTimes(2);
 	});
 
 	it('routes an account\'s model and forgets a removed one', async () => {
