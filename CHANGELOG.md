@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 - **Cache misses** on the usage card now counts both kinds, each with its own token figure: unexpected (lost mid-chat) and after idle (the cache expired, which is normal).
 - **Refresh** on the Models tab opens a new agent session, so models released since the last read appear without restarting the server.
