@@ -121,8 +121,7 @@ button:disabled {
 }
 
 .note,
-.resets,
-.plan {
+.resets {
 	color: var(--vscode-descriptionForeground);
 	font-size: 0.9em;
 }
@@ -233,7 +232,8 @@ select {
 	border: 1px solid var(--vscode-input-border, transparent);
 }
 
-.key-entry input[type="password"] {
+.key-entry input[type="password"],
+.key-entry input[type="text"] {
 	width: 100%;
 	box-sizing: border-box;
 	margin-bottom: 6px;
@@ -440,10 +440,6 @@ select {
 	fill: transparent;
 }
 
-.usage-chart .chart-column:hover {
-	fill: var(--vscode-list-hoverBackground, rgb(128 128 128 / 15%));
-}
-
 .usage-chart path {
 	stroke: none;
 }
@@ -497,3 +493,11 @@ select {
 	margin-left: auto;
 	color: var(--vscode-descriptionForeground);
 }
+
+.account-row { border-top: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.35)); margin-top: 8px; padding-top: 8px; }
+.account-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.account-name { font-weight: 600; }
+.account-settings { border-top: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.35)); margin-top: 8px; padding-top: 8px; }
+.add-account { display: flex; gap: 6px; margin-top: 8px; }
+.add-account input { flex: 1; min-width: 0; }
+h3.per-account { font-size: 1em; margin: 10px 0 0; }

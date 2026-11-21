@@ -17,12 +17,13 @@ import { recordStoragePath } from './core/storageCleanup';
 import { vendorOf } from './core/vendors';
 import { agentsRoot, storageRoot } from './engine/store/paths';
 import { ModelNames } from './engine/models/modelNames';
-import { copilotProvidersFile } from './hosts/vscode/applyNames';
+import { copilotProvidersFile, syncAccountVendors } from './hosts/vscode/applyNames';
 import { syncModels } from './hosts/vscode/syncModels';
 import { ServerLink } from './hosts/vscode/serverLink';
 import { ServerProvider } from './hosts/vscode/serverProvider';
 import { warmAgents } from './hosts/vscode/warmAgents';
-import { changedAgents } from './sidebar/agentChanges';
+import { accountVendor, readAccounts } from './core/accounts';
+import { changedAgents, offeredIn } from './sidebar/agentChanges';
 import { SidebarHost } from './sidebar/host';
 import { SidebarRelay } from './sidebar/relay';
 import type { ControlState } from './ui/messages';
@@ -52,6 +53,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// The install root of both gateways: an agent installed here is installed for the server, with its logs and pid registry.
 	const agentsDir = agentsRoot(root);
 	const settings = vscode.workspace.getConfiguration('acpHub');
+	const config = loadConfig(root, log);
 
 	// One store for both gateways, so a chat saved in VS Code resumes in the server, and back.
 	const shared = openSharedStore({ root, fallbackRoot: globalStorageDir, log });
@@ -79,7 +81,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// The previous version read the agents' settings from the user's own settings; the server reads them from config.json, so what the user saved moves there once.
 	void migrateSettingsOnce({
 		saved: section => settings.inspect(section)?.globalValue,
-		config: loadConfig(root, log),
+		config,
 		agents: REGISTRY.agents.map(agent => ({ id: agent.id, settingKeys: [...REGISTRY.commonSettings, ...agent.settings].map(spec => spec.key) })),
 		state: shared.store.state,
 		log,
@@ -117,26 +119,81 @@ export function activate(context: vscode.ExtensionContext): void {
 		}
 	});
 
-	for (const agent of REGISTRY.agents) {
-		const vendor = vendorOf(agent.id);
+	// The last state the sidebar drew; a provider offers nothing for an entry that state switched off or dropped.
+	let drawn: ControlState | undefined;
+
+	const registerProvider = (agentId: string, vendor: string): void => {
 		const provider = new ServerProvider({
-			agentId: agent.id,
+			agentId,
 			vendor,
 			link: binding,
 			// Read-only: the server's saved models, so the window offers them before the server answers.
 			state: shared.store.state,
-			log: scopedLog(output, agent.id),
+			log: scopedLog(output, agentId),
 			// A chat whose folders this machine does not have runs in the agents folder, as it always did.
 			windowFolder: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? agentsDir,
+			isOffered: () => drawn ? offeredIn(drawn, agentId) : undefined,
 		});
-		providers.set(agent.id, provider);
-		context.subscriptions.push(
-			vscode.lm.registerLanguageModelChatProvider(vendor, provider),
-			provider,
-		);
+		let registration: vscode.Disposable;
+		try {
+			registration = vscode.lm.registerLanguageModelChatProvider(vendor, provider);
+		} catch (error) {
+			provider.dispose();
+			throw error;
+		}
+		providers.set(agentId, provider);
+		context.subscriptions.push(registration, provider);
 		// The Agents window only lists what the workbench resolved, so the models are asked for once.
 		void provider.publishModels();
+	};
+
+	for (const agent of REGISTRY.agents) {
+		registerProvider(agent.id, vendorOf(agent.id));
 	}
+
+	// An account is an agent of its own to the picker, so it gets a provider under its own group.
+	const accountVendors = new Map<string, { vendor: string; displayName: string }>();
+	const registerAccount = (id: string, vendor: string, displayName: string): void => {
+		accountVendors.set(id, { vendor, displayName });
+		if (providers.has(id)) {
+			return;
+		}
+		try {
+			registerProvider(id, vendor);
+		} catch (error) {
+			log(`Could not register the model provider of the account ${id}: ${messageOf(error)}`, 'warn');
+		}
+	};
+	if (process.platform === 'win32') {
+		for (const agent of REGISTRY.agents) {
+			for (const record of readAccounts(config, agent.id, message => log(message, 'warn'))) {
+				registerAccount(record.id, accountVendor(vendorOf(agent.id), record.name), `${agent.displayName} · ${record.name}`);
+			}
+		}
+	}
+
+	// The manifest names the picker groups, so an installed extension lists one per account; a development host never writes its own source.
+	const manifestFile = path.join(extensionDir, 'package.json');
+	const baseVendors = new Set(REGISTRY.agents.map(agent => vendorOf(agent.id)));
+	const syncManifest = (): void => {
+		if (context.extensionMode !== vscode.ExtensionMode.Production) {
+			return;
+		}
+		try {
+			const changed = syncAccountVendors({ packageJson: manifestFile, vendors: [...accountVendors.values()], baseVendors });
+			if (changed) {
+				void vscode.window.showInformationMessage('Reload the window to update the account groups in the model picker.', 'Reload Window').then(answer => {
+					if (answer === 'Reload Window') {
+						return vscode.commands.executeCommand('workbench.action.reloadWindow');
+					}
+					return undefined;
+				});
+			}
+		} catch (error) {
+			log(`Could not update the account groups in ${manifestFile}: ${messageOf(error)}`, 'warn');
+		}
+	};
+	syncManifest();
 
 	const relay = new SidebarRelay({
 		link: binding,
@@ -158,8 +215,17 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	// An agent that was installed, uninstalled, switched on or off, signed in or given a key changes
 	// which models the picker may offer, so that agent's provider is asked to list them again.
-	let drawn: ControlState | undefined;
 	const unsubscribeCards = relay.onState(state => {
+		// A server that is away says nothing about accounts or offered agents: keep the groups and saved lists.
+		if (state.linkError !== undefined || state.agents.length === 0) {
+			return;
+		}
+		// The server's entries are the truth about accounts: a new one gets its provider, a gone one is no longer offered.
+		accountVendors.clear();
+		for (const entry of state.agents.filter(agent => agent.accountOf !== undefined)) {
+			registerAccount(entry.id, entry.vendor, entry.displayName);
+		}
+		syncManifest();
 		for (const agentId of changedAgents(drawn, state)) {
 			providers.get(agentId)?.refresh();
 		}
@@ -206,7 +272,10 @@ export function activate(context: vscode.ExtensionContext): void {
 			try {
 				const outcome = await syncModels({
 					endpoint: state.endpoint,
-					agents: REGISTRY.agents,
+					agents: [
+						...REGISTRY.agents.map(agent => ({ id: agent.id, displayName: agent.displayName, vendor: vendorOf(agent.id) })),
+						...[...accountVendors].map(([id, account]) => ({ id, displayName: account.displayName, vendor: account.vendor })),
+					],
 					names: new ModelNames(shared.store.state),
 					state: shared.store.state,
 					packageJson: path.join(extensionDir, 'package.json'),

@@ -146,8 +146,8 @@ function modelCallUsage(method: string, params: unknown, seen: Set<string>): { s
 }
 
 /** The login program stays open after it succeeds, so a rewritten credentials file is what says it is done. */
-function signInCompleted(startedAt: number): boolean {
-	const directory = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+function signInCompleted(startedAt: number, env?: Record<string, string>): boolean {
+	const directory = env?.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 	try {
 		return fs.statSync(path.join(directory, '.credentials.json')).mtimeMs >= startedAt;
 	} catch {
@@ -188,6 +188,10 @@ export const claudeAdapter: AgentAdapter = {
 	usage: claudeUsage,
 	sessionPolicy,
 	signInCompleted,
+	accounts: {
+		environment: dir => ({ CLAUDE_CONFIG_DIR: path.join(dir, 'claude-config') }),
+		inheritedCredentials: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
+	},
 	disableBuiltInTools: () => true,
 	mergeConfig,
 	sessionParams,

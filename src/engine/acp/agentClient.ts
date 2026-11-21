@@ -634,7 +634,7 @@ export class AgentClient implements Disposable {
 			throw new AdapterNotInstalledError(this.adapter.displayName);
 		}
 		const spec = this.adapter.launch(this.ctx);
-		const env = this.childEnv(spec.command, spec.env);
+		const env = this.childEnv(spec.command, spec.env, spec.unsetEnv);
 
 		const strays = killStrayAgents(this.agentRegistry);
 		if (this.adapter.install.kind === 'download') {
@@ -723,12 +723,15 @@ export class AgentClient implements Disposable {
 	}
 
 	/** The environment the agent starts with: the host's, the adapter's own, then the adapter's last word on it. */
-	private childEnv(command: string, adapterEnv: Record<string, string>): Record<string, string> {
+	private childEnv(command: string, adapterEnv: Record<string, string>, unsetEnv: readonly string[] = []): Record<string, string> {
 		const base: Record<string, string> = {};
 		for (const [name, value] of Object.entries(process.env)) {
 			if (value !== undefined) {
 				base[name] = value;
 			}
+		}
+		for (const name of unsetEnv) {
+			delete base[name];
 		}
 		let env = { ...base, ...adapterEnv };
 		if (this.adapter.mergeConfig) {

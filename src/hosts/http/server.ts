@@ -662,7 +662,7 @@ export class ModelCatalog {
 
 	/** Asks the agent for its models now, saving what it answers. */
 	refresh(adapter: AgentAdapter): Promise<ModelEntry[]> {
-		return this.lookup(adapter);
+		return this.lookup(adapter, true);
 	}
 
 	/** Reads the models of every agent `usable` allows again, and answers the agent ids that gave a list. */
@@ -684,24 +684,24 @@ export class ModelCatalog {
 	}
 
 	/** Reads the models from a warm session and saves them, joining the lookup the agent already has in flight. */
-	private lookup(adapter: AgentAdapter): Promise<ModelEntry[]> {
+	private lookup(adapter: AgentAdapter, fresh = false): Promise<ModelEntry[]> {
 		const running = this.lookups.get(adapter.id);
 		if (running) {
 			return running;
 		}
-		const lookup = this.readModels(adapter).finally(() => this.lookups.delete(adapter.id));
+		const lookup = this.readModels(adapter, fresh).finally(() => this.lookups.delete(adapter.id));
 		this.lookups.set(adapter.id, lookup);
 		return lookup;
 	}
 
-	private async readModels(adapter: AgentAdapter): Promise<ModelEntry[]> {
+	private async readModels(adapter: AgentAdapter, fresh: boolean): Promise<ModelEntry[]> {
 		const { composition } = this;
 		const service = composition.serviceOf(adapter.id);
 		if (!service) {
 			return [];
 		}
 		try {
-			const session = await service.openWarmSession();
+			const session = await (fresh ? service.reopenWarmSession() : service.openWarmSession());
 			const entries = modelInfosOf(adapter, session, composition.reportedWindowsOf?.(adapter.id)) ?? [];
 			if (entries.length > 0) {
 				await composition.host.state.update(modelsStateKey(adapter.id), entries);

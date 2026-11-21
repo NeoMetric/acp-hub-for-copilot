@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentAdapter } from '../../src/core/adapter';
+import { accountAdapter } from '../../src/core/accounts';
 import { readAgentSettings } from '../../src/core/settings';
 
 const adapter = {
@@ -26,6 +27,22 @@ describe('readAgentSettings', () => {
 		const result = readAgentSettings(adapter, configOf({ 'agents.demo.exampleMode': 'plan', 'agents.demo.verbose': true }));
 		expect(result.values.exampleMode).toBe('plan');
 		expect(result.values.verbose).toBe(true);
+	});
+
+	it('reads shared keys from the type and per-account keys from the account', () => {
+		const base = {
+			id: 'base',
+			displayName: 'Base',
+			vendor: 'Base Agent',
+			launch: () => ({ command: 'b', args: [], env: {} }),
+			settings: [
+				{ key: 'level', type: 'enum', label: 'Level', description: '', default: 'low', options: ['low', 'high'] },
+				{ key: 'authPreference', type: 'enum', label: 'Auth', description: '', default: 'api-key', options: ['api-key', 'oauth'] },
+			],
+		} as unknown as AgentAdapter;
+		const copy = accountAdapter(base, { id: 'base-work', name: 'Work' });
+		const result = readAgentSettings(copy, configOf({ 'agents.base.level': 'high', 'agents.base-work.level': 'low', 'agents.base-work.authPreference': 'oauth' }));
+		expect(result.values).toEqual({ level: 'high', authPreference: 'oauth' });
 	});
 
 	it('falls back to the default and warns on a wrong type', () => {

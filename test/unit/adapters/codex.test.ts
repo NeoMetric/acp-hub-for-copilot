@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { accountAdapter } from '../../../src/core/accounts';
 import { codexAdapter, mergeCodexConfig } from '../../../src/adapters/codex';
 import type { AgentSettings, LaunchContext, SessionParamsInput } from '../../../src/core/adapter';
 import { HOST_IDENTITY } from '../../../src/core/hostIdentity';
@@ -30,6 +31,12 @@ function launchContext(settings: AgentSettings = {}, apiKey?: string): LaunchCon
 const sessionInput: SessionParamsInput = { disableBuiltInTools: false, replaceSystemPrompt: false, reportEachModelCall: false, isNewSession: true };
 
 describe('codexAdapter', () => {
+	it('drops inherited OpenAI credentials for an extra account', () => {
+		const spec = accountAdapter(codexAdapter, { id: 'codex-work', name: 'Work' }).launch(launchContext());
+		expect(spec.unsetEnv).toEqual(['CODEX_API_KEY', 'OPENAI_API_KEY']);
+		expect(spec.env.CODEX_HOME?.startsWith(storage)).toBe(true);
+	});
+
 	it('is described by the registry and installs the pinned npm package', () => {
 		expect(codexAdapter.id).toBe('codex');
 		expect(codexAdapter.vendor).toBe('Codex Agent');

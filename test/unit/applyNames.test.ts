@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { writeCliProviders, copilotProvidersFile, writeVendorNames } from '../../src/hosts/vscode/applyNames';
+import { writeCliProviders, copilotProvidersFile, syncAccountVendors, writeVendorNames } from '../../src/hosts/vscode/applyNames';
 
 /** The byte order mark Windows tools write at the start of a JSON file. */
 const BOM = String.fromCharCode(0xfeff);
@@ -165,6 +165,58 @@ describe('writeVendorNames', () => {
 
 		expect(writeVendorNames({ packageJson: file, names: { 'Claude Agent': 'Work Claude' } })).toBe(true);
 		expect(writeVendorNames({ packageJson: file, names: { 'Claude Agent': 'Work Claude' } })).toBe(false);
+	});
+});
+
+describe('syncAccountVendors', () => {
+	const base = new Set(['Claude Agent', 'Codex Agent']);
+
+	it('adds and removes account vendors and keeps base names', () => {
+		const manifest = {
+			name: 'x',
+			contributes: {
+				languageModelChatProviders: [
+					{ vendor: 'Claude Agent', displayName: 'Mine' },
+					{ vendor: 'Claude Agent · Old', displayName: 'Claude Agent · Old' },
+					{ vendor: 'Codex Agent', displayName: 'Codex Agent' },
+				],
+			},
+		};
+		const file = tempFile('package.json', `${JSON.stringify(manifest, null, '\t')}\n`);
+		const vendors = [{ vendor: 'Claude Agent · Work', displayName: 'Claude Agent · Work' }];
+
+		expect(syncAccountVendors({ packageJson: file, vendors, baseVendors: base })).toBe(true);
+
+		const text = fs.readFileSync(file, 'utf8');
+		expect(text.startsWith('{\n\t"name"')).toBe(true);
+		expect(JSON.parse(text).contributes.languageModelChatProviders).toEqual([
+			{ vendor: 'Claude Agent', displayName: 'Mine' },
+			{ vendor: 'Codex Agent', displayName: 'Codex Agent' },
+			{ vendor: 'Claude Agent · Work', displayName: 'Claude Agent · Work' },
+		]);
+		expect(syncAccountVendors({ packageJson: file, vendors, baseVendors: base })).toBe(false);
+	});
+
+	it('keeps the heading the user gave an account vendor', () => {
+		const manifest = { contributes: { languageModelChatProviders: [{ vendor: 'Claude Agent · Work', displayName: 'Work Claude' }] } };
+		const file = tempFile('package.json', `${JSON.stringify(manifest, null, '\t')}\n`);
+		const vendors = [{ vendor: 'Claude Agent · Work', displayName: 'Claude Agent · Work' }];
+
+		expect(syncAccountVendors({ packageJson: file, vendors, baseVendors: base })).toBe(false);
+
+		expect(JSON.parse(fs.readFileSync(file, 'utf8')).contributes.languageModelChatProviders[0].displayName).toBe('Work Claude');
+	});
+
+	it('reads a manifest with a byte order mark and CRLF line endings', () => {
+		const manifest = { contributes: { languageModelChatProviders: [{ vendor: 'Claude Agent', displayName: 'Claude Agent' }] } };
+		const file = tempFile('package.json', `${BOM}${JSON.stringify(manifest, null, '  ').replace(/\n/g, '\r\n')}\r\n`);
+
+		expect(syncAccountVendors({ packageJson: file, vendors: [{ vendor: 'Claude Agent · A', displayName: 'Claude Agent · A' }], baseVendors: base })).toBe(true);
+
+		const text = fs.readFileSync(file, 'utf8');
+		expect(text.charCodeAt(0)).not.toBe(0xfeff);
+		expect(text).toContain('\r\n  "contributes"');
+		expect(text.endsWith('}\r\n')).toBe(true);
 	});
 });
 

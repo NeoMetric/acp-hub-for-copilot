@@ -142,12 +142,14 @@ export async function signInWithTerminal(
 	}
 
 	const startedAt = Date.now();
+	// An extra account signs in to its own folder; the default account keeps the agent's own.
+	const env = { ELECTRON_RUN_AS_NODE: '1', ...(adapter.accountName && adapter.accounts ? adapter.accounts.environment(ctx.storageDir) : {}) };
 	await deps.runTerminal({
 		name: `${adapter.displayName} Sign In (${method.label})`,
 		shellPath: process.execPath,
 		shellArgs: [ctx.entryPath, ...method.terminalCommand],
-		env: { ELECTRON_RUN_AS_NODE: '1' },
-		completed: adapter.signInCompleted ? () => adapter.signInCompleted!(startedAt) : undefined,
+		env,
+		completed: adapter.signInCompleted ? () => adapter.signInCompleted!(startedAt, env) : undefined,
 	});
 	return { ok: true };
 }

@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { vendorOf } from '../../core/vendors';
 import type { ModelNames } from '../../engine/models/modelNames';
 import type { StateStore } from '../../engine/ports/state';
 import { CLI_EFFORT_LEVELS, CLI_PROVIDERS_KEY, writeCliProviders, writeVendorNames, type CliProvider } from './applyNames';
@@ -18,8 +17,8 @@ import type { ServerEndpoint } from './serverLink';
  */
 export interface SyncModelsDeps {
 	readonly endpoint: ServerEndpoint;
-	/** Every agent, in registry order, with the name it is shown under when the user chose none. */
-	readonly agents: ReadonlyArray<{ readonly id: string; readonly displayName: string }>;
+	/** Every agent and account, in registry order, with the name it is shown under when the user chose none and the picker group it belongs to. */
+	readonly agents: ReadonlyArray<{ readonly id: string; readonly displayName: string; readonly vendor: string }>;
 	readonly names: ModelNames;
 	/** Where the providers this window wrote are remembered, so a later sync replaces them. */
 	readonly state: StateStore;
@@ -85,7 +84,7 @@ export async function syncModels(deps: SyncModelsDeps): Promise<SyncOutcome> {
 	try {
 		reloadNeeded = writeVendorNames({
 			packageJson: deps.packageJson,
-			names: Object.fromEntries(deps.agents.map(agent => [vendorOf(agent.id), deps.names.providerName(agent.id, agent.displayName)])),
+			names: Object.fromEntries(deps.agents.map(agent => [agent.vendor, deps.names.providerName(agent.id, agent.displayName)])),
 		});
 	} catch (error) {
 		problems.push(`VS Code: could not update ${deps.packageJson}: ${messageOf(error)}`);

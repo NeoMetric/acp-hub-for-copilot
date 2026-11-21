@@ -41,6 +41,13 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 	/** The agents whose API key field is open, and what was typed in each, so a redraw does not wipe it. */
 	const keyEntry = new Set<string>();
 	const keyDrafts = new Map<string, string>();
+	/** The sign-in code typed for each agent, kept until it is sent. */
+	const codeDrafts = new Map<string, string>();
+	/** Accounts whose removal waits for a second click, and the name typed to add one, by agent type. */
+	const confirmRemove = new Set<string>();
+	const nameDrafts = new Map<string, string>();
+	/** The name last sent with addAccount, by type id, until an account of that name shows up. */
+	const pendingAdds = new Map<string, string>();
 
 		function toggle(set: Set<string>, value: string | undefined, on: boolean): void {
 			if (value === undefined) {
@@ -61,6 +68,43 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		}
 	}
 
+	function restoreCodeDrafts(): void {
+		for (const input of Array.from(root.querySelectorAll?.('input[data-code-input]') ?? []) as HTMLInputElement[]) {
+			if (input.dataset?.codeInput) {
+				input.value = codeDrafts.get(input.dataset.agent ?? '') ?? '';
+			}
+		}
+	}
+
+	function submitSignInCode(agentId: string): void {
+		const code = (codeDrafts.get(agentId) ?? '').trim();
+		if (code) {
+			codeDrafts.delete(agentId);
+			transport.send({ type: 'submitSignInCode', agentId, code });
+			draw();
+		}
+	}
+
+	function restoreNameDrafts(): void {
+		for (const input of Array.from(root.querySelectorAll?.('input[data-account-name]') ?? []) as HTMLInputElement[]) {
+			if (input.dataset?.accountName !== undefined) {
+				input.value = nameDrafts.get(input.dataset.agent ?? '') ?? '';
+			}
+		}
+	}
+
+	function addAccount(agentId: string): void {
+		const name = nameDrafts.get(agentId) ?? '';
+		// The draft stays until the state shows the account, so a refused name is not lost.
+		pendingAdds.set(agentId, name.trim().toLowerCase());
+		transport.send({ type: 'addAccount', agentId, name });
+		draw();
+	}
+
+	function renderAgents(): string {
+		return renderCards(agents, openSettings, globalSettings, keyEntry, { confirmRemove, nameDrafts });
+	}
+
 	function saveApiKey(agentId: string): void {
 		const key = keyDrafts.get(agentId) ?? '';
 		keyEntry.delete(agentId);
@@ -76,8 +120,10 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		}
 		const available = { models: models !== undefined, usage: usage !== undefined, server: server !== undefined };
 		if (!available.models && !available.usage && !available.server) {
-			root.innerHTML = renderCards(agents, openSettings, globalSettings, keyEntry);
+			root.innerHTML = renderAgents();
 			restoreKeyDrafts();
+			restoreCodeDrafts();
+			restoreNameDrafts();
 			return;
 		}
 		const body = view === 'models' && models
@@ -88,9 +134,11 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 					? renderDocsView()
 					: view === 'server' && server
 						? renderServerSettings(server, draftPort, portError)
-						: renderCards(agents, openSettings, globalSettings, keyEntry);
+						: renderAgents();
 		root.innerHTML = (server ? renderServerHeader(server) : '') + renderNav(view, available) + body;
 		restoreKeyDrafts();
+		restoreCodeDrafts();
+		restoreNameDrafts();
 		if (editing !== undefined) {
 			const input = root.querySelector?.('input[data-models]') as HTMLInputElement | null | undefined;
 			input?.focus();
@@ -223,6 +271,29 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 			saveApiKey(agentId);
 			return;
 		}
+		if (action === 'submitSignInCode') {
+			submitSignInCode(agentId);
+			return;
+		}
+		if (action === 'addAccount') {
+			addAccount(agentId);
+			return;
+		}
+		if (action === 'removeAccount' || action === 'cancelRemoveAccount') {
+			if (action === 'removeAccount') {
+				confirmRemove.add(agentId);
+			} else {
+				confirmRemove.delete(agentId);
+			}
+			draw();
+			return;
+		}
+		if (action === 'confirmRemoveAccount') {
+			confirmRemove.delete(agentId);
+			transport.send({ type: 'removeAccount', agentId });
+			draw();
+			return;
+		}
 		if (action === 'toggleSettings') {
 			if (!openSettings.delete(agentId)) {
 				openSettings.add(agentId);
@@ -251,6 +322,12 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		if (target.dataset?.keyInput && target.dataset.agent) {
 			keyDrafts.set(target.dataset.agent, target.value);
 		}
+		if (target.dataset?.codeInput && target.dataset.agent) {
+			codeDrafts.set(target.dataset.agent, target.value);
+		}
+		if (target.dataset?.accountName !== undefined && target.dataset.agent) {
+			nameDrafts.set(target.dataset.agent, target.value);
+		}
 		if (target.dataset?.serverPort !== undefined) {
 			draftPort = target.value;
 		}
@@ -258,7 +335,7 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 
 	root.addEventListener('change', event => {
 		const target = event.target as HTMLInputElement | HTMLSelectElement;
-		if (target.dataset.keyInput) {
+		if (target.dataset.keyInput || target.dataset.codeInput || target.dataset.accountName !== undefined) {
 			return;
 		}
 		if (target.dataset.models) {
@@ -286,6 +363,10 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 			transport.send({ type: 'setEnabled', agentId, enabled: target.checked });
 			return;
 		}
+		if (target.dataset.action === 'setAccountsEnabled' && target instanceof HTMLInputElement) {
+			transport.send({ type: 'setAccountsEnabled', agentId, enabled: target.checked });
+			return;
+		}
 		const key = target.dataset.key;
 		if (key) {
 			transport.send({ type: 'setSetting', agentId, key, value: readSettingValue(target) });
@@ -303,6 +384,20 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 				keyEntry.delete(keyAgent);
 				keyDrafts.delete(keyAgent);
 				draw();
+			}
+			return;
+		}
+		const codeAgent = (target as HTMLElement).dataset?.codeInput ? (target as HTMLElement).dataset.agent : undefined;
+		if (codeAgent) {
+			if (key === 'Enter') {
+				submitSignInCode(codeAgent);
+			}
+			return;
+		}
+		const nameAgent = (target as HTMLElement).dataset?.accountName !== undefined ? (target as HTMLElement).dataset.agent : undefined;
+		if (nameAgent) {
+			if (key === 'Enter') {
+				addAccount(nameAgent);
 			}
 			return;
 		}
@@ -324,6 +419,12 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 
 	transport.onState(state => {
 		agents = state.agents;
+		for (const [typeId, name] of pendingAdds) {
+			if (agents.some(agent => agent.accountOf === typeId && agent.accountName?.trim().toLowerCase() === name)) {
+				pendingAdds.delete(typeId);
+				nameDrafts.delete(typeId);
+			}
+		}
 		globalSettings = state.globalSettings ?? [];
 		models = state.models;
 		usage = state.usage;

@@ -76,11 +76,12 @@ function renderWindow(window: UsageWindow): string {
 }
 
 function renderCacheMisses(misses: NonNullable<AgentCardState['usage']['cacheMisses']>): string {
-	const idle = misses.expired > 0 ? ` <span class="resets">+${misses.expired} after idle</span>` : '';
-	const description = 'Calls of a chat that was already running which lost the prompt cache they should have had, such as after a tool change or a reopened session. Calls after the chat sat idle longer than the cache lives are counted apart. Chats seen for the first time are not counted. The token figure is the input billed at full price instead of read from the cache.';
+	const description = 'Model calls that paid full price instead of reading the cache. Unexpected: lost mid-chat, worth checking. After idle: the cache expired after 5 minutes unused, which is normal.';
+	const unexpected = `${misses.unexpected} unexpected (${formatTokens(misses.lostTokens)} tokens)`;
+	const idle = `${misses.expired} after idle (${formatTokens(misses.expiredLostTokens)} tokens)`;
 	return `<div class="usage-window">`
-		+ `<div class="usage-head"><span>Cache misses ${renderInfo('Cache misses', description)}</span><span>${misses.unexpected}</span></div>`
-		+ `<span class="resets">${escapeHtml(formatTokens(misses.lostTokens))} tokens re-billed</span>${idle}`
+		+ `<div class="usage-head"><span>Cache misses ${renderInfo('Cache misses', description)}</span><span>${misses.unexpected + misses.expired}</span></div>`
+		+ `<span class="resets">${escapeHtml(`${unexpected} · ${idle}`)}</span>`
 		+ `</div>`;
 }
 
@@ -89,9 +90,6 @@ function renderUsage(agent: AgentCardState): string {
 	const parts: string[] = [];
 	if (usage.status === 'unsupported') {
 		parts.push('<div class="note">Usage is not supported for this agent.</div>');
-	}
-	if (usage.plan) {
-		parts.push(`<div class="plan">Plan: ${escapeHtml(usage.plan)}</div>`);
 	}
 	for (const window of usage.windows) {
 		parts.push(renderWindow(window));
@@ -164,30 +162,113 @@ function renderSettingsPanel(agent: AgentCardState): string {
 	return `<div class="settings">${settings}${uninstall}</div>`;
 }
 
-function renderCard(agent: AgentCardState, settingsOpen: boolean, keyOpen: boolean): string {
+/** What an operation on an entry shows under it: its busy text, the sign-in page it waits for, and its error. */
+function renderStatus(agent: AgentCardState, showError = true): string {
 	const id = escapeHtml(agent.id);
-	const checked = agent.enabled ? ' checked' : '';
 	const busy = agent.busy ? `<div class="note">${escapeHtml(agent.busy)}</div>` : '';
-	const error = agent.error ? `<div class="error">${escapeHtml(agent.error)}</div>` : '';
+	const error = showError && agent.error ? `<div class="error">${escapeHtml(agent.error)}</div>` : '';
 	const signInUrl = agent.signInUrl
 		? `<div class="note">${escapeHtml(agent.signInUrl.message)}</div>`
 			+ `<div class="note">Browser did not open? Paste this URL into any browser:</div>`
 			+ `<div class="sign-in-url">${escapeHtml(agent.signInUrl.url)}</div>`
 			+ `<div class="actions"><button data-action="copySignInUrl" data-agent="${id}">Copy URL</button>`
 			+ `<button class="secondary" data-action="openSignInUrl" data-agent="${id}">Open in browser</button></div>`
+			+ (agent.signInUrl.codeEntry
+				? `<div class="key-entry"><input type="text" aria-label="Sign-in code" placeholder="Paste the code here" data-code-input="true" data-agent="${id}" autocomplete="off" spellcheck="false">`
+				+ `<div class="actions"><button data-action="submitSignInCode" data-agent="${id}">Submit code</button></div></div>`
+				: '')
 		: '';
-	const gear = `<button class="icon-button" data-action="toggleSettings" data-agent="${id}" aria-label="Settings for ${escapeHtml(agent.displayName)}" aria-expanded="${settingsOpen}" title="Settings">⚙</button>`;
+	return busy + signInUrl + error;
+}
+
+function renderGear(agent: AgentCardState, settingsOpen: boolean): string {
+	return `<button class="icon-button" data-action="toggleSettings" data-agent="${escapeHtml(agent.id)}" aria-label="Settings for ${escapeHtml(agent.displayName)}" aria-expanded="${settingsOpen}" title="Settings">⚙</button>`;
+}
+
+function renderCard(agent: AgentCardState, settingsOpen: boolean, keyOpen: boolean): string {
+	const id = escapeHtml(agent.id);
+	const checked = agent.enabled ? ' checked' : '';
 
 	return `<section class="card" data-agent="${id}">`
 		+ `<div class="card-head"><h2>${escapeHtml(agent.displayName)}</h2>`
-		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${id}"${checked}> Enabled</label>${gear}</div></div>`
+		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${id}"${checked}> Enabled</label>${renderGear(agent, settingsOpen)}</div></div>`
 		+ `<div class="actions">${renderInstall(agent)}${renderAccount(agent)}</div>`
 		+ (keyOpen ? renderKeyEntry(agent) : '')
-		+ busy
-		+ signInUrl
-		+ error
+		+ renderStatus(agent)
 		+ renderUsage(agent)
 		+ (settingsOpen ? renderSettingsPanel(agent) : '')
+		+ `</section>`;
+}
+
+/** The page-local state of the account controls, which a redraw must not lose. */
+export interface AccountUi {
+	/** Account ids whose Remove account button was pressed once and now asks for confirmation. */
+	readonly confirmRemove?: ReadonlySet<string>;
+	/** The name typed in each agent's add-account field, by type id. */
+	readonly nameDrafts?: ReadonlyMap<string, string>;
+}
+
+/** More extra accounts than this earns the note about the processes each one runs. */
+const ACCOUNT_NOTE_THRESHOLD = 10;
+
+function entryName(entry: AgentCardState): string {
+	return entry.accountName ?? 'Default';
+}
+
+function renderAccountSettingsPanel(type: AgentCardState, accounts: AgentCardState[], ui: AccountUi): string {
+	const id = escapeHtml(type.id);
+	const disabled = type.busy ? ' disabled' : '';
+	const shared = type.settings.filter(setting => !setting.perAccount).map(setting => renderSetting(type.id, setting)).join('');
+	const perAccount = [type, ...accounts].map(entry => {
+		const settings = entry.settings.filter(setting => setting.perAccount).map(setting => renderSetting(entry.id, setting)).join('');
+		const entryId = escapeHtml(entry.id);
+		let remove = '';
+		if (entry.accountName !== undefined) {
+			remove = ui.confirmRemove?.has(entry.id)
+				? `<div class="note">Remove ${escapeHtml(entry.accountName)} ? Its sign-in, API key and saved chats are deleted.</div>`
+					+ `<div class="actions"><button class="secondary" data-action="confirmRemoveAccount" data-agent="${entryId}"${disabled}>Yes, remove</button>`
+					+ `<button class="secondary" data-action="cancelRemoveAccount" data-agent="${entryId}">Keep</button></div>`
+				: `<button class="secondary" data-action="removeAccount" data-agent="${entryId}"${disabled}>Remove account</button>`;
+		}
+		return `<div class="account-settings"><div class="account-name">${escapeHtml(entryName(entry))}</div>${settings}${remove}</div>`;
+	}).join('');
+	const uninstall = type.removable && type.install === 'installed'
+		? `<button class="secondary uninstall" data-action="uninstall" data-agent="${id}"${disabled}>Uninstall agent</button>`
+		: '';
+	const draft = ui.nameDrafts?.get(type.id) ?? '';
+	const nameInputId = `new-account-name-${id}`;
+	const add = `<div class="setting"><div class="setting-heading"><label class="setting-label" for="${nameInputId}">Account name</label></div>`
+		+ `<div class="add-account"><input id="${nameInputId}" type="text" data-account-name="true" data-agent="${id}" maxlength="20" autocomplete="off" spellcheck="false" value="${escapeHtml(draft)}">`
+		+ `<button data-action="addAccount" data-agent="${id}"${disabled}>Add</button></div></div>`;
+	const crowded = accounts.length > ACCOUNT_NOTE_THRESHOLD
+		? '<div class="note">Each account runs its own processes, so many accounts use more memory.</div>'
+		: '';
+	return `<div class="settings">${shared}<h3 class="per-account">Per account</h3>${perAccount}${add}${crowded}${uninstall}</div>`;
+}
+
+/** One card for an agent that has accounts: a row for Default and one for each extra account. */
+function renderAccountCard(type: AgentCardState, accounts: AgentCardState[], settingsOpen: boolean, keyEntry: ReadonlySet<string>, ui: AccountUi): string {
+	const id = escapeHtml(type.id);
+	const rows = [type, ...accounts].map(entry => {
+		const entryId = escapeHtml(entry.id);
+		return `<div class="account-row" data-account="${entryId}">`
+			+ `<div class="account-head"><span class="account-name">${escapeHtml(entryName(entry))}</span>`
+			+ `<label class="toggle"><input type="checkbox" data-action="setEnabled" data-agent="${entryId}"${entry.enabled ? ' checked' : ''}> Enabled</label></div>`
+			+ `<div class="actions">${renderAccount(entry)}</div>`
+			+ (keyEntry.has(entry.id) ? renderKeyEntry(entry) : '')
+			+ renderStatus(entry, entry.accountOf !== undefined)
+			+ renderUsage(entry)
+			+ `</div>`;
+	}).join('');
+	// The type entry's error comes from adding or removing an account, so it belongs to the card, not to the Default row.
+	const cardError = type.error ? `<div class="error">${escapeHtml(type.error)}</div>` : '';
+	return `<section class="card" data-agent="${id}">`
+		+ `<div class="card-head"><h2>${escapeHtml(type.displayName)}</h2>`
+		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setAccountsEnabled" data-agent="${id}"${type.accountsEnabled ? ' checked' : ''}> Enabled</label>${renderGear(type, settingsOpen)}</div></div>`
+		+ `<div class="actions">${renderInstall(type)}</div>`
+		+ cardError
+		+ rows
+		+ (settingsOpen ? renderAccountSettingsPanel(type, accounts, ui) : '')
 		+ `</section>`;
 }
 
@@ -423,9 +504,13 @@ function renderGlobalSettings(settings: SettingView[], open: boolean): string {
 	return `<details class="global-settings"${open ? ' open' : ''}><summary>Settings for all agents</summary><div class="settings">${settings.map(setting => renderSetting(undefined, setting)).join('')}</div></details>`;
 }
 
-export function renderCards(agents: AgentCardState[], openSettings: ReadonlySet<string> = new Set(), globalSettings: SettingView[] = [], keyEntry: ReadonlySet<string> = new Set()): string {
-	const cards = agents.filter(agent => agent.visible).map(agent => renderCard(agent, openSettings.has(agent.id), keyEntry.has(agent.id))).join('');
-	const available = agents.filter(agent => !agent.visible);
+export function renderCards(agents: AgentCardState[], openSettings: ReadonlySet<string> = new Set(), globalSettings: SettingView[] = [], keyEntry: ReadonlySet<string> = new Set(), accountUi: AccountUi = {}): string {
+	// An extra account is a row inside its type's card, never a card or an entry of Add agent.
+	const types = agents.filter(agent => agent.accountOf === undefined);
+	const cards = types.filter(agent => agent.visible).map(agent => agent.accountsEnabled !== undefined
+		? renderAccountCard(agent, agents.filter(item => item.accountOf === agent.id), openSettings.has(agent.id), keyEntry, accountUi)
+		: renderCard(agent, openSettings.has(agent.id), keyEntry.has(agent.id))).join('');
+	const available = types.filter(agent => !agent.visible);
 	const choices = available.map(agent => `<button class="secondary add-choice" data-action="addAgent" data-agent="${escapeHtml(agent.id)}">${escapeHtml(agent.displayName)}</button>`).join('');
 	const addAgent = available.length ? `<details class="add-agent"><summary>+ Add agent</summary>${choices}</details>` : '';
 	return renderGlobalSettings(globalSettings, openSettings.has(GLOBAL_SETTINGS_ID)) + cards + addAgent;

@@ -29,7 +29,7 @@ describe('classifyUsageOutput', () => {
 });
 
 describe('parseUsageMarkdown', () => {
-	it('reads the plan and the 5-hour and weekly limits', () => {
+	it('reads the 5-hour and weekly limits and skips the stale plan name', () => {
 		const parsed = parseUsageMarkdown([
 			'> Claude Max 5x subscription usage',
 			'',
@@ -38,11 +38,10 @@ describe('parseUsageMarkdown', () => {
 			'',
 		].join('\n'));
 
-		expect(parsed.plan).toBe('Max 5x');
-		expect(parsed.windows).toEqual([
+		expect(parsed).toEqual({ windows: [
 			{ label: '5-hour', usedPercent: 42, resets: 'Oct 20, 6:30 PM GMT+5:30' },
 			{ label: 'Weekly', usedPercent: 17.5, resets: 'Oct 24, 9:00 AM GMT+5:30' },
-		]);
+		] });
 	});
 
 	it('keeps per-model windows after the main ones', () => {
@@ -59,7 +58,7 @@ describe('parseUsageMarkdown', () => {
 	});
 
 	it('returns nothing for output it does not recognise', () => {
-		expect(parseUsageMarkdown('Something else entirely.\n\nNo limits here.')).toEqual({ plan: undefined, windows: [] });
+		expect(parseUsageMarkdown('Something else entirely.\n\nNo limits here.')).toEqual({ windows: [] });
 	});
 });
 

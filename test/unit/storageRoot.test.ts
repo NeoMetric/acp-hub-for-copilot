@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('vscode', () => {
 	const disposable = () => ({ dispose() { } });
 	return {
+		ExtensionMode: { Production: 1, Development: 2, Test: 3 },
 		lm: { registerLanguageModelChatProvider: disposable, selectChatModels: async () => [] },
 		window: {
 			createOutputChannel: () => ({ info() { }, warn() { }, error() { }, debug() { }, show() { }, dispose() { } }),

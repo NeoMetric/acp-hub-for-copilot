@@ -4,7 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import type { AgentCardState } from '../../src/ui/messages';
+import type { AgentCardState, ControlAction, ControlState } from '../../src/ui/messages';
+import { mountPage } from '../../src/ui/page';
+import type { ControlTransport } from '../../src/ui/transport';
 import { renderDocsView } from '../../src/ui/docs';
 import { renderCards, renderNav, renderServerDown, renderServerHeader, renderServerSettings, renderUsageView } from '../../src/ui/render';
 import type { ServerView, UsageHistoryView } from '../../src/ui/messages';
@@ -13,6 +15,7 @@ function card(overrides: Partial<AgentCardState> = {}): AgentCardState {
 	return {
 		id: 'one',
 		displayName: 'Agent One',
+		vendor: 'one',
 		install: 'installed',
 		removable: true,
 		signedIn: 'yes',
@@ -257,11 +260,11 @@ describe('renderCards', () => {
 
 	it('draws a usage bar as wide as the used percent', () => {
 		const html = renderCards([card({
-			usage: { status: 'ok', windows: [{ label: '5h', usedPercent: 40, resets: 'in 2h' }], plan: 'Pro' },
+			usage: { status: 'ok', windows: [{ label: '5h', usedPercent: 40, resets: 'in 2h' }] },
 		})]);
 		expect(html).toContain('width:40%');
 		expect(html).toContain('resets in 2h');
-		expect(html).toContain('Plan: Pro');
+		expect(html).not.toContain('Plan:');
 	});
 
 	it('escapes text from the agent', () => {
@@ -408,5 +411,133 @@ describe('the Usage view ranges', () => {
 
 	it('still honours a selection the snapshot does have', () => {
 		expect(totalShown(renderUsageView(many, { range: '30', agents: new Set(), workspaces: new Set(['/b']) }))).toBe('20');
+	});
+});
+
+describe('account cards', () => {
+	const perAccount = [{ key: 'authPreference', label: 'Auth preference', description: '', type: 'string' as const, value: 'auto', perAccount: true }];
+	const shared = { key: 'idleTimeoutSeconds', label: 'Idle session timeout', description: '', type: 'number' as const, value: 120 };
+	const base = (): AgentCardState => card({ id: 'base', displayName: 'Base', accountsEnabled: true, settings: [shared, ...perAccount] });
+	const work = (): AgentCardState => card({ id: 'base-work', displayName: 'Base', accountOf: 'base', accountName: 'Work', removable: false, settings: perAccount });
+	const gear = new Set(['base']);
+
+	it('draws accounts as rows inside their type card', () => {
+		const html = renderCards([base(), work()]);
+		expect(html.match(/<section class="card"/g)).toHaveLength(1);
+		expect(html).toContain('<section class="card" data-agent="base">');
+		expect(html).toMatch(/data-action="setAccountsEnabled" data-agent="base"/);
+		expect(html).toMatch(/data-account="base"[^]*Default[^]*data-action="setEnabled" data-agent="base"/);
+		expect(html).toMatch(/data-account="base-work"[^]*Work[^]*data-action="setEnabled" data-agent="base-work"/);
+		expect(html.indexOf('data-account="base"')).toBeLessThan(html.indexOf('data-account="base-work"'));
+		expect(html).not.toContain('data-action="uninstall"');
+	});
+
+	it('keeps the add and remove controls behind the gear', () => {
+		const closed = renderCards([base(), work()]);
+		expect(closed).not.toContain('data-action="addAccount"');
+		expect(closed).not.toContain('data-action="removeAccount"');
+
+		const html = renderCards([base(), work()], gear);
+		expect(html).toContain('Idle session timeout');
+		expect(html).toContain('Per account');
+		expect(html).toContain('data-agent="base" data-key="authPreference"');
+		expect(html).toContain('data-agent="base-work" data-key="authPreference"');
+		expect(html.match(/Remove account/g)).toHaveLength(1);
+		expect(html).toMatch(/data-action="removeAccount" data-agent="base-work"/);
+		expect(html).toMatch(/data-account-name="true" data-agent="base"/);
+		expect(html).toMatch(/<label class="setting-label" for="new-account-name-base">Account name<\/label>/);
+		expect(html).toContain('id="new-account-name-base"');
+		expect(html).toMatch(/data-action="addAccount" data-agent="base"[^>]*>Add</);
+		expect(html).toContain('data-action="uninstall"');
+	});
+
+	it('asks once more before removing an account', () => {
+		const html = renderCards([base(), work()], gear, [], new Set(), { confirmRemove: new Set(['base-work']) });
+		expect(html).toContain('data-action="confirmRemoveAccount" data-agent="base-work"');
+		expect(html).not.toContain('data-action="removeAccount"');
+		expect(html).toContain('sign-in, API key and saved chats are deleted');
+	});
+
+	it('shows an add or remove error once, above the rows, not in the Default row', () => {
+		const html = renderCards([{ ...base(), error: 'An account with this name already exists.' }, work()]);
+		expect(html.match(/already exists/g)).toHaveLength(1);
+		expect(html.indexOf('already exists')).toBeLessThan(html.indexOf('data-account="base"'));
+		const rowError = renderCards([base(), { ...work(), error: 'Sign-in failed' }]);
+		expect(rowError.indexOf('Sign-in failed')).toBeGreaterThan(rowError.indexOf('data-account="base-work"'));
+	});
+
+	it('keeps the typed account name across a redraw', () => {
+		const html = renderCards([base()], gear, [], new Set(), { nameDrafts: new Map([['base', 'Wor']]) });
+		expect(html).toMatch(/data-account-name[^>]*value="Wor"/);
+	});
+
+	it('never lists an account in Add agent', () => {
+		const html = renderCards([card({ id: 'x', visible: false }), { ...work(), visible: false }]);
+		expect(html).toContain('data-action="addAgent" data-agent="x"');
+		expect(html).not.toContain('base-work');
+	});
+
+	it('draws a card without account support as today', () => {
+		const html = renderCards([card()]);
+		expect(html).not.toContain('setAccountsEnabled');
+		expect(html).not.toContain('account-row');
+	});
+
+	it('warns past ten accounts', () => {
+		const many = (n: number) => Array.from({ length: n }, (_, i) => ({ ...work(), id: `base-w${i}`, accountName: `W${i}` }));
+		expect(renderCards([base(), ...many(11)], gear)).toContain('runs its own processes');
+		expect(renderCards([base(), ...many(10)], gear)).not.toContain('runs its own processes');
+	});
+});
+
+describe('the account controls of the page', () => {
+	const type = card({ id: 'base', accountsEnabled: true });
+	const extra = card({ id: 'base-work', accountOf: 'base', accountName: 'Work', removable: false });
+
+	function mount() {
+		const sent: ControlAction[] = [];
+		let deliver: (state: ControlState) => void = () => undefined;
+		const transport = {
+			send: (action: ControlAction) => { sent.push(action); },
+			onState: (listener: (state: ControlState) => void) => { deliver = listener; return () => undefined; },
+		} as ControlTransport;
+		const listeners = new Map<string, (event: unknown) => void>();
+		const root = { innerHTML: '', addEventListener: (name: string, fn: (event: unknown) => void) => { listeners.set(name, fn); } };
+		mountPage(transport, root as unknown as HTMLElement);
+		deliver({ agents: [type, extra] });
+		sent.length = 0;
+		const click = (action: string, agent: string) => listeners.get('click')?.({ target: { closest: () => ({ disabled: false, dataset: { action, agent } }) } });
+		return { root, sent, click, listeners, deliver };
+	}
+
+	it('sends removeAccount only after the confirmation', () => {
+		const { root, sent, click } = mount();
+		click('toggleSettings', 'base');
+		click('removeAccount', 'base-work');
+		expect(sent).toEqual([]);
+		expect(root.innerHTML).toContain('data-action="confirmRemoveAccount"');
+		click('confirmRemoveAccount', 'base-work');
+		expect(sent).toEqual([{ type: 'removeAccount', agentId: 'base-work' }]);
+	});
+
+	it('sends the typed name with addAccount', () => {
+		const { sent, click, listeners } = mount();
+		listeners.get('input')?.({ target: { dataset: { accountName: 'true', agent: 'base' }, value: 'Work 2' } });
+		click('addAccount', 'base');
+		expect(sent).toEqual([{ type: 'addAccount', agentId: 'base', name: 'Work 2' }]);
+	});
+
+	it('keeps the typed name until the account appears in the state', () => {
+		const { root, click, listeners, deliver } = mount();
+		click('toggleSettings', 'base');
+		listeners.get('input')?.({ target: { dataset: { accountName: 'true', agent: 'base' }, value: 'Work 2' } });
+		click('addAccount', 'base');
+		expect(root.innerHTML).toContain('value="Work 2"');
+
+		deliver({ agents: [{ ...type, error: 'An account with this name already exists.' }, extra] });
+		expect(root.innerHTML).toContain('value="Work 2"');
+
+		deliver({ agents: [type, extra, card({ id: 'base-work-2', accountOf: 'base', accountName: 'Work 2', removable: false })] });
+		expect(root.innerHTML).not.toContain('value="Work 2"');
 	});
 });

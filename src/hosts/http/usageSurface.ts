@@ -15,8 +15,8 @@ const MAX_DAILY_DAYS = 30;
 
 export interface UsageSurfaceDeps {
 	readonly ledger: UsageLedger;
-	/** The agents this host can offer, which names the ones in the history. */
-	readonly agents: readonly { readonly id: string; readonly displayName: string }[];
+	/** The agents this host offers right now, which names the ones in the history; read each time the view is built. */
+	readonly agents: () => readonly { readonly id: string; readonly displayName: string }[];
 	/** Stores the retention the page asked for, beside the page's other settings. */
 	readonly writeRetention: (days: number) => Promise<void>;
 }
@@ -40,7 +40,7 @@ export function createUsageHistorySurface(deps: UsageSurfaceDeps): UsageHistoryS
 
 	return {
 		async view(): Promise<UsageHistoryView> {
-			cached ??= build(ledger, deps.agents);
+			cached ??= build(ledger, deps.agents());
 			return cached;
 		},
 
@@ -58,7 +58,7 @@ export function createUsageHistorySurface(deps: UsageSurfaceDeps): UsageHistoryS
 	};
 }
 
-function build(ledger: UsageLedger, known: UsageSurfaceDeps['agents']): UsageHistoryView {
+function build(ledger: UsageLedger, known: ReturnType<UsageSurfaceDeps['agents']>): UsageHistoryView {
 	const retentionDays = ledger.retainDays();
 	const daily = ledger.daily({}, Math.min(MAX_DAILY_DAYS, retentionDays));
 	const weekly = ledger.weekly({}, retentionDays);
@@ -79,7 +79,7 @@ function build(ledger: UsageLedger, known: UsageSurfaceDeps['agents']): UsageHis
 }
 
 /** The agents of the history, named from the registry when it still knows them, and the ones it no longer does by id. */
-function agentList(buckets: readonly UsageBucket[], known: UsageSurfaceDeps['agents']): Array<{ id: string; name: string }> {
+function agentList(buckets: readonly UsageBucket[], known: ReturnType<UsageSurfaceDeps['agents']>): Array<{ id: string; name: string }> {
 	const names = new Map(known.map(agent => [agent.id, agent.displayName]));
 	const ids = [...new Set(buckets.map(bucket => bucket.agent))].sort((a, b) => a.localeCompare(b));
 	return ids.map(id => ({ id, name: names.get(id) ?? id }));

@@ -2,7 +2,7 @@
 
 **Your AI plans. Your agents. Any client.**
 
-ACP Hub runs the agents of your existing Claude, ChatGPT/Codex and Antigravity accounts behind one small local server and serves their models over an OpenAI-compatible API. Point GitHub Copilot CLI, the Copilot Chat of VS Code, or any other OpenAI-compatible client at it, pick a model, and work with the agent you already pay for. It uses the [Agent Client Protocol (ACP)](https://agentclientprotocol.com) to talk to the agents.
+ACP Hub runs the agents of your existing Claude, ChatGPT/Codex and Antigravity plans behind a small local server and serves their models over an OpenAI-compatible API. Point GitHub Copilot CLI, VS Code's Copilot Chat, or any OpenAI-compatible client at it and work with the agent you already pay for. It talks to the agents over the [Agent Client Protocol (ACP)](https://agentclientprotocol.com), the same method IDEs such as Zed and JetBrains use to let you use other providers' agent plans inside the IDE.
 
 > ACP Hub is an independent, unofficial project. It is not affiliated with, endorsed by, or sponsored by Microsoft, GitHub, Anthropic, OpenAI, or Google. Claude, Codex, ChatGPT, Gemini, and Antigravity are trademarks of their respective owners and are used here only to identify the agents and services the project works with.
 
@@ -10,52 +10,45 @@ ACP Hub runs the agents of your existing Claude, ChatGPT/Codex and Antigravity a
 
 ## What it is
 
-- **A local server.** It runs the agents, keeps their sessions, settings, sign-ins and usage, and answers on `127.0.0.1` only. Nothing is hosted for you; the agents run on your machine and talk to their own providers.
-- **An OpenAI-compatible API.** `GET /v1/models` lists one model per agent and model (`<agentId>/<modelId>`, for example `claude/sonnet`), `GET /v1/models/<id>` answers one of them, and `POST /v1/chat/completions` streams the answer, including tool calls: the client runs its own tools and sends the results back, so its own permission prompts still apply. The unversioned `/models` and `/chat/completions` names work too, and an open stream sends a keep-alive comment every 15 seconds.
-- **A control page.** A browser page, served by the same server, to install agents, sign in or add an API key, change their settings, watch plan limits and cache hit rates, and rename the models the pickers show.
-- **Clients.** GitHub Copilot CLI, any OpenAI-compatible client, and an optional VS Code extension that puts the models in Copilot Chat's model picker and shows the control page in a sidebar. The extension is a thin client of the server; it holds no agents of its own.
+- **A local server** on `127.0.0.1` that runs the agents and keeps their sessions, settings, sign-ins and usage. The agents run on your machine and talk to their own providers.
+- **An OpenAI-compatible API:** `GET /v1/models` (ids like `claude/sonnet`), `GET /v1/models/<id>` and streaming `POST /v1/chat/completions` with tool calls. The client runs its own tools, so its permission prompts still apply.
+- **A control page** to install agents, sign in, change settings, watch plan limits and usage, and rename models.
+- **An optional VS Code extension** that adds the models to Copilot Chat's picker and shows the control page in a sidebar.
 
-Available models, usage limits and sign-in options depend on your provider and plan.
+Available models, limits and sign-in options depend on your provider and plan.
 
 ## Get started
 
 You need **Node.js**, a checkout of this repository, and access to at least one supported provider.
 
-1. Install and build: `npm ci`, then `npm run compile`.
-2. Start the server: `npm run server`. It prints a link of the form `http://127.0.0.1:<port>/?token=<token>`.
-3. Open that link once in a browser. It sets an `HttpOnly`, `SameSite=Strict` cookie, so the control page works from then on without the token.
-4. On the control page, add Claude, Codex or Antigravity, install the agent if needed, and sign in or add an API key from its card. Existing installations appear automatically.
+1. `npm ci`, then `npm run compile`.
+2. `npm run server`. It prints a link like `http://127.0.0.1:<port>/?token=<token>`.
+3. Open the link once; a cookie keeps the control page signed in afterwards.
+4. Install an agent and sign in or add an API key from its card. For Claude, **Sign in** opens a page that ends in a code; paste it into the card.
 5. Point a client at the server (below).
-
-The server keeps running until you stop it. Removing an agent from the page does not uninstall it. Saved API keys can be removed from the page; browser account sign-out is managed by the agent's own account tools.
 
 ## Using it from a client
 
 ### GitHub Copilot CLI
 
-Run **ACP Hub: Sync Models** from the Command Palette. It fetches the agents' current models and writes them, with the server's address and token, to the CLI's `providers.json` (`~/.copilot/providers.json`, or `COPILOT_PROVIDERS_CONFIG`), so they appear in the CLI's model picker next to the GitHub models. Restart the CLI afterwards. Entries in that file that the extension did not write are kept. The same command updates the VS Code picker: the model names arrive with `/v1/models`, and the provider headings are written to the extension's `package.json`, so reload the window for a renamed provider. The server itself writes neither file.
+Run **ACP Hub: Sync Models** from the VS Code Command Palette, then restart the CLI. It writes the models, address and token to `~/.copilot/providers.json` (or `COPILOT_PROVIDERS_CONFIG`), keeping entries it did not write.
 
 ### Any OpenAI-compatible client
 
-- **Base URL:** `http://127.0.0.1:8791/v1` (change the port in the control page's **Server settings**, or with `ACP_HUB_PORT`).
-- **Authentication:** send the server's token as a bearer token, `Authorization: Bearer <token>`. The token is in `server.token` in the shared store (`~/.acp-hub`, or `ACP_HUB_HOME`), or is the value of `ACP_HUB_TOKEN` when you set it.
-- **Model:** the `id` that `GET /v1/models` returns, in the form `<agentId>/<modelId>`.
-- **Thinking effort:** `reasoning_effort` in the request, with one of the levels the model offers (see **Settings** below for the level used when a request names none).
-- **Request fields:** `tools`, `tool_choice` (including `required`), `response_format` (`json_object` and `json_schema`), `reasoning_effort` and `stream_options.include_usage` are honoured; legacy `functions` work too. The agent owns sampling and length, so `temperature`, `max_tokens`, `stop` and the like are accepted and ignored, and `n` above 1 is refused with a 400. An image that is not an inline `data:` URL, audio and files reach the agent as a note that they were omitted.
-- **Chats and folders:** a client that sends an `x-chat-id` header keeps its conversation in one agent session, and `x-acp-cwd` names the folder that chat works in. A client that sends neither gets a chat named from the folder and the opening words of the conversation.
+- **Base URL:** `http://127.0.0.1:8791/v1` (port set in **Server settings** or `ACP_HUB_PORT`).
+- **Auth:** `Authorization: Bearer <token>`, from `~/.acp-hub/server.token` or `ACP_HUB_TOKEN`.
+- **Model:** an id from `GET /v1/models`; `reasoning_effort` picks the thinking level.
+- **Fields:** `tools`, `tool_choice`, `response_format` and `stream_options.include_usage` are honoured; sampling and length fields are ignored, and `n` above 1 is refused.
+- **Chats:** send `x-chat-id` to keep a conversation in one agent session and `x-acp-cwd` to name its folder.
 
 ### VS Code
 
-The optional extension (`acp-hub-for-copilot`, from a VSIX or the Marketplace) needs **VS Code 1.105 or later** and **GitHub Copilot Chat**. It adds the agents' models to the Copilot Chat model picker and an **Agent Hub** view in the activity bar with the same cards as the control page.
+The optional extension needs **VS Code 1.105+** and **GitHub Copilot Chat**. It adds the models to the Copilot Chat picker and an **Agent Hub** sidebar with the control page.
 
-- **Attach or start.** On activation the window asks `127.0.0.1:8791` (or the port saved in Server settings) for a health answer. A server that answers as ACP Hub is attached to and never stopped, and its agents are asked to start at once, so the first chat does not wait. When nothing answers, the extension starts the bundled server (`dist/server.js`, shipped in the VSIX) on its own, outside VS Code's process tree, and waits for it to answer.
-- **One server per machine.** Every window uses the same port, so they share one server. A server the extension starts keeps running when the window that started it closes or reloads, so an agent stays warm; it runs on its own Node.js (the one on your PATH, otherwise Node.js 22 downloaded once into `<root>/node`; VS Code's own executable only when neither works), so closing or killing VS Code does not touch it. It logs to `server.log` in the store root, and every window shows those lines in the **ACP Hub Server** output channel (a window that attaches to it shows the last 256 KB of that log, then follows it live; the window's own lines are in **ACP Hub**); it closes itself, agents included, once no window has used it for `acpHub.server.idleTimeoutMinutes` (default 30). Run **ACP Hub: Stop Server** to close it at once; the next chat starts it again. After an extension update the first window replaces a server left running by an older version. With `acpHub.server.detached` off the server is a child of the window that started it and exits with it, as before. A server you started yourself keeps running and windows only attach to it.
-- **One process per agent.** Each agent runs as a single process for the whole life of the server, in `<root>/agents/<id>/workspace`, and every chat and every window gets a session in it. The agents' own tools are off and the session prompt carries the chat's real folders, so the folder the agent runs in decides nothing a chat sees; the idle shutdown stops the process when no chat, model list or usage read has needed it.
-- **A server of another kind.** A program on the port that is not ACP Hub, or is of a version the extension does not speak, is left untouched and the model picker says the server is not compatible. A rejected token names the token file.
-- **Start it yourself, if you would rather control it.** `acpHub.server.autoStart` (VS Code setting, default on) decides whether a window starts a server by itself. With it off, a window only attaches to a server that already answers; a chat message or the sidebar's **Start server** still starts one, and so does running the installed script in a terminal: `node "$env:USERPROFILE\.vscode\extensions\neometric.acp-hub-for-copilot-<version>\dist\server.js"` (on macOS or Linux, `~/.vscode/extensions/neometric.acp-hub-for-copilot-<version>/dist/server.js`). The Docs view's **Server** section and the sidebar's "Server not running" page show the same command.
-- **Settings.** The extension keeps three: `acpHub.server.idleTimeoutMinutes` (minutes a server no window uses stays up; default `30`, `0` never closes it), `acpHub.server.detached` (run the server outside VS Code; default on) and `acpHub.server.autoStart` (start the server when a window loads and whenever the sidebar or a model list looks for one; default on — with it off a window only attaches to a server that answers, and starts one only for a chat message or the sidebar's **Start server**). A change applies after a window reload, and the idle limit and `detached` apply to the next server that starts, so run **ACP Hub: Stop Server** to restart it with new values. Agent settings live on the agent cards and in `<root>/config.json`; the first activation after an upgrade copies the `acpHub.agents.*` and `acpHub.resume.*` values an older version read from your `settings.json` into `config.json` (a value already there wins), and they are ignored in `settings.json` from then on. Only values from your user settings are copied — a value in a workspace's `.vscode/settings.json` is not, since `config.json` is one file for the machine — and the old keys stay in `settings.json` marked as deprecated, pointing at the ACP Hub page for changes.
-- **Model names.** After you rename a provider in the Models view, run **ACP Hub: Sync Models** and reload the VS Code window; the provider names are written to the extension's `package.json`, which an extension update or `npm run generate` resets (sync again then).
-- **Restricted Mode.** The extension is disabled in VS Code Restricted Mode, because it runs agent processes and needs a trusted workspace.
+- **Server.** A window attaches to a server already on the port, or starts the bundled one. All windows share one server, which keeps running after a window closes and shuts down after `acpHub.server.idleTimeoutMinutes` (default 30) unused. **ACP Hub: Stop Server** closes it at once. Logs are in the **ACP Hub Server** output channel.
+- **Settings.** `acpHub.server.idleTimeoutMinutes`, `acpHub.server.detached` (run outside VS Code; default on) and `acpHub.server.autoStart` (default on). Agent settings live on the cards and in `~/.acp-hub/config.json`.
+- **Renamed providers** show after **ACP Hub: Sync Models** and a window reload.
+- **Restricted Mode** disables the extension, since it runs agent processes.
 
 <img src="primary_sidebar_image.png" alt="The ACP Hub sidebar in VS Code" width="400">
 
@@ -68,35 +61,42 @@ The optional extension (`acp-hub-for-copilot`, from a VSIX or the Marketplace) n
 | `ACP_HUB_HOME` | The shared store: token, `config.json`, secrets, state and installed agents | `~/.acp-hub` |
 | `ACP_HUB_PROMPTS_DIR` | Where the server reads its prompt files | built in |
 
-- **Shared store.** The server, the extension and the control page all read the same folder, so an agent installed or signed in through one is there for the others.
-- **The token.** It is made once with a fresh random value and is required on every API request. The server binds to `127.0.0.1` only, so other machines cannot reach it, but any local process that can read your token file can use your subscriptions; protect the folder as you would any credential.
-- **Server header and Server settings.** The top of the control page shows where the server answers (`127.0.0.1:<port>`), with a green dot while it does; the address is a link that opens the page in a browser with the token in it. **Server settings** sets the port, which is saved in `config.json` and used the next time the server starts; **Restart server** stops the server, which ends any existing sessions, and a window starts it again on the saved port. A port change leaves the Copilot CLI's `providers.json` on the old address, so run **ACP Hub: Sync Models** again and restart the CLI.
-- **Docs view.** The control page's **Docs** view, after Usage, explains the server and its settings, the VS Code Copilot client and **ACP Hub: Sync Models**, and how to make the Copilot CLI work, in collapsible sections.
-- **Models view.** The control page's **Models** view sets the provider name of each agent and the name of each of its models. Press the pencil beside an agent's name to edit its provider name and all its model names together, then Save (an empty field keeps the agent's own name); a saved name reaches the pickers on the next **ACP Hub: Sync Models**. **Refresh** reads the agents' models again.
-- **Usage view.** The control page's **Usage** view charts what the turns spent: a stacked area of fresh input, cache read, cache write and output tokens, over today, 7 days, 30 days or the whole retention window. Every agent and every workspace can be left in or out with the checkboxes, and **Keep history for** sets how many days the server keeps (1 to 365, 30 by default); lowering it deletes the older days for good. The days are kept in `usage/` under the store root, one small file per day, and recording starts with this version: usage from before it was never stored.
+- **Token.** Required on every API request. Any local process that can read the token file can use your plans, so protect the store folder like a credential.
+- **Server settings** set the port; after changing it, run **ACP Hub: Sync Models** again.
+- **Models** renames providers and models; **Refresh** asks the agents for their models again.
+- **Usage** charts input, cache and output tokens per agent and workspace, kept for 30 days by default.
+- **Docs** explains the server, the VS Code client and the Copilot CLI setup.
+
+## Accounts
+
+Claude and Codex can have more than one account (Windows only for now); Antigravity cannot.
+
+- **Add** a named account under **+ Add account** in the card's ⚙; your existing one shows as **Default**.
+- **Each account** has its own switch, sign-in or API key, and usage bars. The card's **Enabled** switch turns all of them off.
+- **Ids.** Account `Work` on Claude is the agent `claude-work`, with models `claude-work/<model>` and the picker group `Claude Agent · Work`.
+- **Reload** the VS Code window after adding or removing an account.
+- **Remove account** deletes its login, API key, chats and folder.
 
 ## Settings and usage
 
-Configure each agent from its card on the control page, or by editing `<root>/config.json`. The page shows available plan limits and both last-turn and cumulative cache hit rates. Usage reporting varies by agent.
+Configure each agent from its card or in `~/.acp-hub/config.json`. The cards show plan limits, cache hit rates and cache misses where the agent reports them.
 
-Options that control how much each request sends to the model, and how hard the model thinks:
-
-- **Replace the system prompt** (Claude, Codex and Antigravity). Off by default; restarts the agent when changed. Replaces the agent's own built-in prompt with the client's guidance for the chat plus a one-line identity, instead of adding the guidance to the end of the agent's prompt. Antigravity generates its prompt and cannot keep it beside a custom agent, so the Google agent keeps a short Antigravity persona when the toggle is off and takes the client's identity when it is on; either way the guidance follows, and Antigravity's sections about skills, artifacts and messaging stay.
-- **Tool search** (Claude). Loads each of the client's tool descriptions only when the model needs it, instead of sending every description with every request. This shrinks the first request a lot when many tools are available, and may add a lookup step before a tool is first used. Not every model supports it. Codex and Antigravity already load tools this way.
-- **Default thinking effort** (each agent has its own). The effort used for a request that names none, such as a subagent started by a client's task tool. For Claude it also covers a chat left on the picker's Default. Claude starts at High, because the agent's own choice can be the most expensive level; Codex and Antigravity start at Default, which leaves the choice to the agent. An effort a request names is always kept.
+- **Replace the system prompt** (off by default): uses the client's guidance instead of the agent's built-in prompt.
+- **Tool search** (Claude): loads tool descriptions only when needed, shrinking large requests.
+- **Default thinking effort**: used when a request names none. Claude starts at High; Codex and Antigravity leave it to the agent.
 
 ## Privacy and permissions
 
-ACP Hub passes the requests it receives to the selected local agent. Requests can include conversation history, workspace instructions, file contents, tool definitions and tool results supplied by the client. The agent can send this information and credentials to its provider; the provider's terms and privacy policy apply ([Anthropic](https://www.anthropic.com/legal/privacy), [OpenAI](https://openai.com/policies/privacy-policy/), [Google](https://policies.google.com/privacy)). Review those policies and avoid sharing information you cannot send to the selected provider. ACP Hub also contacts services to install agents and retrieve available models or usage information. Third-party agents and adapters may make their own network requests or collect telemetry under their own policies.
+Requests (conversation, file contents, tool definitions and results) go to the selected agent, which sends them to its provider under that provider's terms ([Anthropic](https://www.anthropic.com/legal/privacy), [OpenAI](https://openai.com/policies/privacy-policy/), [Google](https://policies.google.com/privacy)). ACP Hub also contacts services to install agents and read models and usage. Third-party agents may make their own network requests or collect telemetry.
 
-API keys entered in ACP Hub are stored by the server in `<root>/secrets.json` in the shared store, readable by your account only (`0600`), and passed to the selected agent when needed; a key saved by an older version of the VS Code extension is copied there once, and the copy in VS Code's secret storage is left as it was. Agent account credentials and their retention are managed by the agents. Logs can contain diagnostic details.
+API keys are stored in `~/.acp-hub/secrets.json`, readable by your account only. Agent sign-ins are managed by the agents. Logs can contain diagnostic details.
 
-**Permission requests raised by an ACP adapter agent itself are automatically approved by ACP Hub** when an allow option is offered. This applies only to the agent's own built-in tools, which are off by default; if an agent's own tools are ever on, they run without a confirmation prompt. Tools provided by the client are not affected: the server hands each call to the client and the client's own confirmation flow decides. Review the agent's own configuration and use only agents and workspaces you trust.
+**ACP Hub automatically approves permission requests from an agent's own built-in tools**, which are off by default. Client tools are unaffected: the client's own confirmation flow decides. Use only agents and workspaces you trust.
 
 ## Contributing
 
-Run `npm ci`, then `npm run compile`. Use `npm run server` to run the server, `npm test` for unit tests, and `npm run lint` and `npm run typecheck` before sending a change. To work on the VS Code client, press **F5** to launch an Extension Development Host, and use `npm run package` to create a VSIX.
+`npm ci` and `npm run compile`, then `npm run server`, `npm test`, `npm run lint` and `npm run typecheck`. Press **F5** for an Extension Development Host; `npm run package` builds a VSIX.
 
-Agent metadata lives in the [registry](registry/agents.json). After changing it, run `npm run generate` and `npm run generate:check`. Agents with custom behavior implement `AgentAdapter` in `src/adapters` and are registered in `src/core/agents.ts`. For details, see the [design](docs/superpowers/specs/2026-10-30-acp-hub-design.md), the [server-only runtime design](docs/superpowers/specs/2026-11-09-server-only-runtime-design.md) and the [parity checklist](docs/parity-checklist.md).
+Agent metadata lives in the [registry](registry/agents.json); run `npm run generate` after changing it. Custom agents implement `AgentAdapter` in `src/adapters`. See the [design](docs/superpowers/specs/2026-10-30-acp-hub-design.md) and the [parity checklist](docs/parity-checklist.md).
 
-To release, set the version in `package.json` and `package-lock.json`, rename the changelog's `Unreleased` section to that version, and commit. Work through the [parity checklist](docs/parity-checklist.md) with each provider signed in, then either run `npx vsce publish` from the repository root with a Marketplace PAT, or run the **Release** workflow in GitHub Actions, which needs a `VSCE_PAT` repository secret.
+To release, bump the version in `package.json` and `package-lock.json`, rename the changelog's `Unreleased` section, run the [parity checklist](docs/parity-checklist.md), then `npx vsce publish` or the **Release** workflow (needs `VSCE_PAT`).

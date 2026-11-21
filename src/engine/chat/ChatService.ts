@@ -488,6 +488,17 @@ export class ChatService {
 		return this.ensureWarmSession();
 	}
 
+	/** Closes the warm session and opens a new one, since a session reports the models only when it is created. */
+	reopenWarmSession(): Promise<AgentSession> {
+		const warm = this.warmSession.current;
+		if (warm) {
+			const client = this.warmSession.client;
+			this.warmSession.release();
+			void client?.closeSession(warm.sessionId).catch(() => undefined);
+		}
+		return this.ensureWarmSession();
+	}
+
 	/** Notes that the agent answered something of the host's own, for the idle watch. */
 	touch(): void {
 		const client = this.warmSession.client;

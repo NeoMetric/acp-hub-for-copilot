@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentAdapter } from '../../src/core/adapter';
+import { accountAdapter } from '../../src/core/accounts';
 import { canUninstall, findInstalled, findOnPath, getInstallState, installAgent, uninstallAgent, type InstallEnvironment } from '../../src/core/installers';
 
 const { runNpm } = vi.hoisted(() => ({ runNpm: vi.fn() }));
@@ -49,6 +50,17 @@ function fakeNpmCi(options: { withEntry: boolean }) {
 	});
 }
 
+describe('account copies', () => {
+	it('installs an account copy into its type folder', async () => {
+		fakeNpmCi({ withEntry: true });
+		const copy = accountAdapter(npmAdapter(), { id: 'demo-work', name: 'Work' });
+		await installAgent(copy, env);
+		const found = await findInstalled(copy, env);
+		expect(found?.installDir.startsWith(path.join(env.storageDir, 'demo'))).toBe(true);
+		expect(fs.existsSync(path.join(env.storageDir, 'demo-work'))).toBe(false);
+	});
+});
+
 describe('uninstallAgent', () => {
 	it('deletes the agent folder and leaves the other agents alone', async () => {
 		fakeNpmCi({ withEntry: true });
@@ -66,6 +78,14 @@ describe('uninstallAgent', () => {
 
 	it('succeeds when nothing is installed', async () => {
 		await expect(uninstallAgent(npmAdapter(), env)).resolves.toBeUndefined();
+	});
+
+	it('refuses to uninstall an account copy, which shares the type folder', async () => {
+		fakeNpmCi({ withEntry: true });
+		await installAgent(npmAdapter(), env);
+		const copy = accountAdapter(npmAdapter(), { id: 'demo-work', name: 'Work' });
+		await expect(uninstallAgent(copy, env)).rejects.toThrow('account');
+		expect(fs.existsSync(path.join(env.storageDir, 'demo'))).toBe(true);
 	});
 
 	it('refuses to remove a CLI the extension did not install', async () => {

@@ -76,6 +76,16 @@ export interface LaunchSpec {
 	args: string[];
 	env: Record<string, string>;
 	shell?: boolean;
+	/** Names removed from the inherited environment before `env` is applied. */
+	unsetEnv?: string[];
+}
+
+/** What an agent needs to run as more than one account. */
+export interface AccountSupport {
+	/** The variables that give an extra account its own sign-in state; `storageDir` is the account's own folder. */
+	environment(storageDir: string): Record<string, string>;
+	/** Credential variables of the surrounding environment that an extra account must not inherit. */
+	inheritedCredentials: readonly string[];
 }
 
 export type AuthMethodSpec =
@@ -92,7 +102,6 @@ export interface UsageWindow {
 
 /** An account without plan limits has no windows and says why in `note`. */
 export interface UsageReading {
-	plan?: string;
 	windows: UsageWindow[];
 	note?: string;
 }
@@ -203,6 +212,12 @@ export interface AgentAdapter {
 	id: string;
 	displayName: string;
 	vendor: string;
+	/** The id whose folder holds the program; absent means `id`. */
+	installId?: string;
+	/** Set only on the copy that stands for an extra account. */
+	accountName?: string;
+	/** Present when the agent can run as several accounts. */
+	accounts?: AccountSupport;
 	install: InstallSpec;
 	launch(ctx: LaunchContext): LaunchSpec;
 	findCommandOverride?(settings: AgentSettings): string | undefined;
@@ -238,7 +253,7 @@ export interface AgentAdapter {
 	/** Replaces the `clientInfo` identity sent on `initialize`, for agents that decide what to offer by client. */
 	clientIdentity?: { name: string; title: string };
 	/** Whether a terminal sign-in begun at `startedAt` (ms) has already succeeded, for a login program that stays open afterwards. */
-	signInCompleted?(startedAt: number): boolean;
+	signInCompleted?(startedAt: number, env?: Record<string, string>): boolean;
 	/** Picks the `authenticate` call to make after `initialize`, or `undefined` for none. */
 	authenticate?(methods: AcpAuthMethod[], apiKey: string | undefined, settings?: AgentSettings): AuthenticateRequest | undefined;
 	/**

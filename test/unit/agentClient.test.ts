@@ -76,6 +76,20 @@ describe('AgentClient', () => {
 		await expect(target.signInWithMethod('unknown')).rejects.toThrow('not advertised');
 	});
 
+	it('removes the names a launch unsets from the inherited environment', async () => {
+		process.env.ACP_TEST_SECRET = 'x';
+		try {
+			const target = createClient(testAdapter({
+				launch: () => ({ command: process.execPath, args: [MOCK_AGENT], env: { MOCK_ACP_MODE: mockMode }, unsetEnv: ['ACP_TEST_SECRET'] }),
+			}));
+			const session = await target.createSession({ cwd: temp, mcpServers: [] });
+
+			expect(await reply(target, session.sessionId, 'env:ACP_TEST_SECRET')).toBe('unset');
+		} finally {
+			delete process.env.ACP_TEST_SECRET;
+		}
+	});
+
 	it('starts the agent, opens a session and streams a turn', async () => {
 		const target = createClient();
 		const session = await target.createSession({ cwd: temp, mcpServers: [] });

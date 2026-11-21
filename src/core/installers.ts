@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { typeIdOf } from './accounts';
 import type { AgentAdapter, AgentSettings, InstallContext } from './adapter';
 import type { Log } from './logging';
 import { NpmInstaller } from './npmInstaller';
@@ -36,7 +37,7 @@ function npmInstallerFor(adapter: AgentAdapter, env: InstallEnvironment, progres
 		return undefined;
 	}
 	return new NpmInstaller(
-		path.join(env.storageDir, adapter.id),
+		path.join(env.storageDir, typeIdOf(adapter)),
 		path.join(env.extensionDir, spec.manifestDirectory),
 		spec.packageName,
 		spec.version,
@@ -47,7 +48,7 @@ function npmInstallerFor(adapter: AgentAdapter, env: InstallEnvironment, progres
 }
 
 function contextFor(adapter: AgentAdapter, env: InstallEnvironment): InstallContext {
-	return { storageDir: path.join(env.storageDir, adapter.id), log: env.log, progress: env.progress };
+	return { storageDir: path.join(env.storageDir, typeIdOf(adapter)), log: env.log, progress: env.progress };
 }
 
 /** Looks for `command` in the folders of PATH; on Windows also with each PATHEXT extension. */
@@ -108,11 +109,15 @@ export function canUninstall(adapter: AgentAdapter): boolean {
 
 /** Deletes the agent's folder in the extension's global storage, including its state. The caller stops the agent first. */
 export async function uninstallAgent(adapter: AgentAdapter, env: InstallEnvironment): Promise<void> {
+	if (adapter.accountName) {
+		// An account copy shares the type's program folder, which this would delete.
+		throw new Error(`${adapter.displayName} is an account; remove the account instead of uninstalling.`);
+	}
 	if (!canUninstall(adapter)) {
 		throw new Error(`${adapter.displayName} was not installed by this extension.`);
 	}
 	// Windows keeps a program's files locked for a moment after it exits.
-	await fs.promises.rm(path.join(env.storageDir, adapter.id), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+	await fs.promises.rm(path.join(env.storageDir, typeIdOf(adapter)), { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
 	env.log(`Uninstalled ${adapter.displayName}`);
 }
 

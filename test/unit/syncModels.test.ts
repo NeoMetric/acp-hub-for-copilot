@@ -72,7 +72,7 @@ function setup(models: readonly ModelWire[], options: { refreshStatus?: number; 
 		const state = memoryState();
 		const names = new ModelNames(state);
 		const endpoint = await serve(models, options);
-		const deps: SyncModelsDeps = { endpoint, agents: [{ id: 'claude', displayName: 'Claude Agent' }], names, state, packageJson, providersFile };
+		const deps: SyncModelsDeps = { endpoint, agents: [{ id: 'claude', displayName: 'Claude Agent', vendor: 'Claude Agent' }], names, state, packageJson, providersFile };
 		return { deps, endpoint, providersFile, packageJson, state, names };
 	})();
 }
@@ -126,6 +126,19 @@ describe('syncModels', () => {
 		expect(read(providersFile).models[0].provider).toBe('Work Claude');
 		expect(read(packageJson).contributes.languageModelChatProviders[0].displayName).toBe('Work Claude');
 		expect(outcome.reloadNeeded).toBe(true);
+	});
+
+	it('writes one CLI provider per account', async () => {
+		const work = { ...wireOf('sonnet', 'Fast one'), id: 'claude-work/sonnet', owned_by: 'claude-work' };
+		const { deps, providersFile, packageJson } = await setup([wireOf('sonnet', 'Fast one'), work]);
+		fs.writeFileSync(packageJson, JSON.stringify({ contributes: { languageModelChatProviders: [{ vendor: 'Claude Agent', displayName: 'Claude Agent' }, { vendor: 'Claude Agent · Work', displayName: 'x' }] } }, null, '\t'));
+
+		await syncModels({ ...deps, agents: [...deps.agents, { id: 'claude-work', displayName: 'Claude Agent · Work', vendor: 'Claude Agent · Work' }] });
+
+		const config = read(providersFile);
+		expect(config.providers.map((entry: { name: string }) => entry.name)).toEqual(['Claude Agent', 'Claude Agent · Work']);
+		expect(config.models.map((entry: { provider: string; wireModel: string }) => [entry.provider, entry.wireModel])).toEqual([['Claude Agent', 'claude/sonnet'], ['Claude Agent · Work', 'claude-work/sonnet']]);
+		expect(read(packageJson).contributes.languageModelChatProviders[1].displayName).toBe('Claude Agent · Work');
 	});
 
 	it('keeps the entries it did not write', async () => {
