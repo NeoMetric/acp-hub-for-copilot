@@ -9,6 +9,7 @@ import type { AgentAdapter, AgentSettings, LaunchContext } from '../core/adapter
 import { accountAdapter, accountsSupported, isServing, readAccounts } from '../core/accounts';
 import { ADAPTERS } from '../core/agents';
 import { signIn } from '../core/auth';
+import { startCliLogin, type CliLogin } from '../core/cliLogin';
 import { findInstalled } from '../core/installers';
 import { readAgentSettings } from '../core/settings';
 import { createSessionPrompt, type PromptWorkspace } from '../core/systemPrompt';
@@ -255,6 +256,9 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 		await service?.close();
 	};
 
+	/** The login programs waiting for a pasted code, by agent. */
+	const logins = new Map<string, CliLogin>();
+
 	// The same operations the sidebar drives, over this host's store, agents and
 	// settings, so the browser page installs, signs in and configures as the
 	// extension does.
@@ -274,6 +278,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 			}
 		},
 		host: {
+			submitSignInCode: (agentId, code) => logins.get(agentId)?.submitCode(code) ?? false,
 			signIn: async agentId => {
 				const adapter = adapters.find(item => item.id === agentId);
 				const service = services.get(agentId);
@@ -291,19 +296,48 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 						startAgent: methodId => service.startForSignIn(methodId),
 					});
 				}
-				// A server has no terminal to open, so the page hands over the command to run in one.
 				const terminal = adapter.auth.find(method => method.kind === 'oauth-browser' && method.terminalCommand);
 				if (terminal?.kind === 'oauth-browser' && terminal.terminalCommand) {
+					const accountEnv = adapter.accountName && adapter.accounts ? adapter.accounts.environment(launch.storageDir) : {};
+					// A server has no terminal to open, so it runs the login program itself: the page shows the
+					// address the program prints and hands back the code that address ends in.
+					logins.get(adapter.id)?.cancel();
+					const startedAt = Date.now();
+					const login = startCliLogin({
+						command: process.execPath,
+						args: [launch.entryPath, ...terminal.terminalCommand],
+						env: { ELECTRON_RUN_AS_NODE: '1', ...accountEnv },
+						completed: adapter.signInCompleted ? () => adapter.signInCompleted!(startedAt, accountEnv) : undefined,
+					});
+					const url = await login.url;
+					if (url) {
+						logins.set(adapter.id, login);
+						control.reportSignInUrl(adapter.id, { url, message: 'Open this page, sign in, then paste the code it shows below.', codeEntry: true });
+						try {
+							const result = await login.done;
+							if (result.ok) {
+								await service.restart();
+							}
+							return result;
+						} finally {
+							if (logins.get(adapter.id) === login) {
+								logins.delete(adapter.id);
+							}
+							control.reportSignInUrl(adapter.id, undefined);
+						}
+					}
+					login.cancel();
+					// The program could not start or printed no address, so the page hands over the command to run by hand.
 					let command = ['node', `"${launch.entryPath}"`, ...terminal.terminalCommand].join(' ');
 					let where = 'one';
 					if (adapter.accountName && adapter.accounts) {
 						// The account keeps its own sign-in in a folder the variables name, so the command sets them first.
-						command = Object.entries(adapter.accounts.environment(launch.storageDir))
+						command = Object.entries(accountEnv)
 							.map(([name, value]) => `$env:${name}='${value.replace(/'/g, "''")}'; `)
 							.join('') + command;
 						where = 'a PowerShell terminal (it is a PowerShell command)';
 					}
-					return { ok: false, message: `This server has no terminal to sign in with. Run this in ${where}, then choose Refresh usage: ${command}` };
+					return { ok: false, message: `This server could not run the sign-in itself. Run this in ${where}, then choose Refresh usage: ${command}` };
 				}
 				return { ok: false, message: `${adapter.displayName} signs in with an API key; save one on this page.` };
 			},

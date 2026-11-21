@@ -30,6 +30,7 @@ function fake(overrides: Partial<ControlSurface> = {}) {
 		isSignedIn: async () => undefined,
 		hasSavedKey: async () => false,
 		signIn: async () => ({ ok: true }),
+		submitSignInCode: () => false,
 		saveApiKey: async () => ({ ok: true }),
 		signOut: async () => { },
 		readSettings: () => ({}),
@@ -286,6 +287,19 @@ describe('ControlPage', () => {
 		page.showSignInUrl('a', undefined);
 		await page.handle({ type: 'ready' });
 		expect(card('a').signInUrl).toBeUndefined();
+	});
+
+	it('hands a pasted sign-in code to the surface, and says so when no sign-in waits for it', async () => {
+		const submitSignInCode = vi.fn((_agentId: string, code: string) => code === 'good');
+		const { page, card } = setup({ submitSignInCode });
+
+		await page.handle({ type: 'submitSignInCode', agentId: 'a', code: 'good' });
+		expect(submitSignInCode).toHaveBeenCalledWith('a', 'good');
+		await page.handle({ type: 'ready' });
+		expect(card('a').error).toBeUndefined();
+
+		await page.handle({ type: 'submitSignInCode', agentId: 'a', code: 'late' });
+		expect(card('a').error).toMatch(/No sign-in is waiting/);
 	});
 
 	it('writes a known global setting and ignores an unknown one', async () => {

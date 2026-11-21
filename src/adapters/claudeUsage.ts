@@ -1,6 +1,5 @@
 import type { UsageContext, UsageReading, UsageSource, UsageWindow } from '../core/adapter';
 
-const PLAN_PATTERN = /^>\s*Claude (.+?) subscription usage\s*$/;
 // `**5-hour limit** — **42%** · Resets Oct 20, 6:30 PM GMT+5:30`
 const LIMIT_PATTERN = /^\*\*(.+?)\*\*\s+—\s+\*\*(\d+(?:\.\d+)?)%\*\*(?:\s+·\s+Resets\s+(.+?))?\s*$/;
 
@@ -22,18 +21,13 @@ function displayLabel(label: string): string {
 /**
  * Reads the limits section of the agent's `/usage` output. The agent only
  * hands that command out as Markdown, so this follows its "Limits" layout.
+ * The plan name in that output is skipped: the CLI saves it at sign-in and
+ * never refreshes it, so it goes stale after a plan change.
  */
-export function parseUsageMarkdown(markdown: string): { plan?: string; windows: UsageWindow[] } {
-	let plan: string | undefined;
+export function parseUsageMarkdown(markdown: string): { windows: UsageWindow[] } {
 	const windows: UsageWindow[] = [];
 
 	for (const line of markdown.split(/\r?\n/)) {
-		const planMatch = PLAN_PATTERN.exec(line);
-		if (planMatch) {
-			plan = planMatch[1].replace(/\\/g, '');
-			continue;
-		}
-
 		const match = LIMIT_PATTERN.exec(line);
 		if (!match) {
 			continue;
@@ -45,7 +39,7 @@ export function parseUsageMarkdown(markdown: string): { plan?: string; windows: 
 		});
 	}
 
-	return { plan, windows };
+	return { windows };
 }
 
 /**

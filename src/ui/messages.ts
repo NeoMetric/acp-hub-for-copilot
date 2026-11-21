@@ -26,12 +26,11 @@ export type UsageStatusView = 'unsupported' | 'idle' | 'loading' | 'ok' | 'unava
 export interface UsageView {
 	status: UsageStatusView;
 	windows: UsageWindow[];
-	plan?: string;
 	note?: string;
 	error?: string;
 	fetchedAt?: number;
 	/** Cache misses of chats that were already running. */
-	cacheMisses?: { unexpected: number; expired: number; lostTokens: number };
+	cacheMisses?: { unexpected: number; expired: number; lostTokens: number; expiredLostTokens: number };
 }
 
 export interface AgentCardState {
@@ -53,7 +52,7 @@ export interface AgentCardState {
 	/** Percent of the install done, when it is known. */
 	installPercent?: number;
 	/** A page the user has to open to finish signing in, with the agent's instructions for it. */
-	signInUrl?: { url: string; message: string };
+	signInUrl?: { url: string; message: string; codeEntry?: boolean };
 	error?: string;
 	/** The picker group id of this entry. */
 	vendor: string;
@@ -174,6 +173,7 @@ export type FromWebview =
 	| { type: 'install' | 'uninstall' | 'signIn' | 'signOut' | 'refreshUsage' | 'copySignInUrl' | 'openSignInUrl'; agentId: string }
 	| { type: 'addAgent' | 'removeAgent'; agentId: string }
 	| { type: 'saveApiKey'; agentId: string; key: string }
+	| { type: 'submitSignInCode'; agentId: string; code: string }
 	| { type: 'setEnabled'; agentId: string; enabled: boolean }
 	/** `agentId` is the type id. */
 	| { type: 'addAccount'; agentId: string; name: string }

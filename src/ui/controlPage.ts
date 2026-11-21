@@ -62,7 +62,7 @@ export class ControlPage {
 	/** Percent done of each running install that can tell; others show an endless bar. */
 	private readonly installProgress = new Map<string, number>();
 	private readonly errors = new Map<string, string>();
-	private readonly signInUrls = new Map<string, { url: string; message: string }>();
+	private readonly signInUrls = new Map<string, { url: string; message: string; codeEntry?: boolean }>();
 	private readonly listeners = new Set<(state: ControlState) => void | Promise<void>>();
 	private readonly enabledWrites = new Map<string, Promise<void>>();
 	private visibleAgents: Set<string> | undefined;
@@ -97,7 +97,7 @@ export class ControlPage {
 	}
 
 	/** Shows the page an agent wants the user to open to sign in, opening it too; `undefined` clears it. */
-	showSignInUrl(adapterId: string, prompt: { url: string; message: string } | undefined): void {
+	showSignInUrl(adapterId: string, prompt: { url: string; message: string; codeEntry?: boolean } | undefined): void {
 		if (prompt) {
 			this.signInUrls.set(adapterId, prompt);
 			void this.host.openExternal(prompt.url);
@@ -194,6 +194,12 @@ export class ControlPage {
 				return;
 			case 'signIn':
 				await this.signIn(adapter);
+				return;
+			case 'submitSignInCode':
+				if (!this.control.submitSignInCode(adapter.id, action.code)) {
+					this.errors.set(adapter.id, 'No sign-in is waiting for that code. Choose Sign in again.');
+					await this.publish();
+				}
 				return;
 			case 'saveApiKey':
 				await this.runBusy(adapter, 'Saving API key...', async () => {
@@ -387,7 +393,6 @@ export class ControlPage {
 				status: usage.status,
 				windows: [...(usage.reading?.windows ?? []), ...usage.extraWindows,
 					...(usage.lastModelCall ? [{ label: 'Last model call cache hit rate', usedPercent: usage.lastModelCall.hitRate }] : [])],
-				plan: usage.reading?.plan,
 				note: usage.reading?.note,
 				error: usage.error,
 				fetchedAt: usage.fetchedAt,

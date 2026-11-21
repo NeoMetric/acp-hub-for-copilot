@@ -260,11 +260,11 @@ describe('renderCards', () => {
 
 	it('draws a usage bar as wide as the used percent', () => {
 		const html = renderCards([card({
-			usage: { status: 'ok', windows: [{ label: '5h', usedPercent: 40, resets: 'in 2h' }], plan: 'Pro' },
+			usage: { status: 'ok', windows: [{ label: '5h', usedPercent: 40, resets: 'in 2h' }] },
 		})]);
 		expect(html).toContain('width:40%');
 		expect(html).toContain('resets in 2h');
-		expect(html).toContain('Plan: Pro');
+		expect(html).not.toContain('Plan:');
 	});
 
 	it('escapes text from the agent', () => {
@@ -445,6 +445,8 @@ describe('account cards', () => {
 		expect(html.match(/Remove account/g)).toHaveLength(1);
 		expect(html).toMatch(/data-action="removeAccount" data-agent="base-work"/);
 		expect(html).toMatch(/data-account-name="true" data-agent="base"/);
+		expect(html).toMatch(/<label class="setting-label" for="new-account-name-base">Account name<\/label>/);
+		expect(html).toContain('id="new-account-name-base"');
 		expect(html).toMatch(/data-action="addAccount" data-agent="base"[^>]*>Add</);
 		expect(html).toContain('data-action="uninstall"');
 	});

@@ -121,8 +121,7 @@ button:disabled {
 }
 
 .note,
-.resets,
-.plan {
+.resets {
 	color: var(--vscode-descriptionForeground);
 	font-size: 0.9em;
 }
@@ -233,7 +232,8 @@ select {
 	border: 1px solid var(--vscode-input-border, transparent);
 }
 
-.key-entry input[type="password"] {
+.key-entry input[type="password"],
+.key-entry input[type="text"] {
 	width: 100%;
 	box-sizing: border-box;
 	margin-bottom: 6px;
@@ -438,10 +438,6 @@ select {
 
 .usage-chart .chart-column {
 	fill: transparent;
-}
-
-.usage-chart .chart-column:hover {
-	fill: var(--vscode-list-hoverBackground, rgb(128 128 128 / 15%));
 }
 
 .usage-chart path {

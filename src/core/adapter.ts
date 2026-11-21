@@ -102,7 +102,6 @@ export interface UsageWindow {
 
 /** An account without plan limits has no windows and says why in `note`. */
 export interface UsageReading {
-	plan?: string;
 	windows: UsageWindow[];
 	note?: string;
 }

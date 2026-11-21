@@ -49,7 +49,7 @@ const SAMPLE: ControlState = {
 			enabled: true,
 			visible: true,
 			settings: [{ key: 'level', label: 'Level', description: 'How hard it works.', type: 'enum', value: 'high', options: ['low', 'high'] }],
-			usage: { status: 'ok', windows: [{ label: '5h', usedPercent: 40, resets: 'in 2h' }], plan: 'Pro' },
+			usage: { status: 'ok', windows: [{ label: '5h', usedPercent: 40, resets: 'in 2h' }] },
 		},
 		{
 			id: 'b',
@@ -136,6 +136,7 @@ function fakeControl(overrides: Partial<ControlSurface> = {}) {
 		isSignedIn: async () => undefined,
 		hasSavedKey: async () => false,
 		signIn: async () => ({ ok: true }),
+		submitSignInCode: () => false,
 		saveApiKey: async () => ({ ok: true }),
 		signOut: async () => { },
 		readSettings: () => ({}),

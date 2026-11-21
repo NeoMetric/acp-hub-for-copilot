@@ -283,7 +283,7 @@ describe('ControlService', () => {
 		const { service } = setup();
 		expect(service.usage('b')).toEqual({ status: 'unsupported', extraWindows: [] });
 
-		const read = vi.fn(async () => ({ plan: 'Pro', windows: [{ label: '5h', usedPercent: 12 }] }));
+		const read = vi.fn(async () => ({ windows: [{ label: '5h', usedPercent: 12 }] }));
 		const withUsage = adapter('u', { usage: { read } });
 		const reading = setup({ adapters: [withUsage] });
 		await reading.service.refreshUsage('u');

@@ -38,6 +38,8 @@ export type InstallProgress = (message: string, fraction?: number) => void;
 export interface ControlHost {
 	/** Signs the agent in through the host's own flow: its prompts, its terminal or its browser. */
 	signIn(agentId: string): Promise<SignInOutcome>;
+	/** Hands the code the user pasted to the sign-in that waits for one; false when none does. */
+	submitSignInCode?(agentId: string, code: string): boolean;
 	/** Shows the host's own output; a host that keeps none for the page leaves it out. */
 	showOutput?(): void;
 	/** What launching the agent takes, or `undefined` when it is not installed. */
@@ -75,6 +77,8 @@ export interface ControlSurface {
 	isSignedIn(agentId: string): Promise<boolean | undefined>;
 	hasSavedKey(agentId: string): Promise<boolean>;
 	signIn(agentId: string): Promise<SignInOutcome>;
+	/** Passes the code the user pasted to the sign-in that waits for one; false when none does. */
+	submitSignInCode(agentId: string, code: string): boolean;
 	/** Saves an API key for the agent and restarts it, so the key is the one it runs with. */
 	saveApiKey(agentId: string, key: string): Promise<SignInOutcome>;
 	signOut(agentId: string): Promise<void>;
@@ -110,6 +114,8 @@ export interface ControlSurface {
 export interface SignInUrlPrompt {
 	url: string;
 	message: string;
+	/** The page ends in a code the user pastes back, so the card offers a field for it. */
+	codeEntry?: boolean;
 }
 
 /** What the service reads and writes, and what it asks the host to do. */
@@ -211,6 +217,10 @@ export class ControlService implements ControlSurface {
 			void this.refreshUsage(agentId);
 		}
 		return outcome;
+	}
+
+	submitSignInCode(agentId: string, code: string): boolean {
+		return this.options.host.submitSignInCode?.(agentId, code) ?? false;
 	}
 
 	async saveApiKey(agentId: string, key: string): Promise<SignInOutcome> {

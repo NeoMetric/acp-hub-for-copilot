@@ -76,11 +76,12 @@ function renderWindow(window: UsageWindow): string {
 }
 
 function renderCacheMisses(misses: NonNullable<AgentCardState['usage']['cacheMisses']>): string {
-	const idle = misses.expired > 0 ? ` <span class="resets">+${misses.expired} after idle</span>` : '';
-	const description = 'Calls of a chat that was already running which lost the prompt cache they should have had, such as after a tool change or a reopened session. Calls after the chat sat idle longer than the cache lives are counted apart. Chats seen for the first time are not counted. The token figure is the input billed at full price instead of read from the cache.';
+	const description = 'Model calls that paid full price instead of reading the cache. Unexpected: lost mid-chat, worth checking. After idle: the cache expired after 5 minutes unused, which is normal.';
+	const unexpected = `${misses.unexpected} unexpected (${formatTokens(misses.lostTokens)} tokens)`;
+	const idle = `${misses.expired} after idle (${formatTokens(misses.expiredLostTokens)} tokens)`;
 	return `<div class="usage-window">`
-		+ `<div class="usage-head"><span>Cache misses ${renderInfo('Cache misses', description)}</span><span>${misses.unexpected}</span></div>`
-		+ `<span class="resets">${escapeHtml(formatTokens(misses.lostTokens))} tokens re-billed</span>${idle}`
+		+ `<div class="usage-head"><span>Cache misses ${renderInfo('Cache misses', description)}</span><span>${misses.unexpected + misses.expired}</span></div>`
+		+ `<span class="resets">${escapeHtml(`${unexpected} · ${idle}`)}</span>`
 		+ `</div>`;
 }
 
@@ -89,9 +90,6 @@ function renderUsage(agent: AgentCardState): string {
 	const parts: string[] = [];
 	if (usage.status === 'unsupported') {
 		parts.push('<div class="note">Usage is not supported for this agent.</div>');
-	}
-	if (usage.plan) {
-		parts.push(`<div class="plan">Plan: ${escapeHtml(usage.plan)}</div>`);
 	}
 	for (const window of usage.windows) {
 		parts.push(renderWindow(window));
@@ -175,6 +173,10 @@ function renderStatus(agent: AgentCardState, showError = true): string {
 			+ `<div class="sign-in-url">${escapeHtml(agent.signInUrl.url)}</div>`
 			+ `<div class="actions"><button data-action="copySignInUrl" data-agent="${id}">Copy URL</button>`
 			+ `<button class="secondary" data-action="openSignInUrl" data-agent="${id}">Open in browser</button></div>`
+			+ (agent.signInUrl.codeEntry
+				? `<div class="key-entry"><input type="text" aria-label="Sign-in code" placeholder="Paste the code here" data-code-input="true" data-agent="${id}" autocomplete="off" spellcheck="false">`
+				+ `<div class="actions"><button data-action="submitSignInCode" data-agent="${id}">Submit code</button></div></div>`
+				: '')
 		: '';
 	return busy + signInUrl + error;
 }
@@ -234,8 +236,10 @@ function renderAccountSettingsPanel(type: AgentCardState, accounts: AgentCardSta
 		? `<button class="secondary uninstall" data-action="uninstall" data-agent="${id}"${disabled}>Uninstall agent</button>`
 		: '';
 	const draft = ui.nameDrafts?.get(type.id) ?? '';
-	const add = `<div class="add-account"><input type="text" aria-label="New account name" data-account-name="true" data-agent="${id}" maxlength="20" autocomplete="off" spellcheck="false" value="${escapeHtml(draft)}">`
-		+ `<button data-action="addAccount" data-agent="${id}"${disabled}>Add</button></div>`;
+	const nameInputId = `new-account-name-${id}`;
+	const add = `<div class="setting"><div class="setting-heading"><label class="setting-label" for="${nameInputId}">Account name</label></div>`
+		+ `<div class="add-account"><input id="${nameInputId}" type="text" data-account-name="true" data-agent="${id}" maxlength="20" autocomplete="off" spellcheck="false" value="${escapeHtml(draft)}">`
+		+ `<button data-action="addAccount" data-agent="${id}"${disabled}>Add</button></div></div>`;
 	const crowded = accounts.length > ACCOUNT_NOTE_THRESHOLD
 		? '<div class="note">Each account runs its own processes, so many accounts use more memory.</div>'
 		: '';
@@ -260,7 +264,7 @@ function renderAccountCard(type: AgentCardState, accounts: AgentCardState[], set
 	const cardError = type.error ? `<div class="error">${escapeHtml(type.error)}</div>` : '';
 	return `<section class="card" data-agent="${id}">`
 		+ `<div class="card-head"><h2>${escapeHtml(type.displayName)}</h2>`
-		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setAccountsEnabled" data-agent="${id}"${type.accountsEnabled ? ' checked' : ''}> Accounts</label>${renderGear(type, settingsOpen)}</div></div>`
+		+ `<div class="card-controls"><label class="toggle"><input type="checkbox" data-action="setAccountsEnabled" data-agent="${id}"${type.accountsEnabled ? ' checked' : ''}> Enabled</label>${renderGear(type, settingsOpen)}</div></div>`
 		+ `<div class="actions">${renderInstall(type)}</div>`
 		+ cardError
 		+ rows

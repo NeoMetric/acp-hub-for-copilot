@@ -41,6 +41,8 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 	/** The agents whose API key field is open, and what was typed in each, so a redraw does not wipe it. */
 	const keyEntry = new Set<string>();
 	const keyDrafts = new Map<string, string>();
+	/** The sign-in code typed for each agent, kept until it is sent. */
+	const codeDrafts = new Map<string, string>();
 	/** Accounts whose removal waits for a second click, and the name typed to add one, by agent type. */
 	const confirmRemove = new Set<string>();
 	const nameDrafts = new Map<string, string>();
@@ -63,6 +65,23 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 			if (input.dataset?.keyInput) {
 				input.value = keyDrafts.get(input.dataset.agent ?? '') ?? '';
 			}
+		}
+	}
+
+	function restoreCodeDrafts(): void {
+		for (const input of Array.from(root.querySelectorAll?.('input[data-code-input]') ?? []) as HTMLInputElement[]) {
+			if (input.dataset?.codeInput) {
+				input.value = codeDrafts.get(input.dataset.agent ?? '') ?? '';
+			}
+		}
+	}
+
+	function submitSignInCode(agentId: string): void {
+		const code = (codeDrafts.get(agentId) ?? '').trim();
+		if (code) {
+			codeDrafts.delete(agentId);
+			transport.send({ type: 'submitSignInCode', agentId, code });
+			draw();
 		}
 	}
 
@@ -103,6 +122,7 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		if (!available.models && !available.usage && !available.server) {
 			root.innerHTML = renderAgents();
 			restoreKeyDrafts();
+			restoreCodeDrafts();
 			restoreNameDrafts();
 			return;
 		}
@@ -117,6 +137,7 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 						: renderAgents();
 		root.innerHTML = (server ? renderServerHeader(server) : '') + renderNav(view, available) + body;
 		restoreKeyDrafts();
+		restoreCodeDrafts();
 		restoreNameDrafts();
 		if (editing !== undefined) {
 			const input = root.querySelector?.('input[data-models]') as HTMLInputElement | null | undefined;
@@ -250,6 +271,10 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 			saveApiKey(agentId);
 			return;
 		}
+		if (action === 'submitSignInCode') {
+			submitSignInCode(agentId);
+			return;
+		}
 		if (action === 'addAccount') {
 			addAccount(agentId);
 			return;
@@ -297,6 +322,9 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 		if (target.dataset?.keyInput && target.dataset.agent) {
 			keyDrafts.set(target.dataset.agent, target.value);
 		}
+		if (target.dataset?.codeInput && target.dataset.agent) {
+			codeDrafts.set(target.dataset.agent, target.value);
+		}
 		if (target.dataset?.accountName !== undefined && target.dataset.agent) {
 			nameDrafts.set(target.dataset.agent, target.value);
 		}
@@ -307,7 +335,7 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 
 	root.addEventListener('change', event => {
 		const target = event.target as HTMLInputElement | HTMLSelectElement;
-		if (target.dataset.keyInput || target.dataset.accountName !== undefined) {
+		if (target.dataset.keyInput || target.dataset.codeInput || target.dataset.accountName !== undefined) {
 			return;
 		}
 		if (target.dataset.models) {
@@ -356,6 +384,13 @@ export function mountPage(transport: ControlTransport, root: HTMLElement): void 
 				keyEntry.delete(keyAgent);
 				keyDrafts.delete(keyAgent);
 				draw();
+			}
+			return;
+		}
+		const codeAgent = (target as HTMLElement).dataset?.codeInput ? (target as HTMLElement).dataset.agent : undefined;
+		if (codeAgent) {
+			if (key === 'Enter') {
+				submitSignInCode(codeAgent);
 			}
 			return;
 		}
