@@ -21,6 +21,16 @@ export interface ChatMessage { readonly role: ChatRole; readonly parts: readonly
 /** One tool the model may call, described by the JSON schema the agent is sent. */
 export interface ToolDef { readonly name: string; readonly description: string; readonly inputSchema: unknown }
 
+/** One labelled piece of the system prompt a client sends. */
+export interface PromptSection {
+	readonly id: string;
+	/** Names the section when it is retracted; a section without a label is retracted line by line. */
+	readonly label?: string;
+	readonly text: string;
+	/** `fixed` is written once and never compared; `chat` names one chat and stays out of the session prompt. */
+	readonly kind?: 'fixed' | 'chat';
+}
+
 /** One turn of a chat, as the host gathered it. */
 export interface ChatRequest {
 	/** Stable for the chat across turns, whichever host sends it. */

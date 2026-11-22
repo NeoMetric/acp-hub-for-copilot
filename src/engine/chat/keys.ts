@@ -147,7 +147,7 @@ export function guidanceChangeOf(savedLines: readonly string[] | undefined, guid
 	const modeLines = leftMode === undefined ? new Set<string>() : new Set(guidanceLines([...previous.matchAll(MODE_BLOCK)].map(match => match[0]).join('\n')).map(line => line.hash));
 	return {
 		...change,
-		...(leftMode === undefined ? {} : { leftMode }),
+		...(leftMode === undefined ? {} : { retired: [{ id: `mode:${leftMode}`, label: `${leftMode} mode` }] }),
 		goneLines: gone.filter(line => !modeLines.has(line.hash)).map(line => line.text),
 	};
 }
@@ -155,13 +155,14 @@ export function guidanceChangeOf(savedLines: readonly string[] | undefined, guid
 /** Puts a change that has not been sent yet together with the one that follows it. */
 export function mergeGuidanceChange(first: GuidanceChange, second: GuidanceChange): GuidanceChange {
 	const added = [...new Set([...first.added, ...second.added])];
-	const leftMode = second.leftMode ?? first.leftMode;
+	const retired = second.retired ?? first.retired;
+	const leftMode = retired?.[0]?.id.slice('mode:'.length);
 	const stillInMode = leftMode !== undefined && added.some(line => MODE_LINE.exec(line)?.[1] === leftMode);
 	const gone = [...(first.goneLines ?? []), ...(second.goneLines ?? [])].filter(line => !added.includes(line));
 	return {
 		added,
 		removed: first.removed + second.removed,
-		...(leftMode === undefined || stillInMode ? {} : { leftMode }),
+		...(retired === undefined || stillInMode ? {} : { retired }),
 		...(first.goneLines || second.goneLines ? { goneLines: [...new Set(gone)] } : {}),
 	};
 }

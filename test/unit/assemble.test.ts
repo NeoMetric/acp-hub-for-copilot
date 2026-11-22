@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { buildPromptBlocks } from '../../src/engine/chat/assemble';
+import { buildPromptBlocks, guidanceChangeBlock } from '../../src/engine/chat/assemble';
 import { DEFAULT_TRANSCRIPT_OPTIONS, lastUserMessageIndex } from '../../src/engine/chat/messages';
 import type { ChatSession } from '../../src/engine/chat/types';
 import type { ChatMessage, Part } from '../../src/engine/model/chat';
@@ -97,5 +97,14 @@ describe('buildPromptBlocks with what the host contributes', () => {
 		const blocks = buildPromptBlocks(messages, 0, 0, false, session, log, DEFAULT_TRANSCRIPT_OPTIONS, hostPrompt);
 
 		expect(blocks).toEqual([{ type: 'text', text: 'what changed?' }]);
+	});
+});
+
+describe('guidanceChangeBlock', () => {
+	it('names each retired section by its label', () => {
+		const text = guidanceChangeBlock({ added: [], removed: 2, retired: [{ id: 'mode:Agent', label: 'Agent mode' }], goneLines: [] }).text;
+
+		expect(text).toContain('The "Agent mode" instructions no longer apply.');
+		expect(text).not.toContain('no longer in');
 	});
 });

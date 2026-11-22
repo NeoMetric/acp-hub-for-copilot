@@ -28,9 +28,9 @@ export function guidanceChangeBlock(change: GuidanceChange): AcpTextBlock {
 		lines.push(header);
 	}
 
-	// The instructions of a mode that was left are named, not repeated: they are in the session already.
-	if (change.leftMode !== undefined) {
-		lines.push(`You are no longer in "${change.leftMode}" mode; its instructions no longer apply.`);
+	// A retired section is named, not repeated: its instructions are in the session already.
+	for (const section of change.retired ?? []) {
+		lines.push(`The "${section.label}" instructions no longer apply.`);
 	}
 	if (change.goneLines === undefined) {
 		if (change.removed > 0) {

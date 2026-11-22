@@ -79,7 +79,7 @@ describe('guidanceChangeOf', () => {
 	it('names the mode that was left instead of listing its lines', () => {
 		const change = guidanceChangeOf(guidanceLineHashes(planning), rules, planning);
 
-		expect(change.leftMode).toBe('Plan');
+		expect(change.retired).toEqual([{ id: 'mode:Plan', label: 'Plan mode' }]);
 		expect(change.goneLines).toEqual([]);
 		expect(change.removed).toBe(5);
 	});
@@ -88,7 +88,7 @@ describe('guidanceChangeOf', () => {
 		const reviewing = `${rules}\n<modeInstructions>\nYou are currently running in "Review" mode. Below are your instructions.\nOnly read.\n</modeInstructions>`;
 		const change = guidanceChangeOf(guidanceLineHashes(planning), reviewing, planning);
 
-		expect(change.leftMode).toBe('Plan');
+		expect(change.retired).toEqual([{ id: 'mode:Plan', label: 'Plan mode' }]);
 		expect(change.added).toContain('Only read.');
 		expect(change.goneLines).toEqual([]);
 	});
@@ -96,7 +96,7 @@ describe('guidanceChangeOf', () => {
 	it('lists the other lines that are gone and names no mode when none was left', () => {
 		const change = guidanceChangeOf(guidanceLineHashes(planning), planning.replace('Use tabs', 'Use spaces'), planning);
 
-		expect(change.leftMode).toBeUndefined();
+		expect(change.retired).toBeUndefined();
 		expect(change.goneLines).toEqual(['Use tabs']);
 	});
 
@@ -105,17 +105,17 @@ describe('guidanceChangeOf', () => {
 		const back = guidanceChangeOf(guidanceLineHashes(rules), planning, rules);
 		const merged = mergeGuidanceChange(left, back);
 
-		expect(merged.leftMode).toBeUndefined();
+		expect(merged.retired).toBeUndefined();
 		expect(merged.added).toContain('Do not edit files.');
 	});
 });
 
 describe('guidanceChangeBlock', () => {
-	it('retracts a mode by name and sends the instructions of the new one whole', () => {
+	it('retracts a section by its label and sends the instructions of the new one whole', () => {
 		const long = 'x'.repeat(20_000);
-		const block = guidanceChangeBlock({ added: ['You are currently running in "Review" mode.', long], removed: 5, leftMode: 'Plan', goneLines: [] });
+		const block = guidanceChangeBlock({ added: ['You are currently running in "Review" mode.', long], removed: 5, retired: [{ id: 'mode:Plan', label: 'Plan mode' }], goneLines: [] });
 
-		expect(block.text).toContain('You are no longer in "Plan" mode; its instructions no longer apply.');
+		expect(block.text).toContain('The "Plan mode" instructions no longer apply.');
 		expect(block.text).toContain(long);
 		expect(block.text).not.toContain('line(s) of the earlier guidance');
 	});

@@ -108,9 +108,11 @@ export interface GuidanceChange {
 	readonly added: readonly string[];
 	/** How many lines it saw that are gone. */
 	readonly removed: number;
-	/** The mode the agent was in until now, when the guidance no longer puts it there. */
-	readonly leftMode?: string;
-	/** The text of the lines that are gone, apart from those of the mode that was left; known only when the earlier guidance is. */
+	/** The labelled sections the agent had until now that are gone; they are named, not repeated. */
+	readonly retired?: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+	/** The ids of the sections the saved session did not have. */
+	readonly addedSections?: readonly string[];
+	/** The text of the lines that are gone, apart from those of retired sections; known only when the earlier guidance is. */
 	readonly goneLines?: readonly string[];
 }
 
