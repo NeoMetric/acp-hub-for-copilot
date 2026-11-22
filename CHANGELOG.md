@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
 - The system prompt is now the client's. The server writes no prompt text of its own and takes the prompt as labelled sections (`acp.systemPrompt.sections`); the VS Code extension builds them from Copilot's prompt and reads **Replace the system prompt** from `config.json` on every request. On: Copilot's prompt as it is plus the extension's functional notes. Off: the same without Copilot's identity, persona and content-policy lines. This removes the server-written line that made Google answer every request with a 429, but Google with the setting on still gets Copilot's prompt as it is and answers 429, so keep it off for Google.
 - The tool server is renamed from `vscode` to `hub`: tools now reach the model as `mcp__hub__*` (Claude, Codex) and `mcp_hub_*` (Google).
