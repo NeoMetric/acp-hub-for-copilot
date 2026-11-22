@@ -24,7 +24,6 @@ const adapter: AgentAdapter = {
 	auth: [],
 	settings: [],
 	modelPolicy: {} as AgentAdapter['modelPolicy'],
-	systemPrompt: { toolAccess: '', listRequiredArguments: false },
 };
 
 /** One agent process: a session per chat, and the folder it was started in. */

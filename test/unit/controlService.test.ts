@@ -59,7 +59,6 @@ function adapter(id: string, extra: Partial<AgentAdapter> = {}): AgentAdapter {
 		auth: [],
 		settings: [{ key: 'level', type: 'enum', label: 'Level', description: '', default: 'low', options: ['low', 'high'] }],
 		modelPolicy: {} as AgentAdapter['modelPolicy'],
-		systemPrompt: { toolAccess: '', listRequiredArguments: false },
 		...extra,
 	};
 }

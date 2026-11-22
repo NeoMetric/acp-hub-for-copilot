@@ -72,6 +72,30 @@ describe('engine boundaries', () => {
 			.toMatch(/environment_info[\s\S]*workspace_info[\s\S]*userMemory[\s\S]*sessionMemory[\s\S]*repoMemory/);
 	});
 
+	/**
+	 * What reaches the model on the way to the agent names no client. Comments are skipped; the
+	 * pattern is case-sensitive so `--vscode-*` CSS variables and the on-disk agent id stay.
+	 */
+	it('writes no client words into the prompt path', () => {
+		const files = [
+			...['ChatService', 'promptSections', 'assemble', 'reuse', 'keys', 'sessionStore', 'warmSession'].map(name => `src/engine/chat/${name}.ts`),
+			'src/engine/mcp/bridge.ts',
+			...['claude', 'codex', 'codexHome', 'google', 'generic'].map(name => `src/adapters/${name}.ts`),
+			'src/hosts/http/host.ts',
+			'src/hosts/http/wire.ts',
+			'src/composition/headless.ts',
+			'src/core/toolServer.ts',
+		];
+		const clientWords = /VS Code|Visual Studio|Copilot|Microsoft|['"`]vscode['"`]|mcp_+vscode|mcp_servers\.vscode/;
+		for (const file of files) {
+			expect(existsSync(file), `${file} exists`).toBe(true);
+			const code = readFileSync(file, 'utf8').split('\n').filter(line => !/^(\/\/|\*|\/\*)/.test(line.trim()));
+			for (const line of code) {
+				expect(line, `${file} has client text`).not.toMatch(clientWords);
+			}
+		}
+	});
+
 	/** The chat modules that live in the engine. */
 	for (const name of ['cache', 'sessionStore', 'sessionFingerprint', 'usage', 'promptSections']) {
 		it(`holds ${name}.ts without reaching for a host`, () => {
@@ -92,7 +116,6 @@ describe('engine boundaries', () => {
 			auth: [],
 			settings: [],
 			modelPolicy: {} as AgentAdapter['modelPolicy'],
-			systemPrompt: { toolAccess: '', listRequiredArguments: false },
 		};
 		const ctx: LaunchContext = { entryPath: 'fake', installDir: '', storageDir: '', settings: {}, workspaceFolder: '' };
 		const log: Log = () => { };

@@ -49,7 +49,6 @@ function testAdapter(overrides: Partial<AgentAdapter> = {}): AgentAdapter {
 		settings: [],
 		// The client never reads the model policy.
 		modelPolicy: {} as AgentAdapter['modelPolicy'],
-		systemPrompt: { toolAccess: 'The tools of the test server are the chat\'s own.', listRequiredArguments: false },
 		...overrides,
 	};
 }

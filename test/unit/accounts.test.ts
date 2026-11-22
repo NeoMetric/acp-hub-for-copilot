@@ -12,7 +12,6 @@ function adapter(id: string, extra: Partial<AgentAdapter> = {}): AgentAdapter {
 		auth: [],
 		settings: [],
 		modelPolicy: {} as AgentAdapter['modelPolicy'],
-		systemPrompt: { toolAccess: '', listRequiredArguments: false },
 		...extra,
 	};
 }

@@ -6,7 +6,7 @@ import { assertShellSafe, authenticateMethodFor, googleAdapter, googleLaunchSpec
 import { QuotaLimitError } from '../../../src/adapters/googleQuota';
 import { googleSessionPolicy } from '../../../src/adapters/googleSessionPolicy';
 import type { AgentSettings, InstallContext, LaunchContext } from '../../../src/core/adapter';
-import { HOST_IDENTITY } from '../../../src/core/hostIdentity';
+import { AGENT_BASE_IDENTITY } from '../../../src/core/toolServer';
 import { RpcError } from '../../../src/engine/acp/rpc';
 
 let temp: string;
@@ -63,12 +63,6 @@ describe('googleAdapter', () => {
 			{ kind: 'oauth-browser', label: 'Google account', browserAuthPreference: 'oauth' },
 			{ kind: 'api-key', label: 'Gemini API key', envVar: 'GEMINI_API_KEY', keyPrefix: 'AIza' },
 		]);
-	});
-
-	it('names the chat tools as agy acp lists them, with no call_mcp_tool, and lists required arguments', () => {
-		expect(googleAdapter.systemPrompt.toolAccess).toContain('`mcp_vscode_<name>`');
-		expect(googleAdapter.systemPrompt.toolAccess).not.toContain('call_mcp_tool');
-		expect(googleAdapter.systemPrompt.listRequiredArguments).toBe(true);
 	});
 
 	it('finds nothing before the CLI is downloaded', async () => {
@@ -183,17 +177,18 @@ describe('the extension\'s own agent', () => {
 		expect(file).toMatch(/^description: .+$/m);
 		expect(file).toMatch(/^tools: \[\]$/m);
 		expect(file).toMatch(/^You are Antigravity, /m);
-		expect(file).not.toContain(HOST_IDENTITY);
+		expect(file).not.toContain(AGENT_BASE_IDENTITY);
+		expect(file).toContain('description: Created by ACP Hub to run chats on the client\'s own tools.');
 	});
 
-	it('gives the agent Copilot\'s identity instead when the chat replaces the prompt, still with no built-in tools', () => {
+	it('writes the base identity when the prompt is replaced, still with no built-in tools', () => {
 		const home = homeUnder();
 
 		googleLaunchSpec(launchContext({ replaceSystemPrompt: true }), {}, 'win32', home);
 
 		const file = fs.readFileSync(agentFile(home), 'utf8');
 		expect(file).toMatch(/^tools: \[\]$/m);
-		expect(file).toContain(HOST_IDENTITY);
+		expect(file).toContain(AGENT_BASE_IDENTITY);
 		expect(file).not.toMatch(/^You are Antigravity, /m);
 	});
 
@@ -214,7 +209,7 @@ describe('the extension\'s own agent', () => {
 		expect(spec.args).toContain('--agent=acp-hub-copilot');
 		const file = fs.readFileSync(agentFile(home), 'utf8');
 		expect(file).not.toMatch(/^tools:/m);
-		expect(file).toContain(HOST_IDENTITY);
+		expect(file).toContain(AGENT_BASE_IDENTITY);
 	});
 
 	it('writes the agent into the gemini home the CLI is told to use', () => {
@@ -298,16 +293,23 @@ describe('google hooks', () => {
 		expect(googleAdapter.disableBuiltInTools?.({ useAgentBuiltInTools: true })).toBe(false);
 	});
 
+	it('turns built-in tools off in favour of the hub tools', () => {
+		const base = { replaceSystemPrompt: false, reportEachModelCall: false, isNewSession: true, disableBuiltInTools: true };
+		const params = googleAdapter.sessionParams?.(base) as { _meta: { antigravity: { systemPrompt: { append: string } } } };
+
+		expect(params._meta.antigravity.systemPrompt.append).toContain('`mcp_hub_*`');
+	});
+
 	it('appends the session prompt, and with the built-in tools off tells the model to use only the chat tools', () => {
 		const base = { replaceSystemPrompt: false, reportEachModelCall: false, isNewSession: true };
 		const appendOf = (params: Record<string, unknown> | undefined) => (params as { _meta: { antigravity: { systemPrompt: { append: string } } } })._meta.antigravity.systemPrompt.append;
 
 		const off = appendOf(googleAdapter.sessionParams?.({ ...base, disableBuiltInTools: true, systemPromptAppend: 'hello' }));
 		expect(off.startsWith('hello\n\n')).toBe(true);
-		expect(off).toContain('use only the `mcp_vscode_*` tools');
+		expect(off).toContain('use only the `mcp_hub_*` tools');
 
 		expect(appendOf(googleAdapter.sessionParams?.({ ...base, disableBuiltInTools: false, systemPromptAppend: 'hello' }))).toBe('hello');
-		expect(appendOf(googleAdapter.sessionParams?.({ ...base, disableBuiltInTools: true }))).toContain('use only the `mcp_vscode_*` tools');
+		expect(appendOf(googleAdapter.sessionParams?.({ ...base, disableBuiltInTools: true }))).toContain('use only the `mcp_hub_*` tools');
 		expect(googleAdapter.sessionParams?.({ ...base, disableBuiltInTools: false })).toEqual({});
 	});
 

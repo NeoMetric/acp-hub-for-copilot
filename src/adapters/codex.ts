@@ -2,10 +2,10 @@ import type { AcpAuthMethod } from '../core/protocol';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentAdapter, AgentSettings, AuthenticateRequest, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
-import { HOST_IDENTITY } from '../core/hostIdentity';
 import { nativeSessionPolicy } from '../core/nativeSessionPolicy';
 import { REGISTRY, registryAgent } from '../core/registry';
 import type { SessionPolicy } from '../core/sessionPolicy';
+import { AGENT_BASE_IDENTITY } from '../core/toolServer';
 import { vendorOf } from '../core/vendors';
 import { ensureCodexHome } from './codexHome';
 import { codexModelPolicy } from './codexModels';
@@ -17,8 +17,8 @@ const ADAPTER_VERSION = '2.3.0';
 
 /**
  * The mode every session runs in. Codex's own tools are gone (see
- * `DISABLED_BUILT_IN_FEATURES` and `EXCLUDED_CODE_MODE_NAMESPACES`), so `mcp__vscode__*` is the
- * only tool it can reach and every change still goes through Copilot's tools. `agent` ("Auto
+ * `DISABLED_BUILT_IN_FEATURES` and `EXCLUDED_CODE_MODE_NAMESPACES`), so `mcp__hub__*` is the
+ * only tool it can reach and every change still goes through the client's tools. `agent` ("Auto
  * review") is avoided: it runs a second model call to review every tool call, which costs
  * several seconds and tokens per call. `agent-full-access` has no reviewer, and the sandbox
  * it lifts has nothing left to guard.
@@ -126,7 +126,7 @@ function readUserConfig(existing: string | undefined): Record<string, unknown> {
  * and keeps every other key.
  *
  * `mcp_servers` is left alone on purpose. The bridge is handed to the agent as a
- * session's MCP server, and the adapter turns that into Codex's `mcp_servers.vscode`
+ * session's MCP server, and the adapter turns that into Codex's `mcp_servers.hub`
  * entry, which carries no `tool_timeout_sec`. Naming the server here does not add a
  * timeout to it: the adapter replaces `mcp_servers` of the session config whole. The
  * timeout comes from the `config.toml` of the agent's home instead (see `codexHome.ts`),
@@ -190,7 +190,7 @@ function writeBaseInstructions(codexHome: string | undefined): string | undefine
 		return undefined;
 	}
 	const file = path.join(codexHome, 'base-instructions.md');
-	fs.writeFileSync(file, HOST_IDENTITY);
+	fs.writeFileSync(file, AGENT_BASE_IDENTITY);
 	return file;
 }
 
@@ -237,10 +237,6 @@ export const codexAdapter: AgentAdapter = {
 	clientCapabilities: { elicitation: { url: {} } },
 	settings: [...REGISTRY.commonSettings, ...registry.settings],
 	modelPolicy: codexModelPolicy,
-	systemPrompt: {
-		toolAccess: 'The tools whose names start with `mcp__vscode__` are VS Code\'s own and act on the user\'s workspace.',
-		listRequiredArguments: false,
-	},
 	usage: codexUsage,
 	sessionPolicy,
 	mergeConfig,

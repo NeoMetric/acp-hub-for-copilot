@@ -25,7 +25,6 @@ const adapter: AgentAdapter = {
 	auth: [],
 	settings: [],
 	modelPolicy: {} as AgentAdapter['modelPolicy'],
-	systemPrompt: { toolAccess: '', listRequiredArguments: false },
 };
 
 function memoryState() {

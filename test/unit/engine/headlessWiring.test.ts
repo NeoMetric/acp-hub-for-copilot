@@ -28,7 +28,6 @@ function mockAdapter(mode = 'normal', usage?: AgentAdapter['usage']): AgentAdapt
 		auth: [],
 		settings: [],
 		modelPolicy: {} as AgentAdapter['modelPolicy'],
-		systemPrompt: { toolAccess: '', listRequiredArguments: false },
 		usage,
 	};
 }

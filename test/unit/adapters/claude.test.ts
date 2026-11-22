@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { claudeAdapter, modelCallUsageOf } from '../../../src/adapters/claude';
 import { claudeUsage } from '../../../src/adapters/claudeUsage';
 import type { AgentSettings, LaunchContext, SessionParamsInput } from '../../../src/core/adapter';
-import { HOST_IDENTITY } from '../../../src/core/hostIdentity';
+import { AGENT_BASE_IDENTITY } from '../../../src/core/toolServer';
 
 const STORAGE = path.join('C:', 'Users', 'Zoë Müller', 'storage', 'claude');
 
@@ -72,11 +72,6 @@ describe('claudeAdapter', () => {
 			{ kind: 'oauth-browser', label: 'Claude account (browser)', terminalCommand: ['--cli', 'auth', 'login'] },
 			{ kind: 'api-key', label: 'Anthropic API key', envVar: 'ANTHROPIC_API_KEY', keyPrefix: 'sk-ant-' },
 		]);
-	});
-
-	it('names the chat tools by their mcp__vscode__ prefix and does not list arguments', () => {
-		expect(claudeAdapter.systemPrompt.toolAccess).toBe('The tools whose names start with `mcp__vscode__` are VS Code\'s own and act on the user\'s workspace.');
-		expect(claudeAdapter.systemPrompt.listRequiredArguments).toBe(false);
 	});
 
 	it('advertises terminal sign-in and background tasks', () => {
@@ -157,7 +152,7 @@ describe('claude sessionParams', () => {
 				claudeCode: {
 					options: {
 						tools: [],
-						allowedTools: ['mcp__vscode__*'],
+						allowedTools: ['mcp__hub__*'],
 						strictMcpConfig: true,
 						settingSources: [],
 						thinking: { type: 'adaptive', display: 'summarized' },
@@ -193,10 +188,22 @@ describe('claude sessionParams', () => {
 
 	it('replaces the Claude Code prompt with a string when the setting is on', () => {
 		const replaced = claudeAdapter.sessionParams?.({ ...sessionInput, replaceSystemPrompt: true, systemPromptAppend: 'guidance' }) as { _meta: { systemPrompt: unknown } };
-		const bare = claudeAdapter.sessionParams?.({ ...sessionInput, replaceSystemPrompt: true }) as { _meta: { systemPrompt: unknown } };
 
 		expect(replaced._meta.systemPrompt).toBe('guidance');
-		expect(bare._meta.systemPrompt).toBe(HOST_IDENTITY);
+	});
+
+	it('allows only the hub tools', () => {
+		const params = claudeAdapter.sessionParams?.(sessionInput) as { _meta: { claudeCode: { options: { allowedTools: unknown } } } };
+
+		expect(params._meta.claudeCode.options.allowedTools).toEqual(['mcp__hub__*']);
+	});
+
+	// The agent treats an empty `_meta.systemPrompt` as no prompt and falls back to the Claude Code preset.
+	it('replaces the prompt with no client text when a request has no prompt', () => {
+		const bare = claudeAdapter.sessionParams?.({ ...sessionInput, replaceSystemPrompt: true }) as { _meta: { systemPrompt: unknown } };
+
+		expect(bare._meta.systemPrompt).toBe(AGENT_BASE_IDENTITY);
+		expect(bare._meta.systemPrompt).not.toMatch(/VS Code|Visual Studio|Copilot/);
 	});
 
 	it('offers the replace setting', () => {

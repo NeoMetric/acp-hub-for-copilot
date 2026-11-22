@@ -53,9 +53,5 @@ export function manifestToAdapter(entry: ManifestEntry): AgentAdapter {
 			fallbackTooltip: name => `${name} via ${entry.displayName}.`,
 			thinkingDescription: 'Controls the amount of reasoning.',
 		},
-		systemPrompt: {
-			toolAccess: 'The tools of the MCP server named vscode are VS Code tools for the current workspace.',
-			listRequiredArguments: false,
-		},
 	};
 }

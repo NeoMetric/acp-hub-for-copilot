@@ -34,7 +34,7 @@ const MANAGED_MARKER = '# Managed by ACP Hub. Delete this line to keep your own 
  * The session's own address and token replace it.
  */
 const MANAGED_CONFIG = `${MANAGED_MARKER}
-[mcp_servers.vscode]
+[mcp_servers.hub]
 url = "http://127.0.0.1:9/"
 tool_timeout_sec = ${24 * 60 * 60}
 `;

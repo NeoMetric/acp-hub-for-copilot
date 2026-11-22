@@ -37,7 +37,6 @@ const adapter: AgentAdapter = {
 	auth: [],
 	settings: [],
 	modelPolicy: {} as AgentAdapter['modelPolicy'],
-	systemPrompt: { toolAccess: '', listRequiredArguments: false },
 };
 
 /** The engine's loopback bridge as the host sees it: a call reaches the request that owns it. */

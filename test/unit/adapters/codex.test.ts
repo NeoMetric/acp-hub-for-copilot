@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { accountAdapter } from '../../../src/core/accounts';
 import { codexAdapter, mergeCodexConfig } from '../../../src/adapters/codex';
 import type { AgentSettings, LaunchContext, SessionParamsInput } from '../../../src/core/adapter';
-import { HOST_IDENTITY } from '../../../src/core/hostIdentity';
+import { AGENT_BASE_IDENTITY } from '../../../src/core/toolServer';
 
 let storage: string;
 
@@ -58,11 +58,6 @@ describe('codexAdapter', () => {
 						{ kind: 'api-key', label: 'OpenAI API key', envVar: 'CODEX_API_KEY', keyPrefix: 'sk-' },
 		]);
 	});
-
-	it('names the chat tools by their mcp__vscode__ prefix and does not list arguments', () => {
-		expect(codexAdapter.systemPrompt.toolAccess).toBe('The tools whose names start with `mcp__vscode__` are VS Code\'s own and act on the user\'s workspace.');
-		expect(codexAdapter.systemPrompt.listRequiredArguments).toBe(false);
-	});
 });
 
 describe('codex launch', () => {
@@ -78,7 +73,7 @@ describe('codex launch', () => {
 	});
 
 	it('has the adapter add the bridge to a session although the config of its home already names it', () => {
-		// Without this the adapter skips its own entry for `vscode`, and the call timeout in the config has no address to apply to.
+		// Without this the adapter skips its own entry for `hub`, and the call timeout in the config has no address to apply to.
 		expect(codexAdapter.launch(launchContext()).env.DISABLE_MCP_CONFIG_FILTERING).toBe('true');
 		expect(codexAdapter.mergeConfig?.({}, { DISABLE_MCP_CONFIG_FILTERING: 'true' }).DISABLE_MCP_CONFIG_FILTERING).toBe('true');
 	});
@@ -150,6 +145,12 @@ describe('codex mergeConfig', () => {
 		expect(fs.existsSync(path.join(storage, 'base-instructions.md'))).toBe(false);
 	});
 
+	it('writes a base identity that names no client', () => {
+		configOf({ CODEX_HOME: storage }, { replaceSystemPrompt: true });
+
+		expect(fs.readFileSync(path.join(storage, 'base-instructions.md'), 'utf8')).toBe(AGENT_BASE_IDENTITY);
+	});
+
 	it('replaces the Codex instructions with the identity line when the replace setting is on', () => {
 		const config = configOf({ CODEX_HOME: storage }, { replaceSystemPrompt: true });
 		const file = path.join(storage, 'base-instructions.md');
@@ -157,7 +158,7 @@ describe('codex mergeConfig', () => {
 		expect(config.model_instructions_file).toBe(file);
 		expect(config.skills).toEqual({ bundled: { enabled: false } });
 		expect(config.include_environment_context).toBe(false);
-		expect(fs.readFileSync(file, 'utf8')).toBe(HOST_IDENTITY);
+		expect(fs.readFileSync(file, 'utf8')).toBe(AGENT_BASE_IDENTITY);
 	});
 
 	it('refuses a CODEX_CONFIG that is not valid JSON and names it', () => {

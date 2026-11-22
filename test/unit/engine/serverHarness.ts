@@ -62,7 +62,6 @@ export function mockAdapter(options: MockAgentOptions = {}): AgentAdapter {
 		auth: [],
 		settings: [],
 		modelPolicy: options.modelPolicy ?? MOCK_POLICY,
-		systemPrompt: { toolAccess: '', listRequiredArguments: false },
 		listModels: options.listModels,
 	};
 }

@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AcpTokenUsage } from '../core/protocol';
 import type { AgentAdapter, AgentSettings, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
-import { HOST_IDENTITY } from '../core/hostIdentity';
+import { AGENT_BASE_IDENTITY, TOOL_SERVER_NAME } from '../core/toolServer';
 import { nativeSessionPolicy } from '../core/nativeSessionPolicy';
 import { REGISTRY, registryAgent } from '../core/registry';
 import type { SessionPolicy } from '../core/sessionPolicy';
@@ -56,7 +56,7 @@ function sessionParams(input: SessionParamsInput): Record<string, unknown> {
 		// Tool search is the one exception: the agent loads every tool in full when its
 		// search tool is missing, so turning tool search on keeps that one.
 		tools: stringSetting(input.settings ?? {}, 'toolSearch', 'default') === 'on' ? ['ToolSearch'] : [],
-		allowedTools: ['mcp__vscode__*'],
+		allowedTools: [`mcp__${TOOL_SERVER_NAME}__*`],
 		strictMcpConfig: true,
 		settingSources: [],
 	};
@@ -81,8 +81,8 @@ function sessionParams(input: SessionParamsInput): Record<string, unknown> {
 	const meta: Record<string, unknown> = { disableBuiltInTools: true, claudeCode };
 	if (input.replaceSystemPrompt) {
 		// A string replaces the Claude Code prompt; the agent keeps one line of its own identity.
-		// A request without tools has no prompt of its own, but must not fall back to the preset.
-		meta.systemPrompt = input.systemPromptAppend ?? HOST_IDENTITY;
+		// A request without a prompt must not fall back to the preset, which the agent does for an empty string.
+		meta.systemPrompt = input.systemPromptAppend || AGENT_BASE_IDENTITY;
 	} else if (input.systemPromptAppend) {
 		meta.systemPrompt = { append: input.systemPromptAppend };
 	}
@@ -181,10 +181,6 @@ export const claudeAdapter: AgentAdapter = {
 	],
 	settings: [...REGISTRY.commonSettings, ...registry.settings],
 	modelPolicy: claudeModelPolicy,
-	systemPrompt: {
-		toolAccess: 'The tools whose names start with `mcp__vscode__` are VS Code\'s own and act on the user\'s workspace.',
-		listRequiredArguments: false,
-	},
 	usage: claudeUsage,
 	sessionPolicy,
 	signInCompleted,

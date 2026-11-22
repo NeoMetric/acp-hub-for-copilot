@@ -224,8 +224,6 @@ export interface AgentAdapter {
 	auth: AuthMethodSpec[];
 	settings: SettingSpec[];
 	modelPolicy: ModelPolicy;
-	/** The two sentences of the session prompt that differ per agent. */
-	systemPrompt: { toolAccess: string; listRequiredArguments: boolean };
 	listModels?(session: AgentSessionInfo): ModelChoice[];
 	usage?: UsageSource;
 	/** Whether the token counts the agent reports tell what the prompt cache served; `false` for one whose cache counts are always 0, so no hit rate is claimed. */

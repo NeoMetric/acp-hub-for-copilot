@@ -26,7 +26,6 @@ const adapter: AgentAdapter = {
 	auth: [],
 	settings: [],
 	modelPolicy: {} as AgentAdapter['modelPolicy'],
-	systemPrompt: { toolAccess: '', listRequiredArguments: false },
 };
 
 /** A tool the host offers, which a chat needs for its session to be reusable. */

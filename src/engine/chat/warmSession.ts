@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { AgentAdapter } from '../../core/adapter';
+import { TOOL_SERVER_NAME } from '../../core/toolServer';
 import type { AcpMcpHttpServer, AgentSession } from '../acp/protocol';
 import type { AgentApi, BridgeEndpoint, ToolBridge } from './types';
 
@@ -11,7 +12,7 @@ import type { AgentApi, BridgeEndpoint, ToolBridge } from './types';
 export function bridgeServer(endpoint: BridgeEndpoint): AcpMcpHttpServer {
 	return {
 		type: 'http' as const,
-		name: 'vscode',
+		name: TOOL_SERVER_NAME,
 		url: endpoint.url,
 		headers: [{ name: 'Authorization', value: `Bearer ${endpoint.token}` }],
 	};

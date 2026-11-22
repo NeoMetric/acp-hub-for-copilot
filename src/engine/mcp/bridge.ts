@@ -6,6 +6,7 @@
 import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { TOOL_SERVER_NAME } from '../../core/toolServer';
 import { Emitter, type CancellationToken, type Disposable } from '../acp/emitter';
 import type { ToolDef } from '../model/chat';
 import type { Log } from '../ports/host';
@@ -503,7 +504,7 @@ export class McpBridge implements Disposable {
 		return {
 			protocolVersion,
 			capabilities: { tools: { listChanged: true } },
-			serverInfo: { name: 'vscode', version: '1.0.0' },
+			serverInfo: { name: TOOL_SERVER_NAME, version: '1.0.0' },
 		};
 	}
 

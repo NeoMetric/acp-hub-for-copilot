@@ -3,8 +3,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AcpAuthMethod } from '../core/protocol';
 import type { AgentAdapter, AgentSettings, InstallContext, LaunchContext, LaunchSpec, SessionParamsInput } from '../core/adapter';
-import { HOST_IDENTITY } from '../core/hostIdentity';
 import { REGISTRY, registryAgent } from '../core/registry';
+import { AGENT_BASE_IDENTITY, TOOL_SERVER_NAME } from '../core/toolServer';
 import { vendorOf } from '../core/vendors';
 import { AGY_VERSION, AgyInstaller } from './googleCli';
 import { googleForker } from './googleFork';
@@ -54,11 +54,11 @@ export interface CustomAgentOptions {
 
 /** The `agent.md` of {@link CUSTOM_AGENT}. */
 export function customAgentFile(options: CustomAgentOptions): string {
-	const lines = ['---', `name: ${CUSTOM_AGENT}`, 'description: Created by the ACP Hub for Copilot extension to run chats on the chat\'s own tools.'];
+	const lines = ['---', `name: ${CUSTOM_AGENT}`, 'description: Created by ACP Hub to run chats on the client\'s own tools.'];
 	if (options.noBuiltInTools) {
 		lines.push('tools: []');
 	}
-	lines.push('---', '', options.replacePrompt ? HOST_IDENTITY : ANTIGRAVITY_PERSONA);
+	lines.push('---', '', options.replacePrompt ? AGENT_BASE_IDENTITY : ANTIGRAVITY_PERSONA);
 	return `${lines.join('\n')}\n`;
 }
 
@@ -71,9 +71,9 @@ function writeCustomAgent(geminiHome: string, options: CustomAgentOptions): void
 
 /**
  * `agy acp` takes no list of tools to turn off, so the model is told instead. The chat tools are
- * listed to it as `mcp_vscode_<name>`.
+ * listed to it as `mcp_hub_<name>`.
  */
-const BUILT_IN_TOOLS_OFF = 'Your own built-in tools are turned off for this chat: use only the `mcp_vscode_*` tools.';
+const BUILT_IN_TOOLS_OFF = `Your own built-in tools are turned off for this chat: use only the \`mcp_${TOOL_SERVER_NAME}_*\` tools.`;
 
 /** A program found on disk, and whether it needs a shell to start. */
 export interface ResolvedCommand {
@@ -257,10 +257,6 @@ export const googleAdapter: AgentAdapter = {
 	modelPolicy: googleModelPolicy,
 	sessionPolicy: googleSessionPolicy,
 	usage: googleUsage,
-	systemPrompt: {
-		toolAccess: 'The tools of the MCP server named `vscode` are VS Code\'s own and act on the user\'s workspace; you see them as `mcp_vscode_<name>`.',
-		listRequiredArguments: true,
-	},
 	// `agy acp` sends no usage_update and reports only the sums of a turn over ACP; its own record of
 	// the conversation has the tokens of each model call.
 	lastModelCall: async sessionId => {

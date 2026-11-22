@@ -36,6 +36,14 @@ describe('WarmSession', () => {
 		expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/work', ephemeral: true }));
 	});
 
+	it('names the tool server hub', async () => {
+		const { session, createSession } = warmSession(true);
+
+		await session.ensure();
+
+		expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ mcpServers: [expect.objectContaining({ name: 'hub' })] }));
+	});
+
 	it('reuses the open session instead of opening another', async () => {
 		const { session, createSession } = warmSession(false);
 

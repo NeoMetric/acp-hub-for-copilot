@@ -47,7 +47,6 @@ function fakeAdapter(): AgentAdapter {
 		auth: [],
 		settings: [{ key: 'model', type: 'string', label: 'Model', description: '', default: 'default-model' }],
 		modelPolicy: {} as AgentAdapter['modelPolicy'],
-		systemPrompt: { toolAccess: '', listRequiredArguments: false },
 	};
 }
 

@@ -1,10 +1,10 @@
 export const allowedAdapterCoreImports = [
 	'adapter',
 	'agentClient',
-	'hostIdentity',
 	'logging',
 	'nativeSessionPolicy',
 	'registry',
+	'toolServer',
 	'sessionPolicy',
 	'vendors',
 	'sessionFingerprint',
