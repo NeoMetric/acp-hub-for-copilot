@@ -4,6 +4,8 @@ import type { ManifestEntry } from '../adapters/generic';
 export interface RegistryAgent {
 	id: string;
 	displayName: string;
+	mcpToolName?: string;
+	listRequiredArguments?: boolean;
 	settings: SettingSpec[];
 	install?: ManifestEntry['install'];
 	launch?: ManifestEntry['launch'];
