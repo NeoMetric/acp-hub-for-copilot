@@ -308,6 +308,9 @@ cache figures:
 - Google gets no special treatment; its replace setting carries a warning.
 - Named sections with a generic section diff (approach 2).
 - One-time misses for sessions open or saved at install time are accepted.
+- The tool server is renamed from `vscode` to `hub` in the server, for every
+  client; the one-time tool-list change falls on the same install-time change
+  as the prompt.
 
 ## My calls (check these)
 
@@ -315,8 +318,6 @@ cache figures:
   instruction-file pointers, then tool arguments, then the server's reply
   rules. That is today's order with the intro replaced by the notes.
 - The retraction wording: "The "<label>" instructions no longer apply."
-- The tool server is renamed from `vscode` to a fixed neutral `hub` in the
-  server, for every client; the miss falls on the same install-time change.
 - Sections carry a `fixed` flag so that only Copilot's guidance is diffed and
   hashed, as today.
 - The extension reads the replace setting from `config.json` per request;
