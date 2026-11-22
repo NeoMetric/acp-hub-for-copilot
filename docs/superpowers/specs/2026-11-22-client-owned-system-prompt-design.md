@@ -120,21 +120,29 @@ systemPrompt?: {
 		id: string;      // stable key the server diffs by, e.g. 'notes', 'guidance', 'mode:Agent'
 		label?: string;  // how a removed section is named to the model, e.g. 'Agent mode'
 		text: string;
-		fixed?: boolean; // used only when a session opens: never diffed mid-chat, not in the guidance hash
+		kind?: 'fixed' | 'chat';
 	}>;
 };
 ```
 
+- No `kind`: in the opening prompt, compared on every request, part of the
+  hash that matches saved sessions.
+- `fixed`: in the opening prompt, used only when a session opens: never
+  compared later, not hashed.
+- `chat`: names this chat only. Its text goes in the message that opens a
+  session (ahead of `chatContext`), never in the prompt, so the prompt stays
+  the same for every chat. It is compared on every request like an unmarked
+  section, but left out of the hash that matches sessions across chats.
 - Section order is the byte order of the opening prompt. The server joins the
   texts with a blank line and adds nothing.
-- `fixed` reproduces today's split: Copilot's guidance (and its mode) is
-  compared on every request and hashed for resume/fork matching; the notes,
-  instruction-file pointers and tool arguments are only read when a session
-  opens, as the server-built parts are today. So a new workspace file or a
-  changed tool set never sends a change message, and resume/fork matching
-  is unchanged.
-- `chatContext` (existing) carries the per-chat parts as well as the
-  chat-wide context; the server forwards it once when a session opens, as now.
+- This reproduces today's split: Copilot's guidance (and its mode) is
+  compared and hashed; the per-chat parts sit outside the prompt but changes
+  to them are still told; the notes, instruction-file pointers and tool
+  arguments are only read when a session opens, as the server-built parts
+  are today. So a new workspace file or a changed tool set never sends a
+  change message.
+- `chatContext` (existing) carries the chat-wide context; the server forwards
+  it once when a session opens, after the `chat` sections, as now.
 - `systemGuidance` (existing) is still accepted, as one unlabelled section
   with id `guidance`, for older clients. A stock OpenAI client's system
   message is treated the same way.
@@ -154,9 +162,9 @@ systemPrompt?: {
 - `splitChatGuidance`, `SESSION_CONTEXT_BLOCK`, `SESSION_FOLDER_ID`,
   `MODE_LINE`, `MODE_BLOCK` and the `session-state/` folding in
   `squashGuidance` leave the server. Case and whitespace folding stay (generic).
-- Generic section diff replaces the mode-aware line diff. Only sections not
-  marked `fixed` are compared, and only they make up the guidance hash and
-  line hashes stored for a saved session:
+- Generic section diff replaces the mode-aware line diff. Sections not marked
+  `fixed` are compared and make up the line hashes stored for a saved
+  session; of those, the ones not marked `chat` make up the guidance hash:
   - a section id that disappeared: if it has a label, "The "<label>"
     instructions no longer apply."; without a label, today's gone-lines
     preview;
@@ -228,11 +236,11 @@ Per request, in `bodyOf()` (`requestMapping.ts`), which knows `agentId`:
    `[copilot_cache_control:…]` markers removed. Replace off: apply
    `stripIdentity`. Replace on: keep everything.
 3. Move the per-chat parts (`<session_context>` blocks, lines naming
-   `session-state/<uuid>`) out into `chatContext`, ahead of the chat-wide
-   context, exactly as `splitChatGuidance` does today.
-4. Split what remains into sections: the mode line and its
-   `<modeInstructions>` block as `mode:<name>` labelled `<name> mode`; the
-   rest as `guidance`. Sections keep their order in Copilot's prompt.
+   `session-state/<uuid>`) into a `chat` section, as `splitChatGuidance`
+   picks them out today.
+4. Split what remains into sections: the rest as `guidance`, then the mode
+   line and its `<modeInstructions>` block as `mode:<name>` labelled
+   `<name> mode`, right after it.
 5. Add the extension's functional notes, in this order around the guidance:
    - `notes` (first): how the tools are named for this agent (from the
      registry's tool-name format and the server's `hub` name), and that a tool result can end
@@ -243,13 +251,13 @@ Per request, in `bodyOf()` (`requestMapping.ts`), which knows `agentId`:
      `customFilesSections` builds them today. Discovery moves here, using
      `vscode.workspace.isTrusted` and VS Code's own location settings. The
      extension cannot tell when a session opens, so it builds this section
-     for every request; the result is cached and rebuilt only when a watched
-     instruction or prompt file, a location setting or the workspace trust
-     changes;
+     for every request; the file list is cached per folder set for 5 seconds,
+     so identical files give identical bytes and a change shows within 5 s;
    - `tool-arguments` (last, only where the registry says so): the required
      arguments per tool, sorted by name, from `options.tools` schemas.
 6. Mark `notes`, `instruction-files` and `tool-arguments` as `fixed`, and
-   send `systemPrompt.sections` and `chatContext`.
+   send `systemPrompt.sections` and `chatContext` (the chat-wide context, as
+   today).
 
 `IDENTITY_PATTERNS` / `stripIdentity`, the content of the notes, and the tag
 knowledge above move under `src/hosts/vscode`. The doc comment in
@@ -271,7 +279,8 @@ Tests (they would fail without the change):
 
 - Extension: for each mode (on/off) and each agent's tool-name format, two
   request fixtures that differ only in session id and session folder give
-  identical `sections`, and the per-chat parts land in `chatContext`.
+  identical sections apart from the `chat` section, which holds the per-chat
+  parts; the server's opening prompt for both is byte-identical.
 - Extension: shuffled tool order gives identical `tool-arguments` text.
 - Extension: replace on keeps Copilot's identity and content-policy lines;
   replace off removes them and keeps everything else, the notes included.
@@ -318,12 +327,20 @@ cache figures:
   instruction-file pointers, then tool arguments, then the server's reply
   rules. That is today's order with the intro replaced by the notes.
 - The retraction wording: "The "<label>" instructions no longer apply."
-- Sections carry a `fixed` flag so that only Copilot's guidance is diffed and
-  hashed, as today.
+- Sections carry a `kind` (`fixed`, `chat`) so that what is diffed, hashed
+  and kept out of the prompt matches today.
+- The mode section goes right after the guidance rather than where Copilot
+  wrote it; the order is fixed, so caching holds.
+- A forked chat is told its own session folder through the change message
+  (the server no longer folds the folder id). Today it is never told; this
+  costs a few tokens after the cached prefix.
 - The extension reads the replace setting from `config.json` per request;
   a server started with another config folder is an accepted limitation.
-- Instruction-file discovery in the extension is cached and rebuilt on file,
-  setting or trust changes.
+- Instruction-file discovery in the extension is a 5-second cache per folder
+  set rather than file watchers: simpler, and just as deterministic.
+- Google's custom agent keeps its on-disk id `acp-hub-copilot`; renaming it
+  could orphan the agent the CLI already knows. Its description text becomes
+  neutral.
 - The tool-naming format and the required-arguments flag go in the registry
   as agent knowledge.
 - `API_VERSION` is bumped to 2; `systemGuidance` stays accepted for older
