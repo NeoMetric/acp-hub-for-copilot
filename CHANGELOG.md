@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- Fix the agent stopping partway through a reply, as if you had interrupted it, when a background agent or command finished while its tools ran. Copilot then adds a notice (`<system_notification>`) and reads the finished agent itself; the hub took that for a new message from you and cancelled the turn. The turn now goes on, and the notice and what Copilot read reach the agent with its next tool result, as they would reach a native model. This applies to every agent. The log line `Handing N part(s) the host added after its notice` shows it happening.
+
 ## 1.1.0
 
 - **Cache misses** on the usage card now counts both kinds, each with its own token figure: unexpected (lost mid-chat) and after idle (the cache expired, which is normal).
