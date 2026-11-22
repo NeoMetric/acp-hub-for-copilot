@@ -682,6 +682,36 @@ describe('a server that runs on its own', () => {
 		}
 	});
 
+	it('replaces a server that speaks a lower API version, which an update left running', async () => {
+		const port = await freePort();
+		// The replacement inherits the version of this process, so it is not older than the window.
+		vi.stubEnv('ACP_HUB_VERSION', '0.0.2');
+		try {
+			startStub({ port, env: { ACP_HUB_API_VERSION: '1' } });
+			await waitForHealth(port);
+			const link = makeLink({ root: storeRoot(), port, detached: true, version: '0.0.2' });
+
+			readyOf(await link.ensure());
+
+			const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json() as { apiVersion: number };
+			expect(health.apiVersion).toBe(2);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it('does not replace a server that speaks a higher API version', async () => {
+		const port = await freePort();
+		startStub({ port, env: { ACP_HUB_API_VERSION: '3' } });
+		await waitForHealth(port);
+		const spawn = vi.fn();
+		const link = makeLink({ root: storeRoot(), port, detached: true, version: '0.0.2', spawn: spawn as unknown as ServerLinkDeps['spawn'] });
+
+		expect(reasonOf(await link.ensure())).toContain('apiVersion 3');
+		expect(spawn).not.toHaveBeenCalled();
+		expect(await answers(port)).toBe(true);
+	});
+
 	it('keeps a server of a newer version, which another window may have started', async () => {
 		const port = await freePort();
 		startStub({ port, env: { ACP_HUB_VERSION: '0.0.3' } });

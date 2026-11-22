@@ -111,6 +111,28 @@ describe('copilotSections', () => {
 		expect(sections[1].text).toContain(ID_ONE);
 	});
 
+	it('moves a session folder line with backslashes to the chat section', () => {
+		const sections = copilotSections(`rules\nSession folder: C:\\Users\\me\\.copilot\\session-state\\${ID_ONE}\nmore rules`);
+
+		expect(sections.map(section => section.id)).toEqual(['guidance', 'chat']);
+		expect(sections[0].text).toBe('rules\nmore rules');
+		expect(sections[1].text).toContain(ID_ONE);
+	});
+
+	it('lists the same files in every chat, whatever a chat names in its own block', () => {
+		const files = [file('instructions', 'ts', { applyTo: '**/*.ts' })];
+		const build = (chatText: string) => promptSectionsOf({
+			agentId: 'claude',
+			guidance: `${hostPrompt()}\n<session_context>\n${chatText}\n</session_context>`,
+			files,
+			tools: [],
+		})!;
+		const [naming, plain] = [build(`Plan: /c/ts ${ID_ONE}`), build(`Plan: none ${ID_TWO}`)];
+
+		expect(naming.find(section => section.id === 'instruction-files')).toBeDefined();
+		expect(naming.filter(section => section.id !== 'chat')).toEqual(plain.filter(section => section.id !== 'chat'));
+	});
+
 	it('splits the mode into a labelled section after the guidance', () => {
 		const sections = copilotSections('Rules.\nYou are currently running in "Agent" mode.\n<modeInstructions>x</modeInstructions>\nMore rules.');
 

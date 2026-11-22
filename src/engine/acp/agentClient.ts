@@ -360,7 +360,7 @@ export class AgentClient implements Disposable {
 				this.captureAuthState(error);
 				// Without the options the agent would run with its own tools and no Copilot guidance, so no session is created.
 				if (method === 'session/new' && Object.keys(extra).length > 0 && error instanceof RpcError && error.code === INVALID_PARAMS_CODE) {
-					throw new Error(`The ${this.adapter.displayName} agent refused the session options that turn off its built-in tools and carry the Copilot guidance (${describeError(error)}), so no session was started. Update the agent.`, { cause: error });
+					throw new Error(`The ${this.adapter.displayName} agent refused the session options that turn off its built-in tools and carry the client's prompt (${describeError(error)}), so no session was started. Update the agent.`, { cause: error });
 				}
 				throw this.adapter.mapError?.(error) ?? error;
 			}

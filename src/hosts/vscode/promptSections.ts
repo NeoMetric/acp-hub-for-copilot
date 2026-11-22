@@ -29,7 +29,7 @@ export const TOOL_ARGUMENTS_CHAR_BUDGET = 4_000;
 export const CUSTOM_FILES_CHAR_BUDGET = 10_000;
 
 /** The id a host writes into the path of the session folder of a chat. */
-const SESSION_FOLDER_ID = /session-state\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i;
+const SESSION_FOLDER_ID = /session-state[\\/][0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i;
 const SESSION_CONTEXT_BLOCK = /<session_context>[\s\S]*?<\/session_context>/g;
 /** The line in which Copilot names the mode the chat runs in, and the block that holds its instructions. */
 const MODE_LINE = /^You are currently running in "(.+)" mode\./;
@@ -230,7 +230,9 @@ export function promptSectionsOf(input: {
 	readonly tools: readonly PromptTool[];
 }): AcpPromptSection[] | undefined {
 	const copilot = copilotSections(input.guidance);
-	const files = instructionFilesSection(input.files, input.guidance);
+	// The chat section names this chat alone, so what it mentions must not change which files are listed.
+	const shared = copilot.filter(section => section.kind !== 'chat').map(section => section.text).join('\n\n');
+	const files = instructionFilesSection(input.files, input.guidance === undefined ? undefined : shared);
 	const toolArguments = registryAgentOf(input.agentId)?.listRequiredArguments ? toolArgumentsSection(input.tools) : undefined;
 	if (copilot.length === 0 && !files && !toolArguments) {
 		return undefined;

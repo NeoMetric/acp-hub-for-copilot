@@ -918,6 +918,7 @@ describe('the session prompt of a new chat', () => {
 		const next = agent.prompts[1].texts.join('\n');
 		expect(next).toContain('The "Agent mode" instructions no longer apply.');
 		expect(next).toContain('mode:Ask');
+		expect(next, 'the text of the retired mode is not repeated').not.toContain('mode:Agent');
 	});
 
 	it('gives a request with no tools no prompt and no chat section', async () => {

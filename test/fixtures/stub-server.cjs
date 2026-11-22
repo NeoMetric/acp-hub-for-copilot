@@ -12,12 +12,13 @@
 //   ACP_HUB_SLOW_MODELS_MS  how long `/v1/models` takes, standing in for a cold
 //                           server that wakes every agent before it answers
 //   ACP_HUB_VERSION         the version `/health` names, '0.0.0-stub' by default
+//   ACP_HUB_API_VERSION     the apiVersion `/health` names, 2 by default
 // `POST /shutdown` closes it, as on the real server.
 
 const http = require('node:http');
 
 const NAME = 'acp-hub';
-const API_VERSION = 2;
+const API_VERSION = Number(process.env.ACP_HUB_API_VERSION || 2);
 const TOKEN = process.env.ACP_HUB_TOKEN ? process.env.ACP_HUB_TOKEN.trim() : undefined;
 const SLOW_MODELS_MS = Number(process.env.ACP_HUB_SLOW_MODELS_MS || 0);
 const EXIT_WITH_PARENT = process.argv.indexOf('--exit-with-parent') !== -1;

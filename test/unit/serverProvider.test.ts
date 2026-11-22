@@ -12,9 +12,9 @@ import type { StateStore } from '../../src/engine/ports/state';
 import type { ModelWire } from '../../src/hosts/http/wire';
 import type { LinkState } from '../../src/hosts/vscode/serverLink';
 import { modelsStateKey } from '../../src/core/modelInfo';
-import { ServerProvider } from '../../src/hosts/vscode/serverProvider';
+import { ServerProvider, type ServerProviderDeps } from '../../src/hosts/vscode/serverProvider';
 import { LanguageModelDataPart, LanguageModelTextPart, LanguageModelThinkingPart, LanguageModelToolCallPart } from './vscode-mock';
-import { user } from './messages';
+import { system, user } from './messages';
 
 const servers: http.Server[] = [];
 
@@ -161,7 +161,7 @@ async function waitUntil(ready: () => boolean, what: string, timeoutMs = 3_000):
 const logs: string[] = [];
 const log: Log = message => { logs.push(message); };
 
-function providerOf(overrides: { agentId?: string; link?: FakeLink; state?: StateStore; windowFolder?: string; log?: Log; isOffered?: () => boolean | undefined } = {}): ServerProvider {
+function providerOf(overrides: { agentId?: string; link?: FakeLink; state?: StateStore; windowFolder?: string; log?: Log; isOffered?: () => boolean | undefined; prompt?: ServerProviderDeps['prompt'] } = {}): ServerProvider {
 	return new ServerProvider({
 		isOffered: overrides.isOffered,
 		agentId: overrides.agentId ?? 'claude',
@@ -170,7 +170,7 @@ function providerOf(overrides: { agentId?: string; link?: FakeLink; state?: Stat
 		state: overrides.state ?? new MemoryState(),
 		log: overrides.log ?? log,
 		windowFolder: () => overrides.windowFolder ?? 'c:\\window',
-		prompt: { replace: () => false, files: async () => [] },
+		prompt: overrides.prompt ?? { replace: () => false, files: async () => [] },
 	});
 }
 
@@ -416,6 +416,51 @@ describe('ServerProvider chat', () => {
 		// The picker's id is bare; the body names the agent beside it, never twice.
 		expect(body.model).toBe('claude/sonnet');
 		expect(body.acp?.cwd).toBe('c:\\window');
+	});
+
+	describe('the system prompt it sends', () => {
+		type Sent = { acp?: { systemPrompt?: { sections: Array<{ id: string; text: string }> } } };
+
+		async function sentFor(prompt: ServerProviderDeps['prompt'], logger: Log = log): Promise<Sent> {
+			let body: Sent = {};
+			const baseUrl = await serverWith([], (request, response) => {
+				let text = '';
+				request.on('data', chunk => { text += String(chunk); });
+				request.on('end', () => {
+					body = JSON.parse(text) as Sent;
+					response.writeHead(200, { 'content-type': 'text/event-stream' });
+					send(response, { content: 'ok' });
+					send(response, {}, 'stop');
+					end(response);
+				});
+			});
+			const provider = providerOf({ link: new FakeLink(() => ready(baseUrl)), prompt, log: logger });
+
+			await provider.provideLanguageModelChatResponse(modelInfo, [system('Rules.'), ...messages], options, recorded().progress, token());
+
+			return body;
+		}
+
+		it('passes the replace setting and the files it was given into the request', async () => {
+			const files = [{ kind: 'instructions' as const, name: 'ts', description: '', file: '/c/ts.instructions.md', applyTo: '**/*.ts' }];
+			const prompt = { replace: (agentId: string) => agentId === 'claude', files: async () => files };
+
+			const sections = (await sentFor(prompt)).acp?.systemPrompt?.sections ?? [];
+
+			expect(sections.map(section => section.text).join('\n')).toContain('You are running inside Visual Studio Code');
+			expect(sections.find(section => section.id === 'instruction-files')?.text).toContain('/c/ts.instructions.md');
+		});
+
+		it('still sends the request, with a warning, when the files cannot be found', async () => {
+			const lines: string[] = [];
+			const prompt = { replace: () => false, files: async (): Promise<never> => { throw new Error('no such folder'); } };
+
+			const sections = (await sentFor(prompt, (message, level) => { lines.push(`${level}:${message}`); })).acp?.systemPrompt?.sections ?? [];
+
+			expect(sections.length).toBeGreaterThan(0);
+			expect(sections.some(section => section.id === 'instruction-files')).toBe(false);
+			expect(lines.some(line => line.startsWith('warn:') && line.includes('no such folder'))).toBe(true);
+		});
 	});
 
 	it('fills a missing detail of the usage with zero', async () => {

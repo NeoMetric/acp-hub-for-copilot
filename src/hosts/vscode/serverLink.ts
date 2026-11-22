@@ -687,6 +687,10 @@ export class ServerLink {
 			const called = typeof health.name === 'string' ? ` (it calls itself "${health.name}")` : '';
 			return { kind: 'incompatible', reason: `The server on port ${this.port} is not ACP Hub${called}; stop that process.` };
 		}
+		// A server of an earlier API that an update left running is replaced like an older version; a newer one is not ours to stop.
+		if (this.deps.detached && typeof health.apiVersion === 'number' && health.apiVersion < API_VERSION) {
+			return { kind: 'older', version: typeof health.version === 'string' ? health.version : `with apiVersion ${health.apiVersion}` };
+		}
 		if (health.apiVersion !== API_VERSION) {
 			return { kind: 'incompatible', reason: `The server on port ${this.port} answers /health with apiVersion ${health.apiVersion ?? 'none'} and this window speaks ${API_VERSION}; update that server.` };
 		}

@@ -103,7 +103,13 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 				throw new ServerChatError(`Could not reach the server: ${state.reason}`);
 			}
 			const reached = performance.now();
-			const files = await this.deps.prompt.files(workspaceFoldersOf(messages));
+			// Pointers to instruction files are a help; a chat still starts without them.
+			let files: readonly CustomFile[] = [];
+			try {
+				files = await this.deps.prompt.files(workspaceFoldersOf(messages));
+			} catch (error) {
+				this.deps.log(`Could not look for instruction files: ${messageOf(error)}`, 'warn');
+			}
 			const body = bodyOf(model, this.deps.agentId, messages, options, this.deps.windowFolder(), { replace: this.deps.prompt.replace(this.deps.agentId), files });
 			const built = performance.now();
 			this.deps.log(`Reaching the server took ${Math.round(reached - asked)} ms and building the request ${Math.round(built - reached)} ms.`, 'debug');
