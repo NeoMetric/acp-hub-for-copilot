@@ -175,8 +175,8 @@ describe('the headless host', () => {
 	it('hands the request its own guidance and leaves forwarded text alone', () => {
 		const host = hostAt(storeRoot());
 
-		expect(host.guidanceOf({ ...chat(), systemGuidance: 'be brief' })).toBe('be brief');
-		expect(host.guidanceOf(chat())).toBeUndefined();
+		expect(host.promptOf({ ...chat(), systemPrompt: [{ id: 'guidance', text: 'be brief' }] })).toEqual([{ id: 'guidance', text: 'be brief' }]);
+		expect(host.promptOf(chat())).toBeUndefined();
 		expect(host.stripHostSections('<kept>text</kept>')).toBe('<kept>text</kept>');
 		expect(host.chatWideContextOf([])).toBeUndefined();
 	});

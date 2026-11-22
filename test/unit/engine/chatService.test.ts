@@ -50,7 +50,7 @@ function fakeHost(): HostPort {
 		settings: { get: () => undefined },
 		storageRoot: '',
 		chatIdentity: request => ({ id: request.chatId, cwd: process.cwd(), workspaceFolders: [] }),
-		guidanceOf: () => undefined,
+		promptOf: () => undefined,
 		stripHostSections: text => text,
 		chatWideContextOf: () => undefined,
 		executeTool: (): Promise<ToolResult> => Promise.resolve({ content: [] }),

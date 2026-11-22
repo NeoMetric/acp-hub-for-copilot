@@ -73,7 +73,7 @@ describe('engine boundaries', () => {
 	});
 
 	/** The chat modules that live in the engine. */
-	for (const name of ['cache', 'sessionStore', 'sessionFingerprint', 'usage', 'systemPrompt']) {
+	for (const name of ['cache', 'sessionStore', 'sessionFingerprint', 'usage', 'promptSections']) {
 		it(`holds ${name}.ts without reaching for a host`, () => {
 			expect(existsSync(`src/engine/chat/${name}.ts`), `src/engine/chat/${name}.ts exists`).toBe(true);
 			assertEngineIsHostFree();

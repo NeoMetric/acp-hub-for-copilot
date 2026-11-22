@@ -11,7 +11,7 @@ import { AdapterNotInstalledError, AgentClient, type AgentChange, type AgentClie
 import { isAuthRequiredError } from '../acp/rpc';
 import { withScope } from '../../core/logging';
 import { effectiveToolWaitMs, policyOf, type SessionPolicy } from '../../core/sessionPolicy';
-import type { ChatRequest, ToolDef, ToolResult } from '../model/chat';
+import type { ChatRequest, PromptSection, ToolDef, ToolResult } from '../model/chat';
 import type { StreamEvent } from '../model/stream';
 import { DEFAULT_CHAT_OWNER, type Log, type HostPort } from '../ports/host';
 import { buildPromptBlocks } from './assemble';
@@ -20,10 +20,11 @@ import { ChatError } from './ChatError';
 import { countsOf } from './checkpoints';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './heldCalls';
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, maxChatSessions, WARM_SESSION_IDLE_MS } from './idle';
-import { describeToolChange, fingerprintPreview, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, splitChatGuidance, toolChangeOf, toolsDiffer } from './keys';
+import { describeToolChange, fingerprintPreview, toolChangeOf, toolsDiffer } from './keys';
 import { carriesToolResults, DEFAULT_TRANSCRIPT_OPTIONS, diverged, HUB_CALL_ID_PREFIX, lastUserMessageIndex, persistentFingerprints, settledPrefixOf, skillContextAfterReply, userWordsAfterReply, type TranscriptOptions } from './messages';
 import { acpModelValue, effortFor } from './modelOptions';
 import { PromptArchive } from './promptArchive';
+import { chatPartOf, mergePromptChange, openingPromptOf, promptChangeOf, promptsDiffer, savedSectionsOf, sectionsHashOf } from './promptSections';
 import { findEditFork, findReusable, promptHashOf } from './reuse';
 import { applyEffort, applyModel, describe, switchModelInPlace } from './sessionOptions';
 import { SavedSessionStore, toolsHashOf } from './sessionStore';
@@ -57,8 +58,6 @@ export interface ChatServiceDeps {
 	createClient?(adapter: AgentAdapter, ctx: LaunchContext, deps: AgentClientDeps): AgentApi;
 	/** What the ACP client needs besides the launch context. */
 	readonly client?: { readonly clientVersion?: string; onSignInUrl?(prompt: SignInUrlPrompt | undefined): void };
-	/** Turns the request's tools and guidance into the prompt a new session opens with. */
-	buildSessionPrompt?(tools: readonly ToolDef[], folders: readonly string[] | undefined, guidance: string | undefined): Promise<string | undefined>;
 	/** The transcript settings the host's own configuration holds. */
 	transcriptOptions?(): TranscriptOptions;
 	/** Records the request for inspection, when the agent's settings ask for it. */
@@ -313,7 +312,7 @@ export class ChatService {
 		lap('agent client ready');
 
 		const tools = request.tools;
-		const context: ChatContext = { folders: identity.workspaceFolders.length > 0 ? identity.workspaceFolders : undefined, cwd: identity.cwd, guidance: this.deps.host.guidanceOf(request) };
+		const context: ChatContext = { folders: identity.workspaceFolders.length > 0 ? identity.workspaceFolders : undefined, cwd: identity.cwd, prompt: this.deps.host.promptOf(request) };
 		this.deps.dumpRequest?.(request, this.settings);
 		const effort = effortFor(request.effort, this.settings);
 		const toolNames = tools.map(tool => tool.name);
@@ -405,8 +404,8 @@ export class ChatService {
 			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, await this.canFork(client), this.log) : undefined;
 			session = await this.createChatSession(key, client, identity.owner ?? DEFAULT_CHAT_OWNER, modelId, tools, context, reuse, effort, lap);
 			lap('chat session created');
-		} else if (tools.length > 0 && guidanceDiffers(session.context.guidance, context.guidance)) {
-			this.sendGuidanceChange(key, session, context.guidance);
+		} else if (tools.length > 0 && promptsDiffer(session.context.prompt, context.prompt)) {
+			this.sendPromptChange(key, session, context.prompt);
 		}
 		this.applyTools(session, tools);
 		await applyEffort(client, this.deps.adapter.modelPolicy, session, effort, this.log);
@@ -450,10 +449,10 @@ export class ChatService {
 		}
 
 		const blocks = buildPromptBlocks(messages, startIndex, lastUser, restoreContext, session, this.log, transcriptOptions, {
-			// The context of the chat is carried only by the prompt that opens a session. What the guidance says
-			// about this chat alone, such as its session folder, is left out of the session prompt to keep it
-			// the same for every chat, so it comes here, after the part that is cached.
-			chatContext: restoreContext ? [session.hasPrompt ? splitChatGuidance(session.context.guidance).perChat : undefined, this.deps.host.chatWideContextOf(messages.slice(0, lastUser))].filter(Boolean).join('\n\n') || undefined : undefined,
+			// The context of the chat is carried only by the prompt that opens a session. The sections the client
+			// marked as naming this chat alone are left out of the session prompt to keep it the same for every
+			// chat, so they come here, after the part that is cached.
+			chatContext: restoreContext ? [session.hasPrompt ? chatPartOf(session.context.prompt) : undefined, this.deps.host.chatWideContextOf(messages.slice(0, lastUser))].filter(Boolean).join('\n\n') || undefined : undefined,
 			stripHostSections: this.deps.host.stripHostSections,
 		});
 		if (blocks.length === 0) {
@@ -732,9 +731,7 @@ export class ChatService {
 			// A request that offers no tools is the host's own, such as a chat title: the
 			// agent could not read a customization file without a tool, so the prompt
 			// would only be paid for in tokens.
-			let systemPromptAppend = tools.length === 0
-				? undefined
-				: await this.buildSessionPrompt(tools, context.folders, splitChatGuidance(context.guidance).shared);
+			let systemPromptAppend = tools.length === 0 ? undefined : openingPromptOf(context.prompt);
 			lap?.(`session prompt built (${systemPromptAppend?.length ?? 0} character(s))`);
 			// The prompt leads the conversation, so a reworded one misses the cache for all of it. A policy
 			// that opens a stored conversation with the prompt it began with is sent that one; what changed
@@ -810,7 +807,7 @@ export class ChatService {
 				failures: 0,
 				lastActive: Date.now(),
 				toolsHash: toolsHashOf(toolNames),
-				guidanceHash: guidanceHashOf(context.guidance),
+				guidanceHash: sectionsHashOf(context.prompt),
 				promptHash,
 				reused,
 				guidanceChange: reused ? reuse?.guidanceChange : undefined,
@@ -994,16 +991,6 @@ export class ChatService {
 		return true;
 	}
 
-	/** A chat still starts when the customization files cannot be read; it just has no extras. */
-	private async buildSessionPrompt(tools: readonly ToolDef[], chatFolders: readonly string[] | undefined, guidance: string | undefined): Promise<string | undefined> {
-		try {
-			return await this.deps.buildSessionPrompt?.(tools, chatFolders, guidance);
-		} catch (error) {
-			this.log(`Could not build the session prompt: ${describe(error)}`, 'warn');
-			return undefined;
-		}
-	}
-
 	private evictIdleSessions(keep: string): void {
 		// The cap is per owner, so one client's burst of chats cannot close another's.
 		const counts = new Map<string, number>();
@@ -1023,20 +1010,20 @@ export class ChatService {
 	}
 
 	/**
-	 * The host describes the chat afresh with every request, and the agent keeps the
-	 * guidance it was opened with. As natively, a live session is not reopened for that:
-	 * the lines that changed go with the next prompt, and the session counts from then on
-	 * as having been told the new guidance.
+	 * The client describes the chat afresh with every request, and the agent keeps the
+	 * prompt it was opened with. A live session is not reopened for that: what changed
+	 * goes with the next prompt, and the session counts from then on as having been told
+	 * the new sections.
 	 */
-	private sendGuidanceChange(key: string, session: ChatSession, guidance: string | undefined): void {
-		const change = guidanceChangeOf(guidanceLineHashes(session.context.guidance), guidance, session.context.guidance ?? '');
+	private sendPromptChange(key: string, session: ChatSession, prompt: readonly PromptSection[] | undefined): void {
+		const change = promptChangeOf(savedSectionsOf(session.context.prompt), prompt, session.context.prompt ?? []);
 		const pending = session.guidanceChange;
-		if (change.added.length > 0 || change.removed > 0) {
-			session.guidanceChange = pending ? mergeGuidanceChange(pending, change) : change;
+		if (change.added.length > 0 || change.removed > 0 || (change.retired?.length ?? 0) > 0) {
+			session.guidanceChange = pending ? mergePromptChange(pending, change) : change;
 		}
-		const hash = guidanceHashOf(guidance);
+		const hash = sectionsHashOf(prompt);
 		this.log(`The guidance of chat ${key} changed (${session.guidanceHash} -> ${hash}): ${change.added.length} line(s) new, ${change.removed} gone; sending the change with the next prompt.`, 'debug');
-		session.context = { ...session.context, guidance };
+		session.context = { ...session.context, prompt };
 		session.guidanceHash = hash;
 	}
 

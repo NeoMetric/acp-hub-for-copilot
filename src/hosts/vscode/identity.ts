@@ -278,5 +278,5 @@ export function chatLabelOf(messages: readonly vscode.LanguageModelChatRequestMe
 /** The workspace of the chat a request belongs to; `windowCwd` is where the window's folder is. */
 export function chatContextOf(messages: readonly vscode.LanguageModelChatRequestMessage[], windowCwd: string): ChatContext {
 	const folders = workspaceFoldersOf(messages);
-	return { folders, cwd: resolveCwd(folders, windowCwd), guidance: systemGuidanceOf(messages) };
+	return { folders, cwd: resolveCwd(folders, windowCwd), prompt: undefined };
 }

@@ -6,7 +6,6 @@
 import { describe, expect, it } from 'vitest';
 import type * as vscode from 'vscode';
 import { conversationIdOf, resolveCwd, sessionKey, systemGuidanceOf, workspaceFoldersOf } from '../../src/hosts/vscode/identity';
-import { buildSystemPromptAppend } from '../../src/core/systemPrompt';
 import { assistant, system, toolCall, toolResult, user } from './messages';
 
 const options = (modelOptions?: Record<string, unknown>) => ({ modelOptions, tools: [], toolMode: 1 }) as unknown as vscode.ProvideLanguageModelChatResponseOptions;
@@ -248,7 +247,7 @@ describe('systemGuidanceOf', () => {
 		expect(guidance).toBe('<instructions>Work carefully.</instructions>');
 	});
 
-	it('leaves the content policy to the intro, which carries it once', () => {
+	it('leaves the content policy out of the guidance', () => {
 		const guidance = systemGuidanceOf([system([
 			'You are an expert AI programming assistant, working with a user in the VS Code editor.',
 			'Follow the user\'s requirements carefully & to the letter.',
@@ -258,14 +257,11 @@ describe('systemGuidanceOf', () => {
 			'Keep your answers short and impersonal.',
 			'<instructions>Work carefully.</instructions>',
 		].join('\n'))]);
-		const append = buildSystemPromptAppend({ toolAccess: 'Tools are reached by name.', guidance })!;
 
 		expect(guidance).toContain('Follow the user\'s requirements carefully & to the letter.');
 		expect(guidance).toContain('<instructions>Work carefully.</instructions>');
 		expect(guidance).not.toContain('Follow Microsoft content policies');
 		expect(guidance).not.toContain('only respond with');
-		expect(append.match(/Follow Microsoft content policies/g)).toHaveLength(1);
-		expect(append.match(/only respond with "Sorry, I can't assist with that."/g)).toHaveLength(1);
 	});
 
 	it('keeps the tool directory whether or not the host closes it', () => {

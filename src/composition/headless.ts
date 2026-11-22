@@ -12,7 +12,6 @@ import { signIn } from '../core/auth';
 import { startCliLogin, type CliLogin } from '../core/cliLogin';
 import { findInstalled } from '../core/installers';
 import { readAgentSettings } from '../core/settings';
-import { createSessionPrompt, type PromptWorkspace } from '../core/systemPrompt';
 import { ChatService } from '../engine/chat/ChatService';
 import { readTranscriptOptions, type TranscriptOptions } from '../engine/chat/messages';
 import type { ToolBridge } from '../engine/chat/types';
@@ -44,12 +43,6 @@ export interface HeadlessCompositionOptions {
 	readonly extensionDir?: string;
 	/** The client whose chats these are: the token's principal, or `default` when there is none. */
 	readonly owner?: string;
-	/**
-	 * The folder holding the user's own prompt files, which every chat is offered.
-	 * A server has no VS Code profile, so this is the only place its user-level
-	 * customization files come from.
-	 */
-	readonly promptsDir?: string;
 	/** The agents this gateway serves: the registry by default, and the one under test in a test. */
 	readonly adapters?: readonly AgentAdapter[];
 	/** The platform the extra accounts are checked against; this process's by default. */
@@ -154,15 +147,6 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 		return windows;
 	};
 	const transcriptOptions = (): TranscriptOptions => readTranscriptOptions(host.settings);
-	/**
-	 * The folders a chat may draw customization files from. A server has no window
-	 * and no trust prompt: the folder the operator configured is the one it serves.
-	 */
-	const workspaceOf = (): PromptWorkspace => {
-		const folder = defaultWorkspaceOf(host.settings);
-		return { trusted: true, windowFolders: folder ? [folder] : [] };
-	};
-
 	const settingsOf = (adapter: AgentAdapter): AgentSettings => {
 		const result = readAgentSettings(adapter, host.settings);
 		for (const warning of result.warnings) {
@@ -195,7 +179,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 	const services = new Map<string, ChatService>();
 	const addService = (adapter: AgentAdapter): void => {
 		// What the extension's provider hands its chat service, mirrored over this host:
-		// the customization prompt, the transcript settings, the cache and usage figures
+		// the transcript settings, the cache and usage figures
 		// the page shows, an expired sign-in and the request dump.
 		services.set(adapter.id, new ChatService({
 			adapter,
@@ -204,7 +188,6 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 			resolveLaunch: () => resolveLaunch(adapter),
 			isEnabled: () => isServing(adapter, host.settings),
 			client: { onSignInUrl: prompt => control.reportSignInUrl(adapter.id, prompt) },
-			buildSessionPrompt: createSessionPrompt(log, adapter.systemPrompt, workspaceOf, options.promptsDir),
 			transcriptOptions,
 			dumpRequest: (request, settings) => dumpRequest(path.join(agentsDir, adapter.id, 'requests'), request, settings, withScope(log, adapter.id)),
 			refineWindow: (model, size) => { windowsOf(adapter.id).set(model, size); },

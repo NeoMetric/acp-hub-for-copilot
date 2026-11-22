@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Log } from '../ports/host';
-import type { ToolDef } from '../model/chat';
+import type { PromptSection, ToolDef } from '../model/chat';
 import { findCheckpoint, findForkSource, hashAll, isPrefixOf, mismatchOf, SAVED_SESSION_VERSION, shortHash, toolsHashOf, type ReuseCheck, type SavedSession, type SavedSessionStore } from './sessionStore';
-import { describeToolChange, fingerprintPreview, guidanceChangeOf, guidanceHashOf, guidanceLineHashes, toolChangeOf } from './keys';
+import { describeToolChange, fingerprintPreview, toolChangeOf } from './keys';
+import { promptChangeOf, savedSectionsOf, sectionsHashOf, type SavedSection } from './promptSections';
 import type { ChatContext, ChatSession, Reuse } from './types';
 
 /**
@@ -16,7 +17,7 @@ import type { ChatContext, ChatSession, Reuse } from './types';
  * can be checked in the output.
  */
 export function findReusable(saved: SavedSessionStore, key: string, fingerprints: readonly string[], lastUser: number, tools: readonly ToolDef[], context: ChatContext, canFork: boolean, log: Log): Reuse | undefined {
-	const check: ReuseCheck = { cwd: context.cwd, toolsHash: toolsHashOf(tools.map(tool => tool.name)), guidanceHash: guidanceHashOf(context.guidance) };
+	const check: ReuseCheck = { cwd: context.cwd, toolsHash: toolsHashOf(tools.map(tool => tool.name)), guidanceHash: sectionsHashOf(context.prompt) };
 	const incoming = hashAll(fingerprints);
 	const all = saved.all();
 	log(`[reuse] No live session for ${key}: ${fingerprints.length} message(s), last user message at ${lastUser}, ${all.length} saved session(s), tools ${check.toolsHash}, guidance ${check.guidanceHash}.`, 'debug');
@@ -34,7 +35,7 @@ export function findReusable(saved: SavedSessionStore, key: string, fingerprints
 			if (own.guidanceHash === check.guidanceHash) {
 				return { kind: 'resume', saved: own, history };
 			}
-			const guidanceChange = guidanceChangeOf(own.guidanceLines, context.guidance);
+			const guidanceChange = promptChangeOf(savedOf(own), context.prompt);
 			const preview = guidanceChange.added.join(' | ').slice(0, 600);
 			log(`[reuse] The workspace guidance differs from the saved one (${own.guidanceHash} -> ${check.guidanceHash}): ${guidanceChange.added.length} line(s) new, ${guidanceChange.removed} gone. Resuming anyway and sending the change. New: ${preview}`, 'warn');
 			return { kind: 'resume', saved: own, history, guidanceChange };
@@ -46,7 +47,7 @@ export function findReusable(saved: SavedSessionStore, key: string, fingerprints
 		}
 	} else {
 		log(canFork ? '[reuse] Nothing saved under this key; looking for a session this chat was forked from.' : '[reuse] Nothing saved under this key.', 'debug');
-		logGuidanceAgainstLatest(all, check.cwd, context.guidance, log);
+		logGuidanceAgainstLatest(all, check.cwd, context.prompt, log);
 	}
 
 	if (!canFork) {
@@ -75,7 +76,7 @@ export function findReusable(saved: SavedSessionStore, key: string, fingerprints
  * the checkpoint of the chat's own saved session to fork from, if any. Logged under "[reuse]".
  */
 export function findEditFork(saved: SavedSessionStore, key: string, fingerprints: readonly string[], lastUser: number, context: ChatContext, log: Log): Reuse | undefined {
-	const check: ReuseCheck = { cwd: context.cwd, toolsHash: '', guidanceHash: guidanceHashOf(context.guidance) };
+	const check: ReuseCheck = { cwd: context.cwd, toolsHash: '', guidanceHash: sectionsHashOf(context.prompt) };
 	const own = saved.find(key);
 	if (!own) {
 		log(`[reuse] The messages of ${key} changed but no session is saved under it; nothing to fork.`, 'debug');
@@ -101,19 +102,24 @@ function forkReuse(candidates: readonly SavedSession[], fingerprints: readonly s
 	if (source.guidanceHash === check.guidanceHash) {
 		return { kind: 'fork', saved: source, checkpoint, history };
 	}
-	const guidanceChange = guidanceChangeOf(source.guidanceLines, context.guidance);
+	const guidanceChange = promptChangeOf(savedOf(source), context.prompt);
 	log(`[reuse] The workspace guidance differs from the saved one (${source.guidanceHash} -> ${check.guidanceHash}): ${guidanceChange.added.length} line(s) new, ${guidanceChange.removed} gone. Forking anyway and sending the change.`, 'warn');
 	return { kind: 'fork', saved: source, checkpoint, history, guidanceChange };
 }
 
 /** Logs how this chat's guidance differs from the latest saved session in the same folder, to show what Copilot changed. */
-function logGuidanceAgainstLatest(all: readonly SavedSession[], cwd: string, guidance: string | undefined, log: Log): void {
+function logGuidanceAgainstLatest(all: readonly SavedSession[], cwd: string, prompt: readonly PromptSection[] | undefined, log: Log): void {
 	const latest = all.filter(entry => entry.cwd === cwd).sort((a, b) => b.savedAt - a.savedAt)[0];
 	if (!latest) {
 		return;
 	}
-	const change = guidanceChangeOf(latest.guidanceLines, guidance);
-	log(`[reuse] Guidance against latest saved session ${latest.sessionId} (${latest.guidanceHash} -> ${guidanceHashOf(guidance)}): ${change.added.length} line(s) new, ${change.removed} gone.`, 'debug');
+	const change = promptChangeOf(savedOf(latest), prompt);
+	log(`[reuse] Guidance against latest saved session ${latest.sessionId} (${latest.guidanceHash} -> ${sectionsHashOf(prompt)}): ${change.added.length} line(s) new, ${change.removed} gone.`, 'debug');
+}
+
+/** The sections a saved session was opened with; one saved before sections existed holds its lines as a single section. */
+function savedOf(entry: SavedSession): readonly SavedSection[] | undefined {
+	return entry.promptSections ?? (entry.guidanceLines ? [{ id: 'guidance', lines: entry.guidanceLines }] : undefined);
 }
 
 /** Remembers where the conversation of a chat is stored, so a later window or a fork can continue it. */
@@ -131,7 +137,7 @@ export function rememberSession(saved: SavedSessionStore, key: string, session: 
 		toolNames: [...session.openedTools].sort(),
 		guidanceHash: session.guidanceHash,
 		promptHash: session.promptHash,
-		guidanceLines: guidanceLineHashes(session.context.guidance),
+		promptSections: savedSectionsOf(session.context.prompt),
 		checkpoints: [...session.checkpoints],
 		forked: session.forked,
 		savedAt: Date.now(),

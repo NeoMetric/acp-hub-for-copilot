@@ -42,8 +42,8 @@ export interface ChatRequest {
 	readonly model?: string;
 	/** The reasoning effort the user picked, when the host has one. */
 	readonly effort?: string;
-	/** The workspace guidance the host wrote into the request. */
-	readonly systemGuidance?: string;
+	/** The system prompt the client sent, as labelled sections. */
+	readonly systemPrompt?: readonly PromptSection[];
 }
 
 /** What running a tool produced. */

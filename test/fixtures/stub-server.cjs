@@ -17,7 +17,7 @@
 const http = require('node:http');
 
 const NAME = 'acp-hub';
-const API_VERSION = 1;
+const API_VERSION = 2;
 const TOKEN = process.env.ACP_HUB_TOKEN ? process.env.ACP_HUB_TOKEN.trim() : undefined;
 const SLOW_MODELS_MS = Number(process.env.ACP_HUB_SLOW_MODELS_MS || 0);
 const EXIT_WITH_PARENT = process.argv.indexOf('--exit-with-parent') !== -1;

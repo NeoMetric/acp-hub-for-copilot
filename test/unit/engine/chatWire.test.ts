@@ -99,13 +99,13 @@ describe('the chat wire', () => {
 		const request = requests[0];
 		expect(request.chatId).toBe('chat-from-extras');
 		expect(request.cwd).toBe(cwd);
-		expect(request.systemGuidance).toBe('Follow the rules of the repository.');
+		expect(request.systemPrompt).toEqual([{ id: 'guidance', text: 'Follow the rules of the repository.' }]);
 		const identity = server.host.chatIdentity(request);
 		expect(identity.id).toBe('chat-from-extras');
 		expect(identity.cwd).toBe(cwd);
 		expect(identity.workspaceFolders).toEqual(['C:\\work\\one', 'C:\\work\\two']);
 		expect(identity.label).toBe('A named chat');
-		expect(server.host.guidanceOf(request)).toBe('Follow the rules of the repository.');
+		expect(server.host.promptOf(request)).toEqual([{ id: 'guidance', text: 'Follow the rules of the repository.' }]);
 		// The engine asks with a slice of the messages, so the context must survive one.
 		expect(server.host.chatWideContextOf(request.messages)).toBe('<environment_info>Windows</environment_info>');
 		expect(server.host.chatWideContextOf(request.messages.slice(0, 1))).toBe('<environment_info>Windows</environment_info>');
@@ -124,10 +124,70 @@ describe('the chat wire', () => {
 		await post(`${server.url}/v1/chat/completions`, { model, messages: [system, user], acp: { chatId: 'x' } });
 		await post(`${server.url}/v1/chat/completions`, { model, messages: [user] });
 
-		expect(requests[0].systemGuidance).toBe('The user\'s workspace folder is C:\\work\\one.\n\nPrefer small diffs.');
-		expect(requests[1].systemGuidance).toBe('from the extension');
-		expect(requests[2].systemGuidance, 'the extension may send no guidance on purpose').toBeUndefined();
-		expect(requests[3].systemGuidance).toBeUndefined();
+		expect(requests[0].systemPrompt).toEqual([{ id: 'guidance', text: 'The user\'s workspace folder is C:\\work\\one.\n\nPrefer small diffs.' }]);
+		expect(requests[1].systemPrompt).toEqual([{ id: 'guidance', text: 'from the extension' }]);
+		expect(requests[2].systemPrompt, 'the extension may send no guidance on purpose').toBeUndefined();
+		expect(requests[3].systemPrompt).toBeUndefined();
+	});
+
+	it('passes the client\'s sections to the engine in order', async () => {
+		const server = await start();
+		const model = await firstModel(server.url);
+		const requests = recordEngine(plainTurn);
+		const sections = [
+			{ id: 'intro', text: 'You help.', kind: 'fixed' },
+			{ id: 'mode', label: 'Agent mode', text: 'mode:Agent' },
+			{ id: 'chat', text: 'Session folder: x', kind: 'chat' },
+		];
+
+		await post(`${server.url}/v1/chat/completions`, { ...chat(model), acp: { systemPrompt: { sections } } });
+
+		expect(requests[0].systemPrompt).toEqual(sections);
+	});
+
+	it('drops a section with no id or no text, and an unknown kind', async () => {
+		const server = await start();
+		const model = await firstModel(server.url);
+		const requests = recordEngine(plainTurn);
+
+		await post(`${server.url}/v1/chat/completions`, {
+			...chat(model),
+			acp: { systemPrompt: { sections: [{ id: 'a', text: 'kept' }, { text: 'no id' }, { id: 'b' }, { id: 'c', text: '' }, { id: 'd', text: 'odd', kind: 'weird' }, { id: 'e', text: 'also kept', kind: 'chat' }, 'nope'] } },
+		});
+
+		expect(requests[0].systemPrompt).toEqual([{ id: 'a', text: 'kept' }, { id: 'e', text: 'also kept', kind: 'chat' }]);
+	});
+
+	it('reads an older client\'s systemGuidance as one guidance section', async () => {
+		const server = await start();
+		const model = await firstModel(server.url);
+		const requests = recordEngine(plainTurn);
+
+		await post(`${server.url}/v1/chat/completions`, { ...chat(model), acp: { systemGuidance: 'Rules' } });
+
+		expect(requests[0].systemPrompt).toEqual([{ id: 'guidance', text: 'Rules' }]);
+	});
+
+	it('reads a stock client\'s system message as one guidance section', async () => {
+		const server = await start();
+		const model = await firstModel(server.url);
+		const requests = recordEngine(plainTurn);
+
+		await post(`${server.url}/v1/chat/completions`, { model, messages: [{ role: 'system', content: 'Be brief' }, { role: 'user', content: 'hi' }] });
+
+		expect(requests[0].systemPrompt).toEqual([{ id: 'guidance', text: 'Be brief' }]);
+	});
+
+	it('adds the reply rules as the last section', async () => {
+		const server = await start();
+		const model = await firstModel(server.url);
+		const requests = recordEngine(plainTurn);
+
+		await post(`${server.url}/v1/chat/completions`, { ...chat(model), response_format: { type: 'json_object' }, acp: { systemPrompt: { sections: [{ id: 'a', text: 'First' }] } } });
+
+		const sections = requests[0].systemPrompt!;
+		expect(sections[0]).toEqual({ id: 'a', text: 'First' });
+		expect(sections.at(-1)).toEqual({ id: 'reply-rules', text: 'Reply with ONLY a single valid JSON value: no prose before or after it, and no markdown code fence.' });
 	});
 
 	it('lets acp.chatId win over the x-chat-id header', async () => {

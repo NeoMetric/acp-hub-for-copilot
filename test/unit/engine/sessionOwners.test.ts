@@ -104,7 +104,7 @@ function fakeHost(): HostPort {
 			workspaceFolders: [],
 			owner: request.chatId.startsWith('b') ? 'owner-b' : 'owner-a',
 		}),
-		guidanceOf: () => undefined,
+		promptOf: () => undefined,
 		stripHostSections: text => text,
 		chatWideContextOf: () => undefined,
 		executeTool: (): Promise<ToolResult> => Promise.resolve({ content: [] }),

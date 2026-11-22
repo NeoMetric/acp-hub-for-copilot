@@ -17,7 +17,7 @@ import type { AgentSession, ForkPoint, PromptHandlers } from '../../../src/engin
 import { ChatService } from '../../../src/engine/chat/ChatService';
 import { messageFingerprintOf, shortHash, type SavedSession } from '../../../src/engine/chat/sessionStore';
 import type { AgentApi } from '../../../src/engine/chat/types';
-import type { ChatMessage, ChatRequest, ToolDef } from '../../../src/engine/model/chat';
+import type { ChatMessage, ChatRequest, PromptSection, ToolDef } from '../../../src/engine/model/chat';
 import type { StreamEvent } from '../../../src/engine/model/stream';
 import type { HostPort } from '../../../src/engine/ports/host';
 
@@ -151,7 +151,7 @@ function harness(adapter: AgentAdapter = claudeAdapter, storageDir = storeDir, i
 		storageRoot: '',
 		// The host names the folder of every chat, as the server does: the one the request named, or the one it was launched in.
 		chatIdentity: request => ({ id: request.chatId, cwd: request.cwd || WINDOW, workspaceFolders: [] }),
-		guidanceOf: request => textOf(request.messages.find(message => message.role === 'system')),
+		promptOf: request => request.systemPrompt ?? sectionsOfSystem(request.messages),
 		stripHostSections: text => text,
 		chatWideContextOf: () => undefined,
 		executeTool: () => Promise.resolve({ content: [] }),
@@ -174,20 +174,24 @@ function harness(adapter: AgentAdapter = claudeAdapter, storageDir = storeDir, i
 			agent.roots.push(context.workspaceFolder);
 			return agent as unknown as AgentApi;
 		},
-		// The host builds the session prompt from what it wrote into the request, as the VS Code host does.
-		buildSessionPrompt: async (_tools, _folders, guidance) => guidance === undefined ? undefined : `workspace rules: ${guidance}`,
 		isEnabled,
 	});
 	services.push(chat);
 
 	/** Sends a request of the chat `conversation`, as the host does, and returns what the turn streamed. */
-	async function send(messages: ChatMessage[], conversation = 'c1', tools = ['read'], cwd = ''): Promise<StreamEvent[]> {
-		const request: ChatRequest = { chatId: conversation, cwd, messages, tools: tools.map(tool), model: 'test-model' };
+	async function send(messages: ChatMessage[], conversation = 'c1', tools = ['read'], cwd = '', systemPrompt?: readonly PromptSection[]): Promise<StreamEvent[]> {
+		const request: ChatRequest = { chatId: conversation, cwd, messages, tools: tools.map(tool), model: 'test-model', systemPrompt };
 		const events: StreamEvent[] = [];
 		await chat.respond(request, event => events.push(event), new AbortController().signal);
 		return events;
 	}
 	return { agent, state, logs, chat, send, storeKey: `acpHub.savedSessions.${adapter.id}` };
+}
+
+/** The client's one section of guidance, taken from the system message the test wrote. */
+function sectionsOfSystem(messages: readonly ChatMessage[]): PromptSection[] | undefined {
+	const text = textOf(messages.find(message => message.role === 'system'));
+	return text === undefined ? undefined : [{ id: 'guidance', text }];
 }
 
 function textOf(message: ChatMessage | undefined): string | undefined {
@@ -843,36 +847,85 @@ describe('starting an agent again that the idle shutdown stopped', () => {
 });
 
 describe('the session prompt of a new chat', () => {
-	const contextOf = (id: string): string => `<session_context>\nSession folder: c:/Users/me/.copilot/session-state/${id}\n</session_context>`;
-	const rulesOf = (id: string): ChatMessage => system(`Rules of the host.\n\n${contextOf(id)}\n\nMore rules.`);
+	const guidance: PromptSection = { id: 'guidance', text: 'Rules of the host.\n\nMore rules.' };
+	const folderOf = (id: string): PromptSection => ({ id: 'chat', kind: 'chat', text: `Session folder: c:/Users/me/.copilot/session-state/${id}` });
 	const ids = ['2286601f-d0d5-4d73-9762-f7ecef8248fd', '9a99ab0d-0341-4b20-b3ce-f0499abbc44a'];
+	const hello = [user('hello')];
+	const again = [user('hello'), assistant('reply 1'), user('again')];
 
-	it.each([['Claude', claudeAdapter], ['Codex', codexAdapter], ['Google', googleAdapter]])('is the same for two chats of %s whose guidance differs only in the session folder', async (_name, adapter) => {
+	it('opens the session with the client\'s sections and nothing else', async () => {
+		const { agent, send } = harness();
+
+		await send(hello, 'c1', ['read'], '', [{ id: 'a', text: 'A', kind: 'fixed' }, { id: 'b', text: 'B' }]);
+
+		expect([...agent.openedWith.values()]).toEqual(['A\n\nB']);
+	});
+
+	it.each([['Claude', claudeAdapter], ['Codex', codexAdapter], ['Google', googleAdapter]])('is the same for two chats of %s whose sections differ only in the chat section', async (_name, adapter) => {
 		const { agent, send } = harness(adapter);
 
-		await send([rulesOf(ids[0]), user('hello')], 'chat-one');
-		await send([rulesOf(ids[1]), user('hello')], 'chat-two');
+		await send(hello, 'chat-one', ['read'], '', [guidance, folderOf(ids[0])]);
+		await send(hello, 'chat-two', ['read'], '', [guidance, folderOf(ids[1])]);
 
 		const [one, other] = [...agent.openedWith.values()];
 		expect(one).toBeDefined();
 		expect(one).toBe(other);
-		expect(one).not.toContain('session-state');
+		expect(one).not.toContain('Session folder');
 	});
 
-	it('gives the agent the session folder of the chat in the message that opens the session', async () => {
+	it('gives the agent the chat section of the chat in the message that opens the session', async () => {
 		const { agent, send } = harness();
 
-		await send([rulesOf(ids[1]), user('hello')], 'chat-two');
+		await send(hello, 'chat-two', ['read'], '', [guidance, folderOf(ids[1])]);
 
-		expect(agent.prompts[0].texts.join('\n')).toContain(contextOf(ids[1]));
+		expect(agent.prompts[0].texts.join('\n')).toContain(folderOf(ids[1]).text);
 	});
 
-	it('does not repeat the session folder in the next message of the chat', async () => {
+	it('does not repeat the chat section in the next message of the chat', async () => {
 		const { agent, send } = harness();
 
-		await send([rulesOf(ids[0]), user('hello')], 'chat-one');
-		await send([rulesOf(ids[0]), user('hello'), assistant('reply 1'), user('again')], 'chat-one');
+		await send(hello, 'chat-one', ['read'], '', [guidance, folderOf(ids[0])]);
+		await send(again, 'chat-one', ['read'], '', [guidance, folderOf(ids[0])]);
 
-		expect(agent.prompts[1].texts.join('\n')).not.toContain('session-state');
+		expect(agent.prompts[1].texts.join('\n')).not.toContain('Session folder');
+	});
+
+	it('tells a changed chat section mid-chat', async () => {
+		const { agent, send } = harness();
+
+		await send(hello, 'c1', ['read'], '', [guidance, { id: 'chat', kind: 'chat', text: 'Session folder: one' }]);
+		await send(again, 'c1', ['read'], '', [guidance, { id: 'chat', kind: 'chat', text: 'Session folder: two' }]);
+
+		expect(agent.prompts[1].texts.join('\n')).toContain('Session folder: two');
+	});
+
+	it('sends no change when only a fixed section changed', async () => {
+		const { agent, send } = harness();
+
+		await send(hello, 'c1', ['read'], '', [{ id: 'intro', kind: 'fixed', text: 'Intro one' }, guidance]);
+		await send(again, 'c1', ['read'], '', [{ id: 'intro', kind: 'fixed', text: 'Intro two' }, guidance]);
+
+		expect(agent.prompts[1].texts.join('\n')).not.toContain('Intro');
+		expect(agent.prompts[1].texts).toEqual(['again']);
+	});
+
+	it('retracts the mode it left', async () => {
+		const { agent, send } = harness();
+
+		await send(hello, 'c1', ['read'], '', [guidance, { id: 'mode:Agent', label: 'Agent mode', text: 'mode:Agent' }]);
+		await send(again, 'c1', ['read'], '', [guidance, { id: 'mode:Ask', label: 'Ask mode', text: 'mode:Ask' }]);
+
+		const next = agent.prompts[1].texts.join('\n');
+		expect(next).toContain('The "Agent mode" instructions no longer apply.');
+		expect(next).toContain('mode:Ask');
+	});
+
+	it('gives a request with no tools no prompt and no chat section', async () => {
+		const { agent, send } = harness();
+
+		await send(hello, 'title', [], '', [guidance, folderOf(ids[0])]);
+
+		expect([...agent.openedWith.values()]).toEqual([undefined]);
+		expect(agent.prompts[0].texts.join('\n')).not.toContain('Session folder');
 	});
 });

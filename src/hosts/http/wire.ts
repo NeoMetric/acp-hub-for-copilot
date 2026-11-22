@@ -16,7 +16,7 @@ export const SERVER_NAME = 'acp-hub';
  * The version of this contract. A server that does not name a version is older
  * than this one and cannot be talked to.
  */
-export const API_VERSION = 1;
+export const API_VERSION = 2;
 
 /** `POST /shutdown`: asks a server that was given a way to stop to close, agents and all. */
 export const SHUTDOWN_ROUTE = '/shutdown';
@@ -76,6 +76,16 @@ export interface ModelWire {
 	acp?: ModelInfoWire;
 }
 
+/** One labelled piece of the system prompt a client sends. */
+export interface AcpPromptSection {
+	id: string;
+	/** Names the section when it is retracted; a section without a label is retracted line by line. */
+	label?: string;
+	text: string;
+	/** `fixed` is written once and never compared; `chat` names one chat and stays out of the session prompt. */
+	kind?: 'fixed' | 'chat';
+}
+
 /** The request context the extension sends in the `acp` field of a chat body. */
 export interface AcpRequestExtras {
 	/**
@@ -89,6 +99,9 @@ export interface AcpRequestExtras {
 	label?: string;
 	cwd?: string;
 	workspaceFolders?: string[];
+	/** The system prompt as sections, in the order they are written. */
+	systemPrompt?: { sections: AcpPromptSection[] };
+	/** The older single-section form of `systemPrompt`: read as one section named `guidance`. */
 	systemGuidance?: string;
 	chatContext?: string;
 }

@@ -3,9 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { shortHash } from './sessionStore';
 import { RpcConnectionClosedError } from '../acp/rpc';
-import type { GuidanceChange } from './types';
 import type { ToolDef } from '../model/chat';
 
 /** Failed turns in a row after which a session is replaced, so a broken one cannot trap a chat. */
@@ -42,132 +40,8 @@ export function describeToolChange(change: { added: readonly string[]; removed: 
 	return `${change.added.length} tool(s) added${change.added.length ? ` (${change.added.join(', ')})` : ''}, ${change.removed.length} removed${change.removed.length ? ` (${change.removed.join(', ')})` : ''}`;
 }
 
-/**
- * Whether the guidance describing the chat differs from the one the session was
- * given. Copilot renders its system prompt again for every request, and the
- * agent keeps the one it was opened with: a chat that switches between asking
- * and working, or turns autopilot on, would otherwise keep the old rules.
- *
- * Case and spacing are folded, because a host may write the same prompt with a
- * different drive-letter casing and that is no change to what it says. The id
- * in the host's per-chat session folder is dropped too: it names the chat, so a
- * forked chat would otherwise never match the session it was copied from.
- */
-export function guidanceDiffers(before: string | undefined, after: string | undefined): boolean {
-	return squashGuidance(before) !== squashGuidance(after);
-}
-
-export function guidanceHashOf(guidance: string | undefined): string {
-	return shortHash(squashGuidance(guidance));
-}
-
-/** The id a host writes into the path of the session folder of a chat. */
-const SESSION_FOLDER_ID = /session-state\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i;
-const SESSION_CONTEXT_BLOCK = /<session_context>[\s\S]*?<\/session_context>/g;
-
-/**
- * Splits the guidance of the host into what every chat shares and what names this chat.
- * The session prompt leads the conversation, so one changed character in it makes the
- * model's cache miss for all of it. The host writes the id of the chat's session folder into
- * its guidance, and a prompt that carried it would never be served from the cache for a new
- * chat. The shared part goes into the session prompt; the part about this chat goes in the
- * message that opens the session, which follows the cached prompt.
- */
-export function splitChatGuidance(guidance: string | undefined): { shared: string | undefined; perChat: string | undefined } {
-	if (guidance === undefined) {
-		return { shared: undefined, perChat: undefined };
-	}
-	const own: string[] = [];
-	let shared = guidance.replace(SESSION_CONTEXT_BLOCK, block => {
-		own.push(block);
-		return '';
-	});
-	// A host that writes the folder outside such a block has its line moved on its own.
-	shared = shared.split('\n').filter(line => {
-		if (!SESSION_FOLDER_ID.test(line)) {
-			return true;
-		}
-		own.push(line.trim());
-		return false;
-	}).join('\n');
-	if (own.length === 0) {
-		return { shared: guidance, perChat: undefined };
-	}
-	return { shared: shared.replace(/\n{3,}/g, '\n\n').trim() || undefined, perChat: own.join('\n\n') };
-}
-
 /** A message fingerprint as one short log line: tool output and file contents would otherwise fill the log across many lines. */
 export function fingerprintPreview(fingerprint: string | undefined, limit = 200): string {
 	const flat = (fingerprint ?? '').replace(/\s+/g, ' ').trim();
 	return flat.length > limit ? `${flat.slice(0, limit)}… (${flat.length} characters)` : flat;
 }
-
-/** The line in which Copilot names the mode the chat runs in, and the block that holds its instructions. */
-const MODE_LINE = /^You are currently running in "(.+)" mode\./;
-const MODE_BLOCK = /<modeInstructions>[\s\S]*?<\/modeInstructions>/g;
-
-/** The distinct non-empty lines of the guidance, each with the hash it is compared by. */
-function guidanceLines(guidance: string | undefined): Array<{ text: string; hash: string }> {
-	const seen = new Set<string>();
-	const lines: Array<{ text: string; hash: string }> = [];
-	for (const raw of (guidance ?? '').split(/\r?\n/)) {
-		const text = raw.trim();
-		const hash = shortHash(squashGuidance(text));
-		if (text && !seen.has(hash)) {
-			seen.add(hash);
-			lines.push({ text, hash });
-		}
-	}
-	return lines;
-}
-
-export function guidanceLineHashes(guidance: string | undefined): string[] {
-	return guidanceLines(guidance).map(line => line.hash);
-}
-
-/**
- * What the guidance gained and lost since a session was saved. A session saved
- * without its line hashes cannot say, so all of the current guidance counts as new.
- */
-export function guidanceChangeOf(savedLines: readonly string[] | undefined, guidance: string | undefined, previous?: string): GuidanceChange {
-	const current = guidanceLines(guidance);
-	const before = new Set(savedLines);
-	const now = new Set(current.map(line => line.hash));
-	const change = {
-		added: current.filter(line => !before.has(line.hash)).map(line => line.text),
-		removed: savedLines ? savedLines.filter(hash => !now.has(hash)).length : 0,
-	};
-	if (previous === undefined) {
-		return change;
-	}
-
-	// The instructions of a mode that was left are retracted by naming the mode, not by repeating them.
-	const gone = guidanceLines(previous).filter(line => !now.has(line.hash));
-	const leftMode = gone.map(line => MODE_LINE.exec(line.text)?.[1]).find(name => name !== undefined);
-	const modeLines = leftMode === undefined ? new Set<string>() : new Set(guidanceLines([...previous.matchAll(MODE_BLOCK)].map(match => match[0]).join('\n')).map(line => line.hash));
-	return {
-		...change,
-		...(leftMode === undefined ? {} : { retired: [{ id: `mode:${leftMode}`, label: `${leftMode} mode` }] }),
-		goneLines: gone.filter(line => !modeLines.has(line.hash)).map(line => line.text),
-	};
-}
-
-/** Puts a change that has not been sent yet together with the one that follows it. */
-export function mergeGuidanceChange(first: GuidanceChange, second: GuidanceChange): GuidanceChange {
-	const added = [...new Set([...first.added, ...second.added])];
-	const retired = second.retired ?? first.retired;
-	const leftMode = retired?.[0]?.id.slice('mode:'.length);
-	const stillInMode = leftMode !== undefined && added.some(line => MODE_LINE.exec(line)?.[1] === leftMode);
-	const gone = [...(first.goneLines ?? []), ...(second.goneLines ?? [])].filter(line => !added.includes(line));
-	return {
-		added,
-		removed: first.removed + second.removed,
-		...(retired === undefined || stillInMode ? {} : { retired }),
-		...(first.goneLines || second.goneLines ? { goneLines: [...new Set(gone)] } : {}),
-	};
-}
-
-function squashGuidance(text: string | undefined): string {
-	return (text ?? '').replace(/\s+/g, ' ').trim().replace(/\\/g, '/').toLowerCase().replace(/(session-state\/)[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g, '$1<chat>');
-}
-

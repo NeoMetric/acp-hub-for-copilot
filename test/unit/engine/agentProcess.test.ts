@@ -89,7 +89,7 @@ function hostWithFolders(folders: (chatId: string) => readonly string[] = () => 
 		settings: { get: () => undefined },
 		storageRoot: '',
 		chatIdentity: request => ({ id: request.chatId, cwd: request.cwd, workspaceFolders: folders(request.chatId) }),
-		guidanceOf: () => undefined,
+		promptOf: () => undefined,
 		stripHostSections: text => text,
 		chatWideContextOf: () => undefined,
 		executeTool: (): Promise<ToolResult> => Promise.resolve({ content: [] }),

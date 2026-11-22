@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { StateStore } from '../ports/state';
+import type { SavedSection } from './promptSections';
 import { messageFingerprintOf, shortHash } from './sessionFingerprint';
 
 export { messageFingerprintOf, shortHash };
@@ -55,7 +56,9 @@ export interface SavedSession {
 	readonly toolNames?: readonly string[];
 	readonly guidanceHash: string;
 	readonly promptHash: string;
-	/** Hashes of the lines of the guidance, so a later window can tell what changed when the guidance hash differs. */
+	/** The sections of the prompt as hashes of their lines, so a later window can tell what changed when the guidance hash differs. */
+	readonly promptSections?: readonly SavedSection[];
+	/** Entries saved before sections existed hold the lines of one section of guidance; they are still read. */
 	readonly guidanceLines?: readonly string[];
 	/** The ends of the turns the session has finished, oldest first. */
 	readonly checkpoints?: readonly Checkpoint[];

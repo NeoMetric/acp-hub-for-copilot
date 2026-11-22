@@ -104,8 +104,8 @@ export function createHeadlessHost(options: HeadlessHostOptions): HeadlessHost {
 		storageRoot: root,
 		writeSetting: (key, value) => settings.set(key, value),
 		chatIdentity: request => identityOf(request, settings, options.owner ?? DEFAULT_CHAT_OWNER),
-		// The guidance is the extension's own: it took its persona out before sending, so it is used as it stands.
-		guidanceOf: request => extrasOf(request)?.acp?.systemGuidance ?? request.systemGuidance,
+		// The client wrote the sections itself, so they are used as they stand.
+		promptOf: request => request.systemPrompt,
 		// The host writes no sections of its own into the text the engine forwards.
 		stripHostSections: text => text,
 		chatWideContextOf: messages => extrasOfMessages(messages)?.acp?.chatContext,

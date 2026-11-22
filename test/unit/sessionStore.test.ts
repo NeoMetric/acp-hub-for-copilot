@@ -6,9 +6,9 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { StateStore } from '../../src/engine/ports/state';
-import { guidanceChangeOf, guidanceLineHashes } from '../../src/engine/chat/keys';
 import { guidanceChangeBlock } from '../../src/engine/chat/assemble';
-import { mergeGuidanceChange, splitChatGuidance } from '../../src/engine/chat/keys';
+import { findReusable } from '../../src/engine/chat/reuse';
+import { savedSectionsOf, sectionsHashOf } from '../../src/engine/chat/promptSections';
 import { describeToolChange, toolChangeOf } from '../../src/engine/chat/keys';
 import { findCheckpoint, findForkSource, hashAll, isPrefixOf, messageFingerprintOf, mismatchOf, SavedSessionStore, toolsHashOf, type ReuseCheck, type SavedSession } from '../../src/engine/chat/sessionStore';
 
@@ -58,55 +58,6 @@ describe('toolChangeOf', () => {
 		expect(toolChangeOf(['a', 'b'], ['b', 'c', 'd'])).toEqual({ added: ['c', 'd'], removed: ['a'] });
 		expect(toolChangeOf(['a'], ['a'])).toEqual({ added: [], removed: [] });
 		expect(describeToolChange({ added: ['c'], removed: [] })).toBe('1 tool(s) added (c), 0 removed');
-	});
-});
-
-describe('guidanceChangeOf', () => {
-	const before = guidanceLineHashes('Rules\n\nUse tabs\nSkills: a, b');
-
-	it('reports the lines gained and lost', () => {
-		expect(guidanceChangeOf(before, 'Rules\nUse tabs\nSkills: a, b, c')).toEqual({ added: ['Skills: a, b, c'], removed: 1 });
-		expect(guidanceChangeOf(before, 'rules\n  USE TABS  \nSkills: a, b')).toEqual({ added: [], removed: 0 });
-	});
-
-	it('treats everything as new when the saved lines are unknown', () => {
-		expect(guidanceChangeOf(undefined, 'a\nb')).toEqual({ added: ['a', 'b'], removed: 0 });
-	});
-
-	const rules = 'Rules\nUse tabs';
-	const planning = `${rules}\n<modeInstructions>\nYou are currently running in "Plan" mode. Below are your instructions.\nDo not edit files.\nAsk before acting.\n</modeInstructions>`;
-
-	it('names the mode that was left instead of listing its lines', () => {
-		const change = guidanceChangeOf(guidanceLineHashes(planning), rules, planning);
-
-		expect(change.retired).toEqual([{ id: 'mode:Plan', label: 'Plan mode' }]);
-		expect(change.goneLines).toEqual([]);
-		expect(change.removed).toBe(5);
-	});
-
-	it('names the old mode and adds the new one when the mode changes', () => {
-		const reviewing = `${rules}\n<modeInstructions>\nYou are currently running in "Review" mode. Below are your instructions.\nOnly read.\n</modeInstructions>`;
-		const change = guidanceChangeOf(guidanceLineHashes(planning), reviewing, planning);
-
-		expect(change.retired).toEqual([{ id: 'mode:Plan', label: 'Plan mode' }]);
-		expect(change.added).toContain('Only read.');
-		expect(change.goneLines).toEqual([]);
-	});
-
-	it('lists the other lines that are gone and names no mode when none was left', () => {
-		const change = guidanceChangeOf(guidanceLineHashes(planning), planning.replace('Use tabs', 'Use spaces'), planning);
-
-		expect(change.retired).toBeUndefined();
-		expect(change.goneLines).toEqual(['Use tabs']);
-	});
-
-	it('merges a change that was not sent yet with the next one', () => {
-		const left = guidanceChangeOf(guidanceLineHashes(planning), rules, planning);
-		const back = guidanceChangeOf(guidanceLineHashes(rules), planning, rules);
-		const merged = mergeGuidanceChange(left, back);
-
-		expect(merged.retired).toBeUndefined();
-		expect(merged.added).toContain('Do not edit files.');
 	});
 });
 
@@ -300,33 +251,31 @@ describe('SavedSessionStore', () => {
 	});
 });
 
-describe('splitChatGuidance', () => {
-	const folder = (id: string): string => `<session_context>\nSession folder: c:/Users/me/.copilot/session-state/${id}\n\nContents:\n- files/\n</session_context>`;
-	const guidance = (id: string): string => `Rules of the host.\n\n${folder(id)}\n\n<git_commit_trailer>\nCo-authored-by: Copilot\n</git_commit_trailer>`;
-	const first = '2286601f-d0d5-4d73-9762-f7ecef8248fd';
-	const second = '9a99ab0d-0341-4b20-b3ce-f0499abbc44a';
+describe('resuming a session saved before prompt sections existed', () => {
+	const memento = (): StateStore => {
+		const values = new Map<string, unknown>();
+		return {
+			keys: () => [...values.keys()],
+			get: <T>(key: string, fallback?: T) => (values.has(key) ? values.get(key) as T : fallback),
+			update: (key: string, value: unknown) => { values.set(key, value); return Promise.resolve(); },
+		};
+	};
+	const lineHashes = (text: string): string[] => savedSectionsOf([{ id: 'x', text }])[0].lines as string[];
+	const tools = [{ name: 'view', description: '', inputSchema: {} }];
 
-	it('leaves the same shared text for two chats whose guidance differs only in the session folder', () => {
-		const one = splitChatGuidance(guidance(first));
-		const other = splitChatGuidance(guidance(second));
+	it('resumes a session saved with guidanceLines only, sending the lines it never saw', () => {
+		const state = memento();
+		const old = saved('k', ['u1', 'a1'], { guidanceHash: 'before', guidanceLines: lineHashes('Rules\nUse tabs'), savedAt: Date.now() });
+		void state.update('test.savedSessions', [old]);
+		const store = new SavedSessionStore(state, 'test.savedSessions');
+		const prompt = [{ id: 'guidance', text: 'Rules\nUse spaces' }];
+		const context = { folders: undefined, cwd: '/work', prompt };
 
-		expect(one.shared).toBe(other.shared);
-		expect(one.shared).toBe('Rules of the host.\n\n<git_commit_trailer>\nCo-authored-by: Copilot\n</git_commit_trailer>');
-	});
+		const reuse = findReusable(store, 'k', ['u1', 'a1', 'u2'], 2, tools, context, false, () => undefined);
 
-	it('returns the session context of the chat whole', () => {
-		expect(splitChatGuidance(guidance(first)).perChat).toBe(folder(first));
-	});
-
-	it('moves a line that names the session folder outside a session context block', () => {
-		const split = splitChatGuidance(`Rules.\nSession folder: c:/x/session-state/${first}\nMore rules.`);
-
-		expect(split.shared).toBe('Rules.\nMore rules.');
-		expect(split.perChat).toBe(`Session folder: c:/x/session-state/${first}`);
-	});
-
-	it('changes nothing when the guidance names no session folder', () => {
-		expect(splitChatGuidance('Rules.\n\nMore rules.')).toEqual({ shared: 'Rules.\n\nMore rules.', perChat: undefined });
-		expect(splitChatGuidance(undefined)).toEqual({ shared: undefined, perChat: undefined });
+		expect(reuse?.kind).toBe('resume');
+		expect(reuse?.guidanceChange?.added).toEqual(['Use spaces']);
+		expect(reuse?.guidanceChange?.removed).toBe(1);
+		expect(sectionsHashOf(prompt)).not.toBe('before');
 	});
 });

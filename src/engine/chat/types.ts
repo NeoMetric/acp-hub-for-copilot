@@ -5,7 +5,7 @@
 
 import type { AgentClient, AgentClientDeps, AgentSession, PromptResult } from '../acp/agentClient';
 import type { AcpTokenUsage } from '../acp/protocol';
-import type { Part, ToolDef, ToolResult } from '../model/chat';
+import type { Part, PromptSection, ToolDef, ToolResult } from '../model/chat';
 import type { StreamEvent } from '../model/stream';
 import type { ChatIdentity } from './cache';
 import type { AgentMessage } from './checkpoints';
@@ -98,8 +98,8 @@ export interface ChatContext {
 	readonly folders: readonly string[] | undefined;
 	/** Where the agent is rooted. */
 	readonly cwd: string;
-	/** The workspace guidance the host rendered into the system message of the request. */
-	readonly guidance: string | undefined;
+	/** The sections of the system prompt the client sent with the request. */
+	readonly prompt: readonly PromptSection[] | undefined;
 }
 
 /** How the guidance of a chat differs from the one its saved session was given. */

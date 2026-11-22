@@ -55,7 +55,7 @@ function fakeHost(state: ReturnType<typeof memoryState>, logs: string[]): HostPo
 		settings: { get: () => undefined },
 		storageRoot: '',
 		chatIdentity: request => ({ id: request.chatId, cwd: process.cwd(), workspaceFolders: [] }),
-		guidanceOf: () => undefined,
+		promptOf: () => undefined,
 		stripHostSections: text => text,
 		chatWideContextOf: () => undefined,
 		executeTool: () => Promise.resolve({ content: [] }),

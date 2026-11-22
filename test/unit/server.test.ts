@@ -169,6 +169,11 @@ function payloadsOf(text: string): string[] {
 		.map(part => part.slice('data:'.length).trim());
 }
 
+/** What the request's prompt sections say, in order. */
+function promptText(request: ChatRequest): string {
+	return (request.systemPrompt ?? []).map(section => section.text).join('\n\n');
+}
+
 /** The chunks of an SSE response, without the `[DONE]` that ends it. */
 function chunksOf(text: string): any[] {
 	return payloadsOf(text).filter(payload => payload !== '[DONE]').map(payload => JSON.parse(payload));
@@ -388,6 +393,7 @@ describe('the HTTP server', () => {
 		const body = await response.json() as any;
 		expect(body.agents).toEqual([expect.objectContaining({ id: adapter.id, installed: true, openSessions: 0 })]);
 		expect(body.openSessions).toBe(0);
+		expect(body.apiVersion).toBe(2);
 	});
 
 	it('logs when a request arrives and when its prompt goes to the agent, once per request', async () => {
@@ -882,29 +888,30 @@ describe('the HTTP server', () => {
 			const plain = await ask({}, FENCED);
 			const json = await ask({ response_format: { type: 'json_object' } }, FENCED);
 
-			expect(plain.requests[0].systemGuidance).toBeUndefined();
+			expect(plain.requests[0].systemPrompt).toBeUndefined();
 			expect((await plain.response.json() as any).choices[0].message.content).toContain('```');
-			expect(json.requests[0].systemGuidance).toContain('ONLY a single valid JSON value');
+			expect(promptText(json.requests[0])).toContain('ONLY a single valid JSON value');
 			expect((await json.response.json() as any).choices[0].message.content).toBe('{"answer": 42}');
 		});
 
 		it('carries the schema of a json_schema reply into the guidance', async () => {
 			const { requests } = await ask({ response_format: { type: 'json_schema', json_schema: { name: 'answer', schema: { type: 'object', required: ['answer'] } } } });
 
-			expect(requests[0].systemGuidance).toContain('"required":["answer"]');
+			expect(promptText(requests[0])).toContain('"required":["answer"]');
 		});
 
 		it('keeps the client\'s own guidance before what it appends', async () => {
 			const { requests } = await ask({ messages: [{ role: 'system', content: 'Work in the open folder.' }, { role: 'user', content: 'hi' }], response_format: { type: 'json_object' } });
 
-			expect(requests[0].systemGuidance).toContain('Work in the open folder.');
-			expect(requests[0].systemGuidance).toContain('ONLY a single valid JSON value');
+			expect(promptText(requests[0])).toContain('Work in the open folder.');
+			expect(promptText(requests[0])).toContain('ONLY a single valid JSON value');
+			expect(promptText(requests[0]).indexOf('Work in the open folder.')).toBeLessThan(promptText(requests[0]).indexOf('ONLY a single'));
 		});
 
 		it('tells the agent to call a tool when tool_choice is required', async () => {
 			const { requests } = await ask({ tools: [TOOL], tool_choice: 'required' });
 
-			expect(requests[0].systemGuidance).toContain('must call one of the tools');
+			expect(promptText(requests[0])).toContain('must call one of the tools');
 			expect(requests[0].tools.map(tool => tool.name)).toEqual(['do_a_thing']);
 		});
 

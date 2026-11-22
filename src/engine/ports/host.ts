@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ChatMessage, ChatRequest, Part, ToolResult } from '../model/chat';
+import type { ChatMessage, ChatRequest, Part, PromptSection, ToolResult } from '../model/chat';
 import type { ConfigReader, SecretStore, StateStore } from './state';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -55,8 +55,8 @@ export interface HostPort {
 	readonly storageRoot: string;
 	/** Which chat the request belongs to, and the folders of the window that sent it. */
 	chatIdentity(request: ChatRequest): ChatIdentity;
-	/** The workspace guidance the host wrote into the request, if any. */
-	guidanceOf(request: ChatRequest): string | undefined;
+	/** The sections of the system prompt the client wrote into the request, if any. */
+	promptOf(request: ChatRequest): readonly PromptSection[] | undefined;
 	/**
 	 * Takes the host's own sections out of text the engine forwards. The engine
 	 * knows no section of any host's prompt, so it asks this instead of naming

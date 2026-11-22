@@ -59,7 +59,6 @@ The optional extension needs **VS Code 1.105+** and **GitHub Copilot Chat**. It 
 | `ACP_HUB_PORT` | The port the server answers on, on `127.0.0.1`; it wins over the port saved in **Server settings** | the saved port, else `8791` |
 | `ACP_HUB_TOKEN` | The bearer token clients send; otherwise the stored token is used, or made | `<root>/server.token` |
 | `ACP_HUB_HOME` | The shared store: token, `config.json`, secrets, state and installed agents | `~/.acp-hub` |
-| `ACP_HUB_PROMPTS_DIR` | Where the server reads its prompt files | built in |
 
 - **Token.** Required on every API request. Any local process that can read the token file can use your plans, so protect the store folder like a credential.
 - **Server settings** set the port; after changing it, run **ACP Hub: Sync Models** again.

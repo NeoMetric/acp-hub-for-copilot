@@ -224,7 +224,7 @@ export interface AgentAdapter {
 	auth: AuthMethodSpec[];
 	settings: SettingSpec[];
 	modelPolicy: ModelPolicy;
-	/** The two sentences of the session prompt that differ per agent (see `createSessionPrompt`). */
+	/** The two sentences of the session prompt that differ per agent. */
 	systemPrompt: { toolAccess: string; listRequiredArguments: boolean };
 	listModels?(session: AgentSessionInfo): ModelChoice[];
 	usage?: UsageSource;

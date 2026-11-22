@@ -4,13 +4,13 @@ A new chat should read the start of its prompt from the model's cache instead of
 
 ## What the hub controls
 
-The session prompt leads the conversation, so one changed character in it makes the cache miss for everything after it. Copilot writes the id of the chat's session folder into its system prompt (`<session_context>` with `Session folder: …/session-state/<uuid>`). Sending that prompt on unchanged made every new chat start with a different prompt.
+The session prompt leads the conversation, so one changed character in it makes the cache miss for everything after it. A client may write the id of the chat into its system prompt, and sending that on unchanged would make every new chat start with a different prompt.
 
-`splitChatGuidance` (`src/engine/chat/keys.ts`) now separates that block, and any other line naming the session folder, from the guidance:
+The client therefore sends its prompt as labelled sections, and the server writes no prompt text of its own (`src/engine/chat/promptSections.ts`):
 
-- The part every chat shares goes into the session prompt, for all agents.
-- The part about this chat goes in the message that opens the session, which follows the cached prompt.
-- The tool arguments section of the prompt comes last, so a different set of tools changes only the end of it.
+- Sections of no kind, and `fixed` ones, are joined with a blank line into the session prompt, for all agents.
+- A section of kind `chat` names one chat; it stays out of the session prompt and goes in the message that opens the session, which follows the cached prompt.
+- The client puts the sections that vary with the offered tools last, so a different set of tools changes only the end of the prompt.
 - Each new chat logs `Session prompt hash <hash>`. The same hash for two chats means the prompt is identical.
 
 ## Measured result

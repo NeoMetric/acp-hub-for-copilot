@@ -16,7 +16,7 @@ import { ChatError } from '../../engine/chat/ChatError';
 import { firstMessageAfterReply, isHubCallId } from '../../engine/chat/messages';
 import type { ControlSurface } from '../../engine/control/ControlService';
 import { ModelNames } from '../../engine/models/modelNames';
-import type { ChatMessage, ChatRequest, ChatRole, Part, ToolDef } from '../../engine/model/chat';
+import type { ChatMessage, ChatRequest, ChatRole, Part, PromptSection, ToolDef } from '../../engine/model/chat';
 import type { StreamEvent } from '../../engine/model/stream';
 import type { Log } from '../../engine/ports/host';
 import { ControlPage } from '../../ui/controlPage';
@@ -24,7 +24,7 @@ import type { ControlAction, ControlState, ModelsSurface, ServerSurface, UsageHi
 import { ACTION_ROUTE, EVENTS_ROUTE, STATE_ROUTE } from '../../ui/transport';
 import { rememberExtras, ToolCallParking, type RequestExtras } from './host';
 import { createModelsSurface } from './modelsSurface';
-import { API_VERSION, SERVER_NAME, MODELS_REFRESH_ROUTE, SHUTDOWN_ROUTE, WARM_ROUTE, type AcpRequestExtras, type HealthWire, type ModelWire, type ModelsRefreshWire } from './wire';
+import { API_VERSION, SERVER_NAME, MODELS_REFRESH_ROUTE, SHUTDOWN_ROUTE, WARM_ROUTE, type AcpPromptSection, type AcpRequestExtras, type HealthWire, type ModelWire, type ModelsRefreshWire } from './wire';
 
 /** The package version esbuild bakes into the bundle; it is undefined when the sources run unbundled. */
 declare const __ACP_HUB_VERSION__: string | undefined;
@@ -881,7 +881,7 @@ function chatRequestOf(composition: HeadlessComposition, request: http.IncomingM
 		tools,
 		model: model === AGENT_DEFAULT_MODEL ? undefined : model,
 		effort: effortOf(body.reasoning_effort),
-		systemGuidance: guidanceOf(body, messages, extras),
+		systemPrompt: promptOf(body, messages, extras),
 	};
 	rememberExtras(draft, extras);
 	// A stock OpenAI client sends no session key, so the host names the chat by its
@@ -911,9 +911,26 @@ function acpExtrasOf(value: unknown): AcpRequestExtras {
 		label: text(value.label),
 		cwd: text(value.cwd),
 		workspaceFolders: folders,
+		systemPrompt: isObject(value.systemPrompt) && Array.isArray(value.systemPrompt.sections) ? { sections: value.systemPrompt.sections.flatMap(sectionOf) } : undefined,
 		systemGuidance: text(value.systemGuidance),
 		chatContext: text(value.chatContext),
 	};
+}
+
+/** One section of the client's prompt; an entry with no id or no text, or with a kind this server does not know, is dropped. */
+function sectionOf(value: unknown): AcpPromptSection[] {
+	if (!isObject(value) || typeof value.id !== 'string' || value.id.length === 0 || typeof value.text !== 'string' || value.text.length === 0) {
+		return [];
+	}
+	if (value.kind !== undefined && value.kind !== 'fixed' && value.kind !== 'chat') {
+		return [];
+	}
+	return [{
+		id: value.id,
+		...(typeof value.label === 'string' && value.label.length > 0 ? { label: value.label } : {}),
+		text: value.text,
+		...(value.kind === undefined ? {} : { kind: value.kind }),
+	}];
 }
 
 /** The effort the client picked for the turn, which is the engine's own name for it. */
@@ -922,15 +939,21 @@ function effortOf(value: unknown): string | undefined {
 }
 
 /**
- * The guidance the engine is given: the client's own system message, and what
- * the body's `response_format` and `tool_choice` ask of the reply.
+ * The sections the engine is given: the client's own, or its older single guidance, or a
+ * stock client's system message as one section; then what the body's `response_format`
+ * and `tool_choice` ask of the reply, as a last section.
  */
-function guidanceOf(body: Record<string, unknown>, messages: readonly ChatMessage[], extras: RequestExtras): string | undefined {
+function promptOf(body: Record<string, unknown>, messages: readonly ChatMessage[], extras: RequestExtras): PromptSection[] | undefined {
+	const sent = extras.acp?.systemPrompt?.sections ?? [];
 	// A client that sends no `acp` extras is a stock one: its own system message is the guidance that
-	// tells the model where it works. The extension names its guidance itself, and may send none on purpose.
+	// tells the model where it works. A client with extras names its guidance itself, and may send none on purpose.
 	const own = isObject(body.acp) ? extras.acp?.systemGuidance : systemTextOf(messages);
-	const text = [...(own ? [own] : []), ...replyRulesOf(body)].join('\n\n').trim();
-	return text.length > 0 ? text : undefined;
+	const sections: PromptSection[] = sent.length > 0 ? [...sent] : own ? [{ id: 'guidance', text: own }] : [];
+	const rules = replyRulesOf(body).join('\n\n');
+	if (rules.length > 0) {
+		sections.push({ id: 'reply-rules', text: rules });
+	}
+	return sections.length > 0 ? sections : undefined;
 }
 
 /** What the body asks of the reply's shape, as instructions the agent reads with its own guidance. */

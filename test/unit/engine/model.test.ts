@@ -22,7 +22,7 @@ const request: ChatRequest = {
 	tools: [{ name: 'readFile', description: 'Reads a file.', inputSchema: { type: 'object' } }],
 	model: 'claude-x',
 	effort: 'high',
-	systemGuidance: 'Prefer small diffs.',
+	systemPrompt: [{ id: 'guidance', text: 'Prefer small diffs.' }],
 };
 
 describe('the chat model', () => {
