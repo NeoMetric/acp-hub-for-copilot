@@ -13,6 +13,7 @@ import { modelInfosOf, modelsStateKey, type ModelEntry } from '../../core/modelI
 import { AdapterNotInstalledError } from '../../engine/acp/agentClient';
 import type { ChatService } from '../../engine/chat/ChatService';
 import { ChatError } from '../../engine/chat/ChatError';
+import { firstMessageAfterReply, isHubCallId } from '../../engine/chat/messages';
 import type { ControlSurface } from '../../engine/control/ControlService';
 import { ModelNames } from '../../engine/models/modelNames';
 import type { ChatMessage, ChatRequest, ChatRole, Part, ToolDef } from '../../engine/model/chat';
@@ -976,12 +977,15 @@ function unsupportedOf(body: Record<string, unknown>): string | undefined {
  *
  * A call this chat no longer holds is not refused: the client did answer, only
  * after the hub had given the call up, so the answer is carried into the next
- * turn rather than thrown away.
+ * turn rather than thrown away. A call the hub never made is none of those: the
+ * client made it itself, after a notice of its own, and the engine forwards it
+ * with the notice.
  */
 function takeToolResults(parking: ToolCallParking, chatId: string, messages: ChatMessage[]): string | undefined {
-	// Results before the last assistant message answered earlier requests of the same turn; their calls are settled.
-	const lastAssistant = messages.map(message => message.role).lastIndexOf('assistant');
-	const results = messages.slice(lastAssistant + 1).flatMap(message => message.parts.filter((part): part is Extract<Part, { type: 'tool-result' }> => part.type === 'tool-result'));
+	// Results before the agent's last reply answered earlier requests of the same turn; their calls are settled.
+	// A call the client made after one of its notices is no reply, so the results ahead of it still count.
+	const afterReply = firstMessageAfterReply(messages);
+	const results = messages.slice(afterReply).flatMap(message => message.parts.filter((part): part is Extract<Part, { type: 'tool-result' }> => part.type === 'tool-result'));
 	for (const result of results) {
 		if (parking.heldElsewhere(chatId, result.callId)) {
 			return result.callId;
@@ -990,11 +994,11 @@ function takeToolResults(parking: ToolCallParking, chatId: string, messages: Cha
 	if (results.length === 0) {
 		return undefined;
 	}
-	if (lastAssistant < 0) {
+	if (!messages.some(message => message.role === 'assistant')) {
 		// No reply of this chat stands before the results, so no call of it can be the one they answer.
 		return results[0].callId;
 	}
-	const late = results.filter(result => !parking.has(chatId, result.callId));
+	const late = results.filter(result => !parking.has(chatId, result.callId) && isHubCallId(result.callId));
 	for (const result of results) {
 		parking.take(chatId, result.callId);
 	}

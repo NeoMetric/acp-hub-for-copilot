@@ -510,6 +510,55 @@ describe('the HTTP server', () => {
 		expect(done.choices[0].message.content).toBe('tool:two');
 	});
 
+	// Copilot announces a background agent that finished with a notice, then reads the agent itself:
+	// a call of its own, which the agent never made, and its result.
+	const notice = { role: 'user', content: '<system_notification>\nAgent "helper" has finished processing and is now idle.\n</system_notification>' };
+	const hostCall = { role: 'assistant', content: null, tool_calls: [{ id: 'host-read-1', type: 'function', function: { name: 'read_agent', arguments: '{"agent_id":"a1"}' } }] };
+	const hostResult = { role: 'tool', tool_call_id: 'host-read-1', content: 'Agent is idle. Report: all done' };
+
+	it('keeps the turn running when a background agent notice follows the result, and hands the notice to the agent', async () => {
+		const logs: string[] = [];
+		const url = await start({ log: message => logs.push(message) });
+		const model = await firstModel(url);
+		const toolCall = (await bodyOf(await post(`${url}/v1/chat/completions`, toolChat(model)))).choices[0].message.tool_calls[0];
+
+		const body = await bodyOf(await post(`${url}/v1/chat/completions`, {
+			model,
+			tools: [TOOL],
+			messages: [
+				{ role: 'user', content: 'tool' },
+				{ role: 'assistant', content: null, tool_calls: [toolCall] },
+				{ role: 'tool', tool_call_id: toolCall.id, content: 'the answer is 42' },
+				notice,
+				hostCall,
+				hostResult,
+			],
+		}));
+
+		expect(logs.filter(line => line.includes('was abandoned')), 'the running turn was not cancelled').toEqual([]);
+		expect(body.choices[0].finish_reason).toBe('stop');
+		expect(body.choices[0].message.content).toMatch(/^tool:the answer is 42/);
+		expect(body.choices[0].message.content).toContain('Agent "helper" has finished');
+		expect(body.choices[0].message.content).toContain('Report: all done');
+	});
+
+	it('answers a background agent notice of an idle chat as its own message, and keeps the session after it', async () => {
+		const logs: string[] = [];
+		const url = await start({ log: message => logs.push(message) });
+		const model = await firstModel(url);
+		const ask = (messages: unknown[]): Promise<Response> => post(`${url}/v1/chat/completions`, { model, tools: [TOOL], messages });
+		const opening = [{ role: 'user', content: 'hi' }];
+		await bodyOf(await ask(opening));
+		const notified = [...opening, { role: 'assistant', content: 'hello' }, notice, hostCall, hostResult];
+		await bodyOf(await ask(notified));
+
+		const body = await bodyOf(await ask([...notified, { role: 'assistant', content: 'hello' }, { role: 'user', content: 'next' }]));
+
+		expect(body.choices[0].message.content).toBe('hello');
+		expect(logs.filter(line => line.includes('answered by another agent')), 'the notice was not taken for another agent').toEqual([]);
+		expect(logs.filter(line => line.includes('Chat history changed')), 'the chat was not treated as edited').toEqual([]);
+	});
+
 	it('goes on in the same session when the client rewrites the result of a call it stopped waiting for', async () => {
 		const logs: string[] = [];
 		const url = await start({ log: message => logs.push(message) });

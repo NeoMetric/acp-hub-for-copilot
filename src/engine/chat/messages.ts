@@ -245,14 +245,93 @@ export function lastUserMessageIndex(messages: readonly ChatMessage[]): number {
 
 const saysSomething = (message: ChatMessage): boolean => textOf(message).trim().length > 0 || imagePartsOf(message).length > 0;
 
+/** How every tool call the engine hands a host is named, so a call the host made itself can be told apart. */
+export const HUB_CALL_ID_PREFIX = 'acp-hub-';
+
+export const isHubCallId = (callId: string): boolean => callId.startsWith(HUB_CALL_ID_PREFIX);
+
+const HOST_NOTIFICATION = /^(?:\s*<system_notification>[\s\S]*?<\/system_notification>)+\s*$/;
+
+/** A notice the host adds to the chat on its own, such as a background agent or command that finished. */
+function isHostNotification(message: ChatMessage): boolean {
+	return message.role === 'user' && message.parts.length > 0 && message.parts.every(part => part.type === 'text') && HOST_NOTIFICATION.test(textOf(message));
+}
+
+/**
+ * The messages the host added after one of its notices: the notice, then the calls it made itself to
+ * follow it up (it reads the agent that finished) and their results. The agent made none of them, so
+ * none is a reply of its own, another assistant's turn, or anything the user said.
+ */
+export function hostAdditionsOf(messages: readonly ChatMessage[]): ReadonlySet<number> {
+	const added = new Set<number>();
+	const hostCalls = new Set<string>();
+
+	for (let index = 0; index < messages.length; index++) {
+		if (!isHostNotification(messages[index])) {
+			continue;
+		}
+		added.add(index);
+		while (index + 1 < messages.length) {
+			const next = messages[index + 1];
+			const calls = toolCallsOf(next);
+			const results = toolResultsOf(next);
+			const hostCall = next.role === 'assistant' && calls.length > 0 && textOf(next).trim().length === 0 && calls.every(call => !isHubCallId(call.callId));
+			const hostResult = next.role === 'user' && results.length > 0 && next.parts.length === results.length && results.every(result => hostCalls.has(result.callId));
+			if (!hostCall && !hostResult && !isHostNotification(next)) {
+				break;
+			}
+			for (const call of calls) {
+				hostCalls.add(call.callId);
+			}
+			added.add(++index);
+		}
+	}
+
+	return added;
+}
+
+/**
+ * What the host added after its notices from `from` on, as text for the agent: each notice as it
+ * stands, and each call the host made with what it returned. The agent never saw those calls.
+ */
+export function hostAdditionParts(messages: readonly ChatMessage[], from: number): Part[] {
+	const added = hostAdditionsOf(messages);
+	const calls = new Map<string, Extract<Part, { type: 'tool-call' }>>();
+	const parts: Part[] = [];
+
+	for (let index = Math.max(from, 0); index < messages.length; index++) {
+		if (!added.has(index)) {
+			continue;
+		}
+		const message = messages[index];
+		for (const call of toolCallsOf(message)) {
+			calls.set(call.callId, call);
+		}
+		if (isHostNotification(message)) {
+			parts.push({ type: 'text', text: textOf(message).trim() });
+		}
+		for (const result of toolResultsOf(message)) {
+			const call = calls.get(result.callId);
+			const name = call ? `${call.name} ${JSON.stringify(call.input ?? {})}` : 'a tool';
+			const output = toolResultText(result).trim();
+			parts.push({ type: 'text', text: `The host called ${name} for you after that notice${result.isError === true ? ', and it reported an error' : ''}:${output.length > 0 ? `\n${output}` : ' (it returned no text)'}` });
+			parts.push(...result.content.filter((part): part is Extract<Part, { type: 'image' }> => part.type === 'image'));
+		}
+	}
+
+	return parts;
+}
+
 /**
  * The first message in `[from, to)` where the user said something, or -1. Past a
  * session's last reply the only such message is normally the newest one, so one
- * further back means another agent answered the chat in between.
+ * further back means another agent answered the chat in between. A notice of the
+ * host is not the user's, nor is a call the host made after one another agent's.
  */
 export function firstUserWordsIn(messages: readonly ChatMessage[], from: number, to: number): number {
+	const added = hostAdditionsOf(messages);
 	for (let index = Math.max(from, 0); index < Math.min(to, messages.length); index++) {
-		if (messages[index].role === 'user' && saysSomething(messages[index])) {
+		if (messages[index].role === 'user' && !added.has(index) && saysSomething(messages[index])) {
 			return index;
 		}
 	}
@@ -260,11 +339,15 @@ export function firstUserWordsIn(messages: readonly ChatMessage[], from: number,
 	return -1;
 }
 
-/** Where the messages the agent has not answered start: right after its last reply. */
+/**
+ * Where the messages the agent has not answered start: right after its last reply. A call the host
+ * made after one of its notices is no reply of the agent's, so the results it follows still count.
+ */
 export function firstMessageAfterReply(messages: readonly ChatMessage[]): number {
+	const added = hostAdditionsOf(messages);
 	let first = messages.length;
 
-	while (first > 0 && messages[first - 1].role !== 'assistant') {
+	while (first > 0 && (messages[first - 1].role !== 'assistant' || added.has(first - 1))) {
 		first--;
 	}
 
@@ -273,7 +356,9 @@ export function firstMessageAfterReply(messages: readonly ChatMessage[]): number
 
 /** Skill context can be emitted separately from its result by the host. */
 export function skillContextAfterReply(messages: readonly ChatMessage[]): { callId: string; text: string } | undefined {
-	const recent = messages.slice(firstMessageAfterReply(messages));
+	const added = hostAdditionsOf(messages);
+	const from = firstMessageAfterReply(messages);
+	const recent = messages.slice(from).filter((_, offset) => !added.has(from + offset));
 	const results = recent.flatMap(toolResultsOf);
 	const contexts = recent.filter(message => message.role === 'user')
 		.map(message => textOf(message).trim())
@@ -293,9 +378,12 @@ export function skillContextAfterReply(messages: readonly ChatMessage[]): { call
 export function userWordsAfterReply(messages: readonly ChatMessage[], stripHostSections: StripHostSections = NO_HOST_SECTIONS): Part[] {
 	const words: Part[] = [];
 	const skillContext = skillContextAfterReply(messages);
+	const added = hostAdditionsOf(messages);
 
-	for (const message of messages.slice(firstMessageAfterReply(messages))) {
-		if (message.role !== 'user') {
+	for (let index = firstMessageAfterReply(messages); index < messages.length; index++) {
+		const message = messages[index];
+		// A notice of the host reaches the agent with the results it follows; it does not end the turn.
+		if (message.role !== 'user' || added.has(index)) {
 			continue;
 		}
 		const text = promptTextOf(message, stripHostSections).trim();
@@ -319,12 +407,25 @@ export function carriesToolResults(messages: readonly ChatMessage[]): boolean {
  * Converts chat messages into ACP prompt content blocks.
  *
  * Only user text and images are forwarded: tool calls and tool results are
- * ignored, because the agent runs tools itself over the MCP bridge.
+ * ignored, because the agent runs tools itself over the MCP bridge. The calls
+ * the host made after one of its notices are the exception: the agent never ran
+ * them, so what they returned is forwarded with the notice.
  */
 export function toAcpContentBlocks(messages: readonly ChatMessage[], stripHostSections: StripHostSections = NO_HOST_SECTIONS): AcpContentBlock[] {
 	const blocks: AcpContentBlock[] = [];
+	const added = hostAdditionsOf(messages);
 
-	for (const message of messages) {
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
+		if (added.has(index)) {
+			let end = index;
+			while (added.has(end + 1)) {
+				end++;
+			}
+			blocks.push(...hostAdditionParts(messages.slice(0, end + 1), index).map(toContentBlock));
+			index = end;
+			continue;
+		}
 		if (message.role !== 'user') {
 			continue;
 		}
@@ -337,6 +438,12 @@ export function toAcpContentBlocks(messages: readonly ChatMessage[], stripHostSe
 	}
 
 	return blocks;
+}
+
+function toContentBlock(part: Part): AcpContentBlock {
+	return part.type === 'image'
+		? { type: 'image', data: Buffer.from(part.data).toString('base64'), mimeType: part.mimeType }
+		: { type: 'text', text: part.type === 'text' ? part.text : '' };
 }
 
 /** Upper bound for the restored conversation, so a long chat cannot swamp the new turn. */

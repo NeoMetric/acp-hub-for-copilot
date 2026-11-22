@@ -5,7 +5,7 @@
 
 import type { ToolResult } from '../model/chat';
 import type { Log } from '../ports/host';
-import { skillContextAfterReply } from './messages';
+import { firstMessageAfterReply, hostAdditionParts, skillContextAfterReply } from './messages';
 import type { ActiveTurn } from './types';
 import type { ChatMessage } from '../model/chat';
 
@@ -96,7 +96,7 @@ export function releaseHeldToolCalls(turn: ActiveTurn, log: Log): void {
 
 /** Settles pending tool calls with the results the host just returned. */
 export function resolveToolResults(turn: ActiveTurn, messages: readonly ChatMessage[], log: Log): boolean {
-	let resolved = 0;
+	const settled: Array<{ settle: { resolve: (content: readonly ToolResult['content'][number][], isError: boolean) => void }; content: readonly ToolResult['content'][number][]; isError: boolean }> = [];
 	const skillContext = skillContextAfterReply(messages);
 
 	// A background-command notification can add an assistant message after a
@@ -122,16 +122,27 @@ export function resolveToolResults(turn: ActiveTurn, messages: readonly ChatMess
 				}
 				log(`Skill context (${skillContext.text.length} characters) ${included ? 'already present in' : 'appended to'} tool result.`, 'debug');
 			}
-			pending.resolve(content, part.isError === true);
-			resolved++;
+			settled.push({ settle: pending, content, isError: part.isError === true });
 		}
 	}
 
-	if (resolved > 0) {
-		turn.streaming = true;
-		log(`Received ${resolved} tool result(s) for the pending turn.`);
+	// A notice the host added while the tools ran, such as a background agent that finished, and what
+	// the host read for it, reach the agent next to the last result, as they would reach a native model.
+	const notices = settled.length > 0 ? hostAdditionParts(messages, firstMessageAfterReply(messages)) : [];
+	if (notices.length > 0) {
+		const last = settled[settled.length - 1];
+		last.content = [...last.content, ...notices];
+		log(`Handing ${notices.length} part(s) the host added after its notice to the agent with the tool result.`);
 	}
-	return resolved > 0;
+	for (const { settle, content, isError } of settled) {
+		settle.resolve(content, isError);
+	}
+
+	if (settled.length > 0) {
+		turn.streaming = true;
+		log(`Received ${settled.length} tool result(s) for the pending turn.`);
+	}
+	return settled.length > 0;
 }
 
 /** Keeps a turn stoppable after its response returned to have the host run its tools. */

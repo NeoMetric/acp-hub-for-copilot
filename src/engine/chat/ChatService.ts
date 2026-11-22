@@ -21,7 +21,7 @@ import { countsOf } from './checkpoints';
 import { clearToolDeadline, disposeCancellations, failPendingToolCalls, handOverToolCall, resolveToolResults } from './heldCalls';
 import { agentIdleMs, IDLE_SWEEP_MS, idleTimeoutMs, maxChatSessions, WARM_SESSION_IDLE_MS } from './idle';
 import { describeToolChange, fingerprintPreview, guidanceChangeOf, guidanceDiffers, guidanceHashOf, guidanceLineHashes, mergeGuidanceChange, splitChatGuidance, toolChangeOf, toolsDiffer } from './keys';
-import { carriesToolResults, DEFAULT_TRANSCRIPT_OPTIONS, diverged, lastUserMessageIndex, persistentFingerprints, settledPrefixOf, skillContextAfterReply, userWordsAfterReply, type TranscriptOptions } from './messages';
+import { carriesToolResults, DEFAULT_TRANSCRIPT_OPTIONS, diverged, HUB_CALL_ID_PREFIX, lastUserMessageIndex, persistentFingerprints, settledPrefixOf, skillContextAfterReply, userWordsAfterReply, type TranscriptOptions } from './messages';
 import { acpModelValue, effortFor } from './modelOptions';
 import { PromptArchive } from './promptArchive';
 import { findEditFork, findReusable, promptHashOf } from './reuse';
@@ -34,7 +34,7 @@ import { bridgeServer, WarmSession } from './warmSession';
 import { AgentProcesses, type AgentProcess } from './agentProcess';
 
 /** Per-process nonce, so call ids from an earlier run in a chat's history never match a new call. */
-const TOOL_CALL_ID_PREFIX = `acp-hub-${randomBytes(4).toString('hex')}-`;
+const TOOL_CALL_ID_PREFIX = `${HUB_CALL_ID_PREFIX}${randomBytes(4).toString('hex')}-`;
 
 /**
  * How long an agent that is not installed is remembered. The probe looks for the
