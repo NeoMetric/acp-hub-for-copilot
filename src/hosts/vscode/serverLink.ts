@@ -96,7 +96,7 @@ const DETACHED_FLAG = '--detached';
 /** The file a detached server writes its output to, in the store root. */
 const SERVER_LOG = 'server.log';
 
-/** A log this large is started over, so a server that runs for months does not fill the disk. */
+/** A log this large is set aside as `server.log.old` and started over, so a server that runs for months does not fill the disk. */
 const SERVER_LOG_LIMIT_BYTES = 2 * 1024 * 1024;
 
 /** How often the server's log file is read for new lines once the server is up. */
@@ -580,8 +580,16 @@ export class ServerLink {
 	private spawnDetached(env: NodeJS.ProcessEnv, node: string): ChildProcess {
 		const file = path.join(this.deps.root, SERVER_LOG);
 		fs.mkdirSync(this.deps.root, { recursive: true });
-		const startOver = fs.existsSync(file) && fs.statSync(file).size > SERVER_LOG_LIMIT_BYTES;
-		const descriptor = fs.openSync(file, startOver ? 'w' : 'a');
+		if (fs.existsSync(file) && fs.statSync(file).size > SERVER_LOG_LIMIT_BYTES) {
+			// Truncating in place would let a server being replaced, which still writes at its old position,
+			// leave a hole of NUL bytes that hides the new server's lines; renamed, its last lines go to the old file.
+			try {
+				fs.renameSync(file, `${file}.old`);
+			} catch (error) {
+				this.deps.log(`The server log ${file} could not be set aside, so it keeps growing: ${messageOf(error)}`, 'warn');
+			}
+		}
+		const descriptor = fs.openSync(file, 'a');
 		if (this.follower) {
 			// The start-up reads the new server's log itself, and follows it once the server is up.
 			clearInterval(this.follower);
@@ -859,7 +867,9 @@ class LogTail {
 				fs.closeSync(descriptor);
 			}
 			this.offset = size;
-			return buffer.toString('utf8');
+			// A writer that skipped ahead leaves NUL bytes behind; they are not text.
+			// A writer that skipped ahead leaves NUL bytes behind; they are not text.
+			return buffer.toString('utf8').replace(/\0+/g, '');
 		} catch {
 			return '';
 		}

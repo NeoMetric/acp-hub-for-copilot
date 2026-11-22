@@ -499,6 +499,20 @@ describe('a server that runs on its own', () => {
 		await waitUntil(async () => lines.some(line => line.includes('a chat started')), 'the log line in the server log', 3_000);
 	});
 
+	it('leaves the NUL bytes of a hole in the server log out of the channel', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		readyOf(await makeLink({ root, port, detached: true }).ensure());
+		const lines: string[] = [];
+		const watcher = makeLink({ root, port, detached: true, serverLog: (message: string) => { lines.push(message); } });
+
+		expect(readyOf(await watcher.ensure()).owned).toBe(false);
+		fs.appendFileSync(path.join(root, 'server.log'), Buffer.concat([Buffer.alloc(4096), Buffer.from(`${new Date().toISOString()} INFO [claude] after the hole\n`)]));
+
+		await waitUntil(async () => lines.some(line => line.includes('after the hole')), 'the line after the hole', 3_000);
+		expect(lines.some(line => line.includes('\0'))).toBe(false);
+	});
+
 	it('shows the end of a log written before it attached, whole lines only, and each line once', async () => {
 		const port = await freePort();
 		const root = storeRoot();
@@ -522,6 +536,30 @@ describe('a server that runs on its own', () => {
 		expect(lines[0], 'the first line it reads is whole').toMatch(/^\[filler\] line \d+ x+$/);
 		// The start of the server it attached to is in the stretch it shows too.
 		await waitUntil(async () => lines.some(line => line.includes('listening')), 'the start of the server in the replayed log', 3_000);
+	});
+
+	it('sets a log that grew too large aside, so a server it replaces cannot write a hole into the new one', async () => {
+		const port = await freePort();
+		const root = storeRoot();
+		const file = path.join(root, 'server.log');
+		const old = `${'x'.repeat(2 * 1024 * 1024)}\n`;
+		fs.writeFileSync(file, old);
+		// The server being replaced still holds the log at its own position and writes a last line there.
+		const previous = fs.openSync(file, 'r+');
+		const lines: string[] = [];
+		try {
+			readyOf(await makeLink({ root, port, detached: true, serverLog: (message: string) => { lines.push(message); } }).ensure());
+			fs.writeSync(previous, 'a last line of the replaced server\n', Buffer.byteLength(old));
+		} finally {
+			fs.closeSync(previous);
+		}
+
+		const log = fs.readFileSync(file);
+		expect(log.includes(0), 'no stretch of NUL bytes in the new log').toBe(false);
+		expect(log.toString('utf8')).toContain('stub-server listening');
+		expect(log.toString('utf8')).not.toContain('a last line of the replaced server');
+		expect(fs.readFileSync(`${file}.old`, 'utf8')).toContain('a last line of the replaced server');
+		await waitUntil(async () => lines.some(line => line.includes('listening')), 'the new server\'s start in the server log', 3_000);
 	});
 
 	it('stops the server on request and leaves it stopped until it is asked for again', async () => {

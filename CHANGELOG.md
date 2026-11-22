@@ -6,6 +6,8 @@
 - The tool server is renamed from `vscode` to `hub`: tools now reach the model as `mcp__hub__*` (Claude, Codex) and `mcp_hub_*` (Google).
 - API version 2. The extension requires a server that reports 2, so update both together.
 - A chat that is open or saved when this is installed misses the cache once, because its prompt and tool names change.
+- Fix the **ACP Hub Server** output channel staying empty after the window replaced a running server. A `server.log` over 2 MB was truncated in place, and the server being replaced wrote its last lines at its old position, leaving a block of NUL bytes that hid the new server's lines. A log over 2 MB is now renamed to `server.log.old` and a new one is started. The channel also leaves out any NUL bytes a log still contains.
+- Shorter text on the **Docs** tab and in the ⓘ help of the settings and usage bars. Nothing it says changed.
 
 ## 1.1.1
 

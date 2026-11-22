@@ -60,14 +60,14 @@ function renderWindow(window: UsageWindow): string {
 	const percent = clampPercent(window.usedPercent);
 	const resets = window.resets ? `<span class="resets">resets ${escapeHtml(window.resets)}</span>` : '';
 	const description = window.label === 'Cumulative cache hit rate'
-		? 'The token-weighted cache hit rate across requests since this window opened, including background requests. Subagent and compaction calls are excluded.'
+		? 'The token-weighted cache hit rate since this window opened, background requests included; subagent and compaction calls excluded.'
 		: window.label === 'Last chat turn cache hit rate'
-			? 'The cache hit rate across all model calls in the last completed chat turn.'
+			? 'Cache hit rate over the last completed chat turn.'
 			: window.label === 'Last background request cache hit rate'
-				? 'The cache hit rate across model calls in the last completed background request.'
+				? 'Cache hit rate over the last completed background request.'
 				: window.label === 'Last model call cache hit rate'
-					? 'The cache hit rate for the most recent individual model call.'
-					: 'The percentage of this usage allowance used, as reported by the agent.';
+					? 'Cache hit rate of the latest model call.'
+					: 'Share of this usage allowance used, as reported by the agent.';
 	return `<div class="usage-window">`
 		+ `<div class="usage-head"><span>${escapeHtml(window.label)} ${renderInfo(window.label, description)}</span><span>${percent}%</span></div>`
 		+ `<div class="bar"><div class="bar-fill" style="width:${percent}%"></div></div>`
@@ -76,7 +76,7 @@ function renderWindow(window: UsageWindow): string {
 }
 
 function renderCacheMisses(misses: NonNullable<AgentCardState['usage']['cacheMisses']>): string {
-	const description = 'Model calls that paid full price instead of reading the cache. Unexpected: lost mid-chat, worth checking. After idle: the cache expired after 5 minutes unused, which is normal.';
+	const description = 'Calls that paid full price instead of reading the cache. Unexpected: lost mid-chat, worth checking. After idle: expired after 5 unused minutes, which is normal.';
 	const unexpected = `${misses.unexpected} unexpected (${formatTokens(misses.lostTokens)} tokens)`;
 	const idle = `${misses.expired} after idle (${formatTokens(misses.expiredLostTokens)} tokens)`;
 	return `<div class="usage-window">`
@@ -337,7 +337,7 @@ export function renderServerSettings(server: ServerView, draftPort: string | und
 		: '';
 	const fromEnv = server.portFromEnv ? '<div class="note">The port is set by ACP_HUB_PORT, so a saved port is ignored.</div>' : '';
 	const port = `<div class="setting"><div class="setting-heading"><span class="setting-label">Port</span>`
-		+ `${renderInfo('Port', 'The port the server listens on, on 127.0.0.1 only. A new port is used the next time the server starts.')}</div>`
+		+ `${renderInfo('Port', 'Port the server listens on (127.0.0.1 only). A new port applies at the next start.')}</div>`
 		+ `<div class="actions"><input aria-label="Port" type="number" min="1" max="65535" data-server-port="true" value="${escapeHtml(value)}"${locked}>`
 		+ `<button data-action="saveServerPort"${locked}>Save</button></div>`
 		+ (error ? `<div class="error">${escapeHtml(error)}</div>` : '')
@@ -381,7 +381,7 @@ function withinDays(points: readonly UsagePoint[], days: number): UsagePoint[] {
  */
 export function renderUsageView(view: UsageHistoryView, selection: UsageSelection): string {
 	const retention = `<div class="setting usage-retention"><div class="setting-heading">`
-		+ `<span class="setting-label">Keep history for</span>${renderInfo('Keep history for', 'How many days of token usage the server keeps. Lowering it deletes the older days for good.')}</div>`
+		+ `<span class="setting-label">Keep history for</span>${renderInfo('Keep history for', 'Days of token usage kept. Lowering it permanently deletes older days.')}</div>`
 		+ `<div class="actions"><input aria-label="Keep history for" type="number" data-retention="true" min="1" max="365" value="${view.retentionDays}">`
 		+ `<button data-action="setRetentionDays">Save</button></div></div>`;
 
