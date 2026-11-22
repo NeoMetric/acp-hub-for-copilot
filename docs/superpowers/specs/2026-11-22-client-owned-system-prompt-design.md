@@ -1,7 +1,7 @@
 # Client-owned system prompt
 
 Date: 2026-11-22
-Status: draft, awaiting approval
+Status: implemented; live check pending
 
 ## Intent
 

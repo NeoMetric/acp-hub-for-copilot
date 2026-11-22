@@ -80,7 +80,11 @@ Claude and Codex can have more than one account (Windows only for now); Antigrav
 
 Configure each agent from its card or in `~/.acp-hub/config.json`. The cards show plan limits, cache hit rates and cache misses where the agent reports them.
 
-- **Replace the system prompt** (off by default): uses the client's guidance instead of the agent's built-in prompt.
+- **Replace the system prompt** (off by default; the extension reads it on every request). The server writes no prompt text; the VS Code extension builds the prompt and sends it as sections:
+  - **On**: Copilot's system prompt as it is, plus the extension's functional notes, replaces the agent's built-in prompt.
+  - **Off**: the agent keeps its own prompt, and the extension adds the same thing without Copilot's identity, persona and content-policy lines.
+  - **Google (Antigravity)**: keep it off. With it on, Google gets Copilot's prompt as it is and answers every request with a 429.
+  - **Tool names**: the extension's tools come from an MCP server named `hub`, so the model sees `mcp__hub__*` (Claude, Codex) or `mcp_hub_*` (Google).
 - **Tool search** (Claude): loads tool descriptions only when needed, shrinking large requests.
 - **Default thinking effort**: used when a request names none. Claude starts at High; Codex and Antigravity leave it to the agent.
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- The system prompt is now the client's. The server writes no prompt text of its own and takes the prompt as labelled sections (`acp.systemPrompt.sections`); the VS Code extension builds them from Copilot's prompt and reads **Replace the system prompt** from `config.json` on every request. On: Copilot's prompt as it is plus the extension's functional notes. Off: the same without Copilot's identity, persona and content-policy lines. This removes the server-written line that made Google answer every request with a 429, but Google with the setting on still gets Copilot's prompt as it is and answers 429, so keep it off for Google.
+- The tool server is renamed from `vscode` to `hub`: tools now reach the model as `mcp__hub__*` (Claude, Codex) and `mcp_hub_*` (Google).
+- API version 2. The extension requires a server that reports 2, so update both together.
+- A chat that is open or saved when this is installed misses the cache once, because its prompt and tool names change.
+
 ## 1.1.1
 
 - Fix the agent stopping partway through a reply, as if you had interrupted it, when a background agent or command finished while its tools ran. Copilot then adds a notice (`<system_notification>`) and reads the finished agent itself; the hub took that for a new message from you and cancelled the turn. The turn now goes on, and the notice and what Copilot read reach the agent with its next tool result, as they would reach a native model. This applies to every agent. The log line `Handing N part(s) the host added after its notice` shows it happening.

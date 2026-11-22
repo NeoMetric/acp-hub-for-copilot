@@ -15,7 +15,7 @@ The client therefore sends its prompt as labelled sections, and the server write
 
 ## Measured result
 
-Two new chats, opened one after the other with a real Copilot system prompt that differed only in the session folder id.
+Measured before the system prompt became the client's (the server then folded the session folder out of Copilot's prompt itself; now the extension splits it into a `chat` section). Not re-measured since. Two new chats, opened one after the other with a real Copilot system prompt that differed only in the session folder id.
 
 | Agent | Second chat, first model call | Notes |
 |---|---|---|
@@ -33,7 +33,7 @@ The two rollout files of the test showed the same instructions and the same tool
 
 The tools of a chat reach the model with a server name that depends on the server settings the hub hands the CLI. Tool definitions come first in a request, so a name that changes per session would break the cache from the start.
 
-Probe, run against `agy acp` directly with a small MCP server of its own:
+Probe, run against `agy acp` directly with a small MCP server of its own, before the hub's tool server was renamed from `vscode` to `hub` (the finding does not depend on the name):
 
 - Two sessions with identical server settings (same URL, same bearer token): both got the server name `vscode`.
 - A session with a different token: `vscode_<hash>`. The hub gives every session its own token, so every chat gets its own name.
