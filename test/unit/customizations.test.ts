@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest';
-import { parseFrontmatter } from '../../src/core/customizations';
+import { parseFrontmatter } from '../../src/hosts/vscode/customizations';
 
 describe('parseFrontmatter', () => {
 	it('reads plain, double quoted and single quoted values', () => {

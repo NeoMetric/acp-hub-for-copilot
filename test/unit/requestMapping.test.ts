@@ -5,7 +5,6 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as vscode from 'vscode';
-import { stripIdentity } from '../../src/core/identityPatterns';
 import { chatIdOf, chatLabelOf, resolveCwd, sessionKey, systemGuidanceOf, workspaceFoldersOf } from '../../src/hosts/vscode/identity';
 import { bodyOf } from '../../src/hosts/vscode/requestMapping';
 import { assistant, image, system, toolCall, user } from './messages';
@@ -19,9 +18,10 @@ interface Body {
 	messages: Array<{ role: string; content?: string | unknown[]; tool_calls?: unknown[]; tool_call_id?: string }>;
 	tools?: unknown[];
 	reasoning_effort?: string;
-	acp: { chatId?: string; sessionKey?: string; label?: string; cwd?: string; workspaceFolders?: string[]; systemGuidance?: string; chatContext?: string };
+	acp: { chatId?: string; sessionKey?: string; label?: string; cwd?: string; workspaceFolders?: string[]; systemGuidance?: string; systemPrompt?: { sections: Array<{ id: string; text: string }> }; chatContext?: string };
 }
 
+const PROMPT = { replace: false, files: [] };
 const MODEL = { id: 'claude-sonnet-4' } as unknown as vscode.LanguageModelChatInformation;
 
 function optionsOf(overrides: Record<string, unknown> = {}, tools: readonly unknown[] = []): vscode.ProvideLanguageModelChatResponseOptions {
@@ -29,7 +29,7 @@ function optionsOf(overrides: Record<string, unknown> = {}, tools: readonly unkn
 }
 
 function bodyFor(messages: readonly vscode.LanguageModelChatRequestMessage[], overrides: Record<string, unknown> = {}, modelId = MODEL.id, windowFolder = 'c:\\window'): Body {
-	return bodyOf({ id: modelId } as vscode.LanguageModelChatInformation, 'claude', messages, optionsOf(overrides), windowFolder) as Body;
+	return bodyOf({ id: modelId } as vscode.LanguageModelChatInformation, 'claude', messages, optionsOf(overrides), windowFolder, PROMPT) as Body;
 }
 
 /** The system prompt the Copilot SDK host sends, which names the chat's own directory. */
@@ -61,21 +61,21 @@ describe('bodyOf', () => {
 	it('sends the chat id, label, folders, cwd and guidance the host computed before', () => {
 		const messages = [hostSystem('c:\\work\\app'), globalContext(), request()];
 		const options = optionsOf();
-		const body = bodyOf(MODEL, 'claude', messages, options, 'c:\\window') as Body;
+		const body = bodyOf(MODEL, 'claude', messages, options, 'c:\\window', PROMPT) as Body;
 
 		expect(body.acp.chatId).toBe(chatIdOf(messages, options));
 		expect(body.acp.label).toBe(chatLabelOf(messages));
 		expect(body.acp.workspaceFolders).toEqual(workspaceFoldersOf(messages));
 		expect(body.acp.cwd).toBe(resolveCwd(workspaceFoldersOf(messages), 'c:\\window'));
-		expect(body.acp.systemGuidance).toBe(stripIdentity(systemGuidanceOf(messages) ?? ''));
+		expect(body.acp.systemPrompt?.sections.some(section => section.text.includes(systemGuidanceOf(messages)!))).toBe(true);
 	});
 
 	it('keys the agent session on the chat session key, apart from the id its figures use', () => {
 		const options = optionsOf({ modelOptions: { _conversationId: 'conversation-1' } });
 		const opening = [hostSystem('c:\\work\\app'), globalContext(), request()];
 		const other = [hostSystem('c:\\work\\app'), globalContext(), user('<userRequest>\nnow research it\n</userRequest>')];
-		const one = bodyOf(MODEL, 'claude', opening, options, 'c:\\window') as Body;
-		const two = bodyOf(MODEL, 'claude', other, options, 'c:\\window') as Body;
+		const one = bodyOf(MODEL, 'claude', opening, options, 'c:\\window', PROMPT) as Body;
+		const two = bodyOf(MODEL, 'claude', other, options, 'c:\\window', PROMPT) as Body;
 
 		// The session key hashes the whole opening, not just the first message, so a
 		// sub-agent of one chat — same conversation, different opening — gets a session of its own.
@@ -88,8 +88,24 @@ describe('bodyOf', () => {
 		expect(one.acp.sessionKey).not.toBe(one.acp.chatId);
 	});
 
+	it('sends the prompt as sections and no systemGuidance', () => {
+		const messages = [hostSystem('c:\\work\\app'), request()];
+		const body = bodyOf(MODEL, 'claude', messages, optionsOf(), 'c:\\window', { replace: false, files: [] }) as Body;
+
+		expect(body.acp.systemGuidance).toBeUndefined();
+		expect(body.acp.systemPrompt?.sections.map(section => section.id)).toEqual(['notes', 'guidance']);
+	});
+
+	it('keeps the identity of Copilot in the sections only when the prompt is replaced', () => {
+		const messages = [system('You are an AI assistant using Copilot SDK in VS Code.\nGuidance.'), request()];
+		const sectionsText = (replace: boolean) => (bodyOf(MODEL, 'claude', messages, optionsOf(), 'c:\\window', { replace, files: [] }) as Body).acp.systemPrompt!.sections.map(section => section.text).join('\n');
+
+		expect(sectionsText(true)).toContain('Copilot SDK');
+		expect(sectionsText(false)).not.toContain('Copilot SDK');
+	});
+
 	it('leaves out the guidance when the request carries no system message', () => {
-		expect(bodyFor([user('hi')]).acp.systemGuidance).toBeUndefined();
+		expect(bodyFor([user('hi')]).acp.systemPrompt).toBeUndefined();
 	});
 
 	it('carries the context of the chat as the messages wrote it, before the host sections are taken out', () => {
@@ -159,7 +175,7 @@ describe('bodyOf', () => {
 
 	it('offers the tools of the request as function tools', () => {
 		const parameters = { type: 'object', properties: { path: { type: 'string' } } };
-		const body = bodyOf(MODEL, 'claude', [user('hi')], optionsOf({}, [{ name: 'read_file', description: 'Reads a file.', inputSchema: parameters }]), 'c:\\window') as Body;
+		const body = bodyOf(MODEL, 'claude', [user('hi')], optionsOf({}, [{ name: 'read_file', description: 'Reads a file.', inputSchema: parameters }]), 'c:\\window', PROMPT) as Body;
 
 		expect(body.tools).toEqual([{ type: 'function', function: { name: 'read_file', description: 'Reads a file.', parameters } }]);
 	});

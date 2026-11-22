@@ -6,10 +6,9 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as vscode from 'vscode';
-import { stripIdentity } from '../../core/identityPatterns';
+import { stripIdentity } from './identityPatterns';
 import { textOf as textOfMessage } from '../../engine/chat/messages';
 import { fingerprint, isSystemMessage, textOf } from './messageText';
-import type { ChatContext } from '../../engine/chat/types';
 import type { ChatMessage } from '../../engine/model/chat';
 
 /**
@@ -194,14 +193,15 @@ const CACHE_CONTROL = /\[copilot_cache_control:[^\]\n]*\]/g;
  * is never read: only a system message counts. A host that sends more than one
  * system message contributes each.
  */
-export function systemGuidanceOf(messages: readonly vscode.LanguageModelChatRequestMessage[]): string | undefined {
+export function systemGuidanceOf(messages: readonly vscode.LanguageModelChatRequestMessage[], options: { readonly keepIdentity?: boolean } = {}): string | undefined {
 	const sections: string[] = [];
 
 	for (const message of messages) {
 		if (!isSystemMessage(message)) {
 			continue;
 		}
-		const section = stripIdentity(textOf(message).replace(CACHE_CONTROL, '')).trim();
+		const text = textOf(message).replace(CACHE_CONTROL, '');
+		const section = (options.keepIdentity ? text : stripIdentity(text)).trim();
 		if (section.length > 0) {
 			sections.push(section);
 		}
@@ -273,10 +273,4 @@ export function chatLabelOf(messages: readonly vscode.LanguageModelChatRequestMe
 		return 'Chat';
 	}
 	return text.length > 40 ? `${text.slice(0, 39)}…` : text;
-}
-
-/** The workspace of the chat a request belongs to; `windowCwd` is where the window's folder is. */
-export function chatContextOf(messages: readonly vscode.LanguageModelChatRequestMessage[], windowCwd: string): ChatContext {
-	const folders = workspaceFoldersOf(messages);
-	return { folders, cwd: resolveCwd(folders, windowCwd), prompt: undefined };
 }

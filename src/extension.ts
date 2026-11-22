@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See LICENSE in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { scopedLog } from './core/logging';
@@ -19,6 +20,8 @@ import { agentsRoot, storageRoot } from './engine/store/paths';
 import { ModelNames } from './engine/models/modelNames';
 import { copilotProvidersFile, syncAccountVendors } from './hosts/vscode/applyNames';
 import { syncModels } from './hosts/vscode/syncModels';
+import { PromptFiles } from './hosts/vscode/promptFiles';
+import { replaceSystemPromptOf } from './hosts/vscode/promptSections';
 import { ServerLink } from './hosts/vscode/serverLink';
 import { ServerProvider } from './hosts/vscode/serverProvider';
 import { warmAgents } from './hosts/vscode/warmAgents';
@@ -91,6 +94,19 @@ export function activate(context: vscode.ExtensionContext): void {
 
 	const providers = new Map<string, ServerProvider>();
 
+	// The instruction and prompt files Copilot would offer a chat, which the prompt points the agent to.
+	const promptFiles = new PromptFiles({
+		home: os.homedir(),
+		// The active profile's prompts folder, which sits beside the extension's global storage.
+		profilePromptsDir: path.join(path.dirname(path.dirname(globalStorageDir)), 'prompts'),
+		windowFolders: () => vscode.workspace.workspaceFolders?.map(folder => folder.uri.fsPath) ?? [],
+		trusted: () => vscode.workspace.isTrusted,
+		locations: () => {
+			const chat = vscode.workspace.getConfiguration('chat');
+			return { instructions: chat.get<Record<string, boolean>>('instructionsFilesLocations'), prompt: chat.get<Record<string, boolean>>('promptFilesLocations') };
+		},
+	});
+
 	const binding = new ServerLink({
 		root,
 		detached: settings.get<boolean>('server.detached') ?? true,
@@ -100,8 +116,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		serverScript: path.join(extensionDir, 'dist', 'server.js'),
 		nodeCommand: () => resolveNode({ root, log }),
 		extensionDir,
-		// The prompts the server composes from, kept where the extension always kept them.
-		promptsDir: path.join(path.dirname(path.dirname(globalStorageDir)), 'prompts'),
 		log,
 		serverLog,
 	});
@@ -132,6 +146,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			log: scopedLog(output, agentId),
 			// A chat whose folders this machine does not have runs in the agents folder, as it always did.
 			windowFolder: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? agentsDir,
+			prompt: { replace: id => replaceSystemPromptOf(config, id), files: folders => promptFiles.get(folders) },
 			isOffered: () => drawn ? offeredIn(drawn, agentId) : undefined,
 		});
 		let registration: vscode.Disposable;

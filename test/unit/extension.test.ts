@@ -491,7 +491,7 @@ describe('the extension is a client of the server', () => {
 		expect(deps.idleMinutes).toBe(30);
 		expect(deps.serverScript).toBe(path.join(extensionDir, 'dist', 'server.js'));
 		expect(deps.extensionDir).toBe(extensionDir);
-		expect(deps.promptsDir).toBe(path.join(path.dirname(path.dirname(globalStorage)), 'prompts'));
+		expect(deps).not.toHaveProperty('promptsDir');
 		// A server is reached, or started, as soon as the window loads.
 		expect(mocks.ensured).toBeGreaterThan(0);
 	});

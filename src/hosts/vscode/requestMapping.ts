@@ -4,10 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { stripIdentity } from '../../core/identityPatterns';
 import { acpModelValue, effortOf } from '../../core/models';
 import type { ChatMessage } from '../../engine/model/chat';
 import type { AcpRequestExtras } from '../http/wire';
+import type { CustomFile } from './customizations';
+import { promptSectionsOf } from './promptSections';
 import { chatIdOf, chatLabelOf, chatWideContextOf, resolveCwd, sessionKey, stripHostSections, systemGuidanceOf, workspaceFoldersOf } from './identity';
 
 /**
@@ -50,6 +51,8 @@ interface ChatBody {
  * Translates one workbench request into the body of `POST /v1/chat/completions`.
  * `windowFolder` roots a chat whose own folders this machine does not have, and
  * `agentId` only prefixes the model id: the server reads the agent from it.
+ * `prompt` says whether the agent's own system prompt is replaced, which keeps
+ * Copilot's identity in the sections, and which instruction files are on offer.
  */
 export function bodyOf(
 	model: vscode.LanguageModelChatInformation,
@@ -57,12 +60,14 @@ export function bodyOf(
 	messages: readonly vscode.LanguageModelChatRequestMessage[],
 	options: vscode.ProvideLanguageModelChatResponseOptions,
 	windowFolder: string,
+	prompt: { readonly replace: boolean; readonly files: readonly CustomFile[] },
 ): unknown {
 	const folders = workspaceFoldersOf(messages);
 	const effort = effortOf(options);
-	const guidance = stripIdentity(systemGuidanceOf(messages) ?? '').trim();
+	const guidance = systemGuidanceOf(messages, { keepIdentity: prompt.replace });
 	const chatContext = chatWideContextOf(messages.map(engineMessageOf));
 	const tools = options.tools ?? [];
+	const sections = promptSectionsOf({ agentId, guidance, files: prompt.files, tools: tools.map(tool => ({ name: tool.name, inputSchema: tool.inputSchema })) });
 	const body: ChatBody = {
 		model: `${agentId}/${acpModelValue(model.id)}`,
 		stream: true,
@@ -76,7 +81,7 @@ export function bodyOf(
 			label: chatLabelOf(messages),
 			cwd: resolveCwd(folders, windowFolder),
 			workspaceFolders: [...(folders ?? [])],
-			...(guidance.length === 0 ? {} : { systemGuidance: guidance }),
+			...(sections === undefined ? {} : { systemPrompt: { sections } }),
 			...(chatContext === undefined ? {} : { chatContext }),
 		},
 	};

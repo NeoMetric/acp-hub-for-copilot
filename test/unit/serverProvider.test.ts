@@ -170,6 +170,7 @@ function providerOf(overrides: { agentId?: string; link?: FakeLink; state?: Stat
 		state: overrides.state ?? new MemoryState(),
 		log: overrides.log ?? log,
 		windowFolder: () => overrides.windowFolder ?? 'c:\\window',
+		prompt: { replace: () => false, files: async () => [] },
 	});
 }
 

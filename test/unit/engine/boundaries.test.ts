@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, normalize } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AgentAdapter, LaunchContext } from '../../../src/core/adapter';
 import { AgentClient } from '../../../src/engine/acp/agentClient';
@@ -64,8 +64,12 @@ describe('engine boundaries', () => {
 	 */
 	it('knows nothing of Copilot\'s prompt format, which lives in the VS Code host', () => {
 		expect(existsSync('src/hosts/vscode/identity.ts'), 'the scrapers live in the VS Code host').toBe(true);
-		const hostKnowledge = /environment_info|workspace_info|userMemory|sessionMemory|repoMemory|_conversationId|<environment_context>/;
-		for (const file of sourceFiles(ENGINE_ROOT)) {
+		const hostKnowledge = /environment_info|workspace_info|userMemory|sessionMemory|repoMemory|_conversationId|<environment_context>|session_context|modeInstructions|session-state|currently running in/;
+		const serverFiles = [ENGINE_ROOT, 'src/adapters', 'src/hosts/http', 'src/composition']
+			.flatMap(root => sourceFiles(root))
+			// The chat message code still reads a few of Copilot's blocks: the follow-up project named in the spec's Open questions moves them out.
+			.filter(file => normalize(file) !== normalize('src/engine/chat/messages.ts'));
+		for (const file of serverFiles) {
 			expect(readFileSync(file, 'utf8'), `${file} names a block only Copilot's prompt has`).not.toMatch(hostKnowledge);
 		}
 		expect(readFileSync('src/hosts/vscode/identity.ts', 'utf8'), 'the VS Code host keeps the sections it strips')

@@ -10,6 +10,8 @@ import type { Log } from '../../engine/ports/host';
 import type { StateStore } from '../../engine/ports/state';
 import { modelsStateKey } from '../../core/modelInfo';
 import { modelInformationOf, modelWireOfSaved } from './modelMapping';
+import type { CustomFile } from './customizations';
+import { workspaceFoldersOf } from './identity';
 import { bodyOf } from './requestMapping';
 import { listModels, ServerChatError, streamChat, type WireEvent, type WireUsage } from './serverClient';
 import type { LinkState, ServerLink } from './serverLink';
@@ -28,6 +30,11 @@ export interface ServerProviderDeps {
 	readonly log: Log;
 	/** The window's own folder, which roots a chat whose folders this machine does not have. */
 	windowFolder(): string;
+	/** What the prompt of a chat is built from: the user's choice to replace the agent's own prompt, and the instruction files on offer. */
+	readonly prompt: {
+		replace(agentId: string): boolean;
+		files(chatFolders: readonly string[] | undefined): Promise<readonly CustomFile[]>;
+	};
 	/** Whether the sidebar's state lets the picker offer this agent; `false` offers nothing, `undefined` (state not known yet) keeps the saved list. */
 	readonly isOffered?: () => boolean | undefined;
 }
@@ -96,7 +103,8 @@ export class ServerProvider implements vscode.LanguageModelChatProvider<vscode.L
 				throw new ServerChatError(`Could not reach the server: ${state.reason}`);
 			}
 			const reached = performance.now();
-			const body = bodyOf(model, this.deps.agentId, messages, options, this.deps.windowFolder());
+			const files = await this.deps.prompt.files(workspaceFoldersOf(messages));
+			const body = bodyOf(model, this.deps.agentId, messages, options, this.deps.windowFolder(), { replace: this.deps.prompt.replace(this.deps.agentId), files });
 			const built = performance.now();
 			this.deps.log(`Reaching the server took ${Math.round(reached - asked)} ms and building the request ${Math.round(built - reached)} ms.`, 'debug');
 			let first = true;

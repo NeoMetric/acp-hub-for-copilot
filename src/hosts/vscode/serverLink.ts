@@ -33,8 +33,6 @@ export interface ServerLinkDeps {
 	readonly serverScript: string;
 	/** The folder the server runs in, so the store resolves as it does for the extension. */
 	readonly extensionDir: string;
-	/** The prompts folder the server composes from, when the extension has one. */
-	readonly promptsDir?: string;
 	/**
 	 * Start the server on its own, outside this window's process tree, so it outlives the window and
 	 * every other window keeps using it. Its output goes to `server.log` in the store root.
@@ -507,9 +505,6 @@ export class ServerLink {
 			env.ACP_HUB_PORT = String(this.deps.port);
 		} else {
 			delete env.ACP_HUB_PORT;
-		}
-		if (this.deps.promptsDir) {
-			env.ACP_HUB_PROMPTS_DIR = this.deps.promptsDir;
 		}
 		if (this.deps.detached && this.deps.idleMinutes !== undefined) {
 			env.ACP_HUB_IDLE_MINUTES = String(this.deps.idleMinutes);

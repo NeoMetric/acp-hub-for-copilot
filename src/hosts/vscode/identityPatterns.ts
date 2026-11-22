@@ -11,9 +11,9 @@
  * every ACP extension, and the wording comes from Copilot's prompts
  * (`copilotIdentity.tsx`, `safetyRules.tsx` and the agent prompt).
  *
- * The rules for the content the model may produce are removed here too: the
- * intro the extension writes carries them once (see `systemPrompt.ts`), so
- * stripping them keeps them from being paid for twice.
+ * The rules for the content the model may produce are removed here too. A user
+ * who replaces the agent's own system prompt keeps all of it (`keepIdentity`
+ * in `systemGuidanceOf`), since nothing else would then say who the model is.
  */
 export const IDENTITY_PATTERNS: readonly RegExp[] = [
 	// The opening line of the agent prompt.
