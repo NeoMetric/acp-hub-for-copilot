@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.1
 
 - Fix **Manage sign-in** for Claude opening two browser tabs. The Claude login program opened a second sign-in page of its own next to the one the hub opens, and finishing in that tab did not give you the code to paste. Only the page that shows the code opens now.
 
