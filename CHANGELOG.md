@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix **Manage sign-in** for Claude opening two browser tabs. The Claude login program opened a second sign-in page of its own next to the one the hub opens, and finishing in that tab did not give you the code to paste. Only the page that shows the code opens now.
+
 ## 1.2.0
 
 - The system prompt is now the client's. The server writes no prompt text of its own and takes the prompt as labelled sections (`acp.systemPrompt.sections`); the VS Code extension builds them from Copilot's prompt and reads **Replace the system prompt** from `config.json` on every request. On: Copilot's prompt as it is plus the extension's functional notes. Off: the same without Copilot's identity, persona and content-policy lines. This removes the server-written line that made Google answer every request with a 429, but Google with the setting on still gets Copilot's prompt as it is and answers 429, so keep it off for Google.

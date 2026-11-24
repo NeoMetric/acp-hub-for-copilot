@@ -289,7 +289,7 @@ export function createHeadlessComposition(options: HeadlessCompositionOptions): 
 					const login = startCliLogin({
 						command: process.execPath,
 						args: [launch.entryPath, ...terminal.terminalCommand],
-						env: { ELECTRON_RUN_AS_NODE: '1', ...accountEnv },
+						env: { ELECTRON_RUN_AS_NODE: '1', ...adapter.backgroundLoginEnv, ...accountEnv },
 						completed: adapter.signInCompleted ? () => adapter.signInCompleted!(startedAt, accountEnv) : undefined,
 					});
 					const url = await login.url;

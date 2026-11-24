@@ -166,6 +166,40 @@ describe('headless composition wiring', () => {
 		expect(composition.transcriptOptions().detail).toBe('full');
 	});
 
+	it('runs a background login with the environment its adapter names', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-hub-wiring-'));
+		// A login program that prints the page to open, naming the opener it was given, and ends on the pasted code.
+		const login = path.join(root, 'login.cjs');
+		fs.writeFileSync(login, "process.stdout.write(`https://login.test/?browser=${process.env.BROWSER ?? 'unset'}\\n`);\nprocess.stdin.once('data', () => process.exit(0));\n");
+		const composition = createHeadlessComposition({
+			root,
+			log: () => undefined,
+			adapters: [{
+				...mockAdapter(),
+				findCommandOverride: () => login,
+				auth: [{ kind: 'oauth-browser', label: 'Mock account', terminalCommand: ['login'] }],
+				backgroundLoginEnv: { BROWSER: 'none' },
+			}],
+			bridge: {
+				registerSession: () => Promise.resolve({ url: 'http://127.0.0.1:1/mcp', token: 'token' }),
+				updateTools: () => undefined,
+				unregisterSession: () => undefined,
+			},
+		});
+		cleanups.push(async () => {
+			await composition.close();
+			fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+		});
+		const urls: string[] = [];
+		composition.control.onSignInUrl!((_, prompt) => { if (prompt) { urls.push(prompt.url); } });
+
+		const outcome = composition.control.signIn('mock');
+
+		await vi.waitFor(() => expect(urls).toEqual(['https://login.test/?browser=none']), { timeout: 10_000 });
+		expect(composition.control.submitSignInCode('mock', 'code')).toBe(true);
+		expect((await outcome).ok).toBe(true);
+	});
+
 	it('marks the agent signed out when it refuses a request for lack of credentials', async () => {
 		const composition = gateway('auth-required');
 
