@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0
+
+- New settings **`acpHub.proxy.url`** and **`acpHub.proxy.noProxy`**: the proxy every agent is given, such as `http://127.0.0.1:7897`. Empty sets no proxy variables at all, so a proxy the machine or the shell already sets is the one in charge; the default bypass list keeps `127.0.0.1` and `localhost` off the proxy, which is where the hub's own bridges answer. Both are machine settings and apply the next time the server starts.
+- Fix the command line the Google agent's hub is started with: an argument carrying a `cmd.exe` metacharacter (`&`, `|`, `%`, …) is now quoted, so a folder named `repo&calc` can no longer end the command and run another.
+- The Antigravity CLI is pinned to 1.5.16 (was 1.5.3), one version per platform as before, still checked against the SHA-512 Google publishes.
+
 ## 1.2.0
 
 - The system prompt is now the client's. The server writes no prompt text of its own and takes the prompt as labelled sections (`acp.systemPrompt.sections`); the VS Code extension builds them from Copilot's prompt and reads **Replace the system prompt** from `config.json` on every request. On: Copilot's prompt as it is plus the extension's functional notes. Off: the same without Copilot's identity, persona and content-policy lines. This removes the server-written line that made Google answer every request with a 429, but Google with the setting on still gets Copilot's prompt as it is and answers 429, so keep it off for Google.

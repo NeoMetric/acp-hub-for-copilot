@@ -22,6 +22,7 @@ import { copilotProvidersFile, syncAccountVendors } from './hosts/vscode/applyNa
 import { syncModels } from './hosts/vscode/syncModels';
 import { PromptFiles } from './hosts/vscode/promptFiles';
 import { replaceSystemPromptOf } from './hosts/vscode/promptSections';
+import { proxyUrlOf } from './hosts/vscode/proxyEnv';
 import { ServerLink } from './hosts/vscode/serverLink';
 import { ServerProvider } from './hosts/vscode/serverProvider';
 import { warmAgents } from './hosts/vscode/warmAgents';
@@ -56,6 +57,12 @@ export function activate(context: vscode.ExtensionContext): void {
 	// The install root of both gateways: an agent installed here is installed for the server, with its logs and pid registry.
 	const agentsDir = agentsRoot(root);
 	const settings = vscode.workspace.getConfiguration('acpHub');
+	// The proxy the agents are given, which the server passes on to each of them. Empty means none,
+	// so a proxy set for the machine or the shell is the one the agents inherit.
+	const proxy = { url: settings.get<string>('proxy.url') ?? '', noProxy: settings.get<string>('proxy.noProxy') ?? '' };
+	if (proxy.url.trim() !== '' && proxyUrlOf(proxy.url) === undefined) {
+		log(`acpHub.proxy.url is not a proxy URL, so the agents start without one: "${proxy.url}"`, 'warn');
+	}
 	const config = loadConfig(root, log);
 
 	// One store for both gateways, so a chat saved in VS Code resumes in the server, and back.
@@ -112,6 +119,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		detached: settings.get<boolean>('server.detached') ?? true,
 		autoStart: settings.get<boolean>('server.autoStart') ?? true,
 		idleMinutes: Math.max(0, settings.get<number>('server.idleTimeoutMinutes') ?? DEFAULT_IDLE_MINUTES),
+		proxy,
 		version: typeof context.extension.packageJSON?.version === 'string' ? context.extension.packageJSON.version : undefined,
 		serverScript: path.join(extensionDir, 'dist', 'server.js'),
 		nodeCommand: () => resolveNode({ root, log }),

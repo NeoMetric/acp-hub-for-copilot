@@ -106,11 +106,14 @@ describe('vendors', () => {
 		const properties = packageJson.contributes.configuration.properties as Record<string, Record<string, unknown>>;
 		// The design: the port and the process model are the server's, so the window keeps only how it runs one; the
 		// settings a previous version contributed stay as deprecated signposts, never as the source of a value.
-		expect(Object.keys(properties).sort()).toEqual([...LEGACY_SETTINGS, 'acpHub.server.autoStart', 'acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes'].sort());
+		expect(Object.keys(properties).sort()).toEqual([...LEGACY_SETTINGS, 'acpHub.proxy.noProxy', 'acpHub.proxy.url', 'acpHub.server.autoStart', 'acpHub.server.detached', 'acpHub.server.idleTimeoutMinutes'].sort());
 		expect(properties['acpHub.server.detached']).toMatchObject({ type: 'boolean', default: true });
 		expect(properties['acpHub.server.idleTimeoutMinutes']).toMatchObject({ type: 'number', default: 30, minimum: 0 });
 		// Whether a window starts a server by itself is the window's business, never the server's.
 		expect(properties['acpHub.server.autoStart']).toMatchObject({ type: 'boolean', default: true });
+		// The proxy reaches every agent through the environment the server is started with, so it is the window's own.
+		expect(properties['acpHub.proxy.url']).toMatchObject({ type: 'string', default: '', scope: 'machine' });
+		expect(properties['acpHub.proxy.noProxy']).toMatchObject({ type: 'string', default: '127.0.0.1,localhost' });
 		// The idle limit leads the list in the Settings editor.
 		expect(properties['acpHub.server.idleTimeoutMinutes'].order).toBe(0);
 	});

@@ -23,14 +23,15 @@ const SERVER = section('Server', `
 <li><code>acpHub.server.idleTimeoutMinutes</code>: idle minutes before the server closes (default 30; <code>0</code> never).</li>
 <li><code>acpHub.server.detached</code>: run outside VS Code so it survives closing a window (default on).</li>
 <li><code>acpHub.server.autoStart</code>: start when a window loads (default on).</li>
+<li><code>acpHub.proxy.url</code>: the proxy every agent is given, such as <code>http://127.0.0.1:7897</code>. Empty starts them without one, so a proxy set for the machine or the shell is the one in charge. <code>acpHub.proxy.noProxy</code> names the hosts they reach directly (default <code>127.0.0.1,localhost</code>, where the hub's own bridges answer).</li>
 <li><strong>Settings for all agents</strong> (Agents tab): how earlier chats are restored, and their size limits.</li>
 <li><strong>Keep history for</strong> (Usage tab): days of token usage kept.</li>
 </ul>
-<p>The idle limit and <strong>Detached</strong> apply to the next server that starts; run <strong>ACP Hub: Stop Server</strong> to apply them.</p>`);
+<p>The idle limit, <strong>Detached</strong> and the proxy apply to the next server that starts; run <strong>ACP Hub: Stop Server</strong> to apply them.</p>`);
 
 const VSCODE = section('VS Code Copilot client', `
 <p>Each agent appears as a provider in the Copilot Chat model picker.</p>
-<p>VS Code only holds <code>acpHub.server.idleTimeoutMinutes</code>, <code>acpHub.server.detached</code> and <code>acpHub.server.autoStart</code>; everything else is set in this dashboard.</p>
+<p>VS Code holds <code>acpHub.server.idleTimeoutMinutes</code>, <code>acpHub.server.detached</code>, <code>acpHub.server.autoStart</code> and the proxy (<code>acpHub.proxy.url</code>, <code>acpHub.proxy.noProxy</code>); everything else is set in this dashboard.</p>
 <p>Run <strong>ACP Hub: Sync Models</strong> from the Command Palette to update Copilot with the agents' models and the names set in the Models tab. Reload the window after renaming a provider.</p>`);
 
 const CLI = section('Copilot CLI', `

@@ -12,6 +12,7 @@ import { ensureToken, readToken, tokenFileOf } from '../../main/token';
 import { STATE_ROUTE } from '../../ui/transport';
 import { loadConfig, serverPortOf, type FileConfig } from '../http/config';
 import { API_VERSION, SERVER_NAME, SHUTDOWN_ROUTE, type HealthWire } from '../http/wire';
+import { proxyEnvironment, type ProxySettings } from './proxyEnv';
 
 /** What a client needs to reach the server: where it answers, and the token it wants. */
 export type ServerEndpoint = { readonly baseUrl: string; readonly token?: string };
@@ -51,6 +52,11 @@ export interface ServerLinkDeps {
 	 * asks for it, with a chat or the sidebar's own button.
 	 */
 	readonly autoStart?: boolean;
+	/**
+	 * The proxy the agents are given, from the window's own settings. The server hands its
+	 * environment to every agent process it starts, so this one place covers them all.
+	 */
+	readonly proxy?: ProxySettings;
 	/** The extension's version; a detached server of another version is replaced, so an update takes effect. */
 	readonly version?: string;
 	/** The window's own channel; the server's lines never go here. */
@@ -500,6 +506,10 @@ export class ServerLink {
 			// The extension host is Electron, which runs a script as node only when told to.
 			ELECTRON_RUN_AS_NODE: '1',
 		};
+		// The agents inherit the server's environment, so a proxy set here reaches every one of them.
+		if (this.deps.proxy) {
+			Object.assign(env, proxyEnvironment(this.deps.proxy));
+		}
 		// The server reads the saved port itself, so a port in the window's own environment must not override it.
 		if (this.deps.port !== undefined) {
 			env.ACP_HUB_PORT = String(this.deps.port);

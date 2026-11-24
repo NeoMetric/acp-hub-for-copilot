@@ -2,7 +2,7 @@
 	"name": "acp-hub-for-copilot",
 	"displayName": "ACP Hub for Copilot",
 	"description": "A local server that serves your Claude, Codex and Antigravity ACP agents as OpenAI-compatible models for Copilot CLI, Copilot Chat in VS Code and any other client, with one page to install, sign in, configure and monitor them.",
-	"version": "1.2.0",
+	"version": "1.3.0",
 	"publisher": "NeoMetric",
 	"license": "MIT",
 	"icon": "media/icon.png",
@@ -138,6 +138,20 @@
 					"description": "Start the ACP Hub server when this window loads, and whenever the sidebar or a model list looks for one. Turn it off to start the server only when you ask for it: a chat message, the sidebar's **Start server** button, or `node <extensions folder>/dist/server.js` in a terminal. A running server is used either way; this only decides whether a window starts one by itself. Applies after a window reload.",
 					"default": true,
 					"type": "boolean"
+				},
+				"acpHub.proxy.url": {
+					"order": 3,
+					"scope": "machine",
+					"description": "Proxy every agent is given, such as `http://127.0.0.1:7897`. Leave it empty to start the agents without one, so a proxy set for the machine or the shell is the one in charge. Applies the next time the server starts.",
+					"default": "",
+					"type": "string"
+				},
+				"acpHub.proxy.noProxy": {
+					"order": 4,
+					"scope": "machine",
+					"description": "Hosts the agents reach directly even when a proxy is set, as a comma-separated list. The hub's own bridges answer on loopback, so the default keeps `127.0.0.1` and `localhost` off the proxy. Applies the next time the server starts.",
+					"default": "127.0.0.1,localhost",
+					"type": "string"
 				},
 				"acpHub.resume.transcriptDetail": {
 					"type": "string",

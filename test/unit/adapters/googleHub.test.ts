@@ -26,6 +26,17 @@ describe('the command that starts the Antigravity hub', () => {
 		expect(hubCommand(AGY, ['--add-dir=' + spaced], 'win32').args[3]).toBe(`""${AGY}" "--add-dir=${spaced}""`);
 	});
 
+	it('quotes an argument carrying a cmd.exe metacharacter, so it cannot start a second command', () => {
+		// `&` ends the command unless quoted, so an argument like this one would run `whoami`.
+		const crafted = '--add-dir=C:\\repo&whoami';
+		expect(hubCommand(AGY, [crafted], 'win32').args[3]).toBe(`""${AGY}" "${crafted}""`);
+	});
+
+	it('doubles a trailing backslash inside a quoted argument, so it cannot escape the closing quote', () => {
+		const trailing = '--add-dir=C:\\repo&calc\\';
+		expect(hubCommand(AGY, [trailing], 'win32').args[3]).toBe(`""${AGY}" "${trailing}\\""`);
+	});
+
 	it('runs the CLI directly where there is no console to inherit', () => {
 		expect(hubCommand('/opt/agy', ARGS, 'linux')).toEqual({ command: '/opt/agy', args: ARGS });
 		expect(hubCommand('/opt/agy', ARGS, 'darwin')).toEqual({ command: '/opt/agy', args: ARGS });

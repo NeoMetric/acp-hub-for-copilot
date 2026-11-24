@@ -49,9 +49,22 @@ export interface HubCommand {
 	readonly verbatim?: boolean;
 }
 
-/** Quotes one argument the way `cmd.exe` reads it, for the wrapper below. */
+/** The characters `cmd.exe` reads as syntax, so an argument carrying one must be quoted to stay one argument. */
+const CMD_SPECIAL = /[\s"&|<>^()%!]/;
+
+/**
+ * Quotes one argument the way `cmd.exe` reads it, for the wrapper below. An argument with no
+ * character `cmd.exe` treats specially is passed as it is; one with any is quoted, so a folder
+ * named `repo&calc` cannot end the command and start another.
+ */
 function quoteForCmd(argument: string): string {
-	return /[\s"]/.test(argument) ? `"${argument.replace(/"/g, '""')}"` : argument;
+	if (!CMD_SPECIAL.test(argument)) {
+		return argument;
+	}
+	// A backslash at the end of the argument would escape the closing quote when cmd.exe parses its
+	// own command line, so the trailing run of them is doubled and the quote still closes.
+	const body = argument.replace(/"/g, '""').replace(/\\+$/, backslashes => backslashes + backslashes);
+	return `"${body}"`;
 }
 
 /**
