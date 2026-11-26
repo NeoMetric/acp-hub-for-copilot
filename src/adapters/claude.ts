@@ -184,6 +184,9 @@ export const claudeAdapter: AgentAdapter = {
 	usage: claudeUsage,
 	sessionPolicy,
 	signInCompleted,
+	// The login program also opens a second sign-in page itself, through the command `BROWSER` names, and
+	// ignores whether that worked. `true` does nothing (or is missing, on Windows), so only the printed page opens.
+	backgroundLoginEnv: { BROWSER: 'true' },
 	accounts: {
 		environment: dir => ({ CLAUDE_CONFIG_DIR: path.join(dir, 'claude-config') }),
 		inheritedCredentials: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],

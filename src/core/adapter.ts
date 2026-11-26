@@ -252,6 +252,8 @@ export interface AgentAdapter {
 	clientIdentity?: { name: string; title: string };
 	/** Whether a terminal sign-in begun at `startedAt` (ms) has already succeeded, for a login program that stays open afterwards. */
 	signInCompleted?(startedAt: number, env?: Record<string, string>): boolean;
+	/** Added to the environment of a login program run without a terminal, whose printed page the client is already shown. */
+	backgroundLoginEnv?: Record<string, string>;
 	/** Picks the `authenticate` call to make after `initialize`, or `undefined` for none. */
 	authenticate?(methods: AcpAuthMethod[], apiKey: string | undefined, settings?: AgentSettings): AuthenticateRequest | undefined;
 	/**
