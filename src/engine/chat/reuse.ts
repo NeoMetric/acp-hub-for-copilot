@@ -16,8 +16,8 @@ import type { ChatContext, ChatSession, Reuse } from './types';
  * was copied from. Every step is logged under "[reuse]" so a reload or a fork
  * can be checked in the output.
  */
-export function findReusable(saved: SavedSessionStore, key: string, fingerprints: readonly string[], lastUser: number, tools: readonly ToolDef[], context: ChatContext, canFork: boolean, log: Log): Reuse | undefined {
-	const check: ReuseCheck = { cwd: context.cwd, toolsHash: toolsHashOf(tools.map(tool => tool.name)), guidanceHash: sectionsHashOf(context.prompt) };
+export function findReusable(saved: SavedSessionStore, key: string, fingerprints: readonly string[], lastUser: number, tools: readonly ToolDef[], context: ChatContext, canFork: boolean, log: Log, toolPresentation?: 'catalog'): Reuse | undefined {
+	const check: ReuseCheck = { cwd: context.cwd, toolsHash: toolsHashOf(tools.map(tool => tool.name)), guidanceHash: sectionsHashOf(context.prompt), toolPresentation };
 	const incoming = hashAll(fingerprints);
 	const all = saved.all();
 	log(`[reuse] No live session for ${key}: ${fingerprints.length} message(s), last user message at ${lastUser}, ${all.length} saved session(s), tools ${check.toolsHash}, guidance ${check.guidanceHash}.`, 'debug');
@@ -75,8 +75,8 @@ export function findReusable(saved: SavedSessionStore, key: string, fingerprints
  * For a chat whose live session no longer fits its messages (an earlier message was edited):
  * the checkpoint of the chat's own saved session to fork from, if any. Logged under "[reuse]".
  */
-export function findEditFork(saved: SavedSessionStore, key: string, fingerprints: readonly string[], lastUser: number, context: ChatContext, log: Log): Reuse | undefined {
-	const check: ReuseCheck = { cwd: context.cwd, toolsHash: '', guidanceHash: sectionsHashOf(context.prompt) };
+export function findEditFork(saved: SavedSessionStore, key: string, fingerprints: readonly string[], lastUser: number, context: ChatContext, log: Log, toolPresentation?: 'catalog'): Reuse | undefined {
+	const check: ReuseCheck = { cwd: context.cwd, toolsHash: '', guidanceHash: sectionsHashOf(context.prompt), toolPresentation };
 	const own = saved.find(key);
 	if (!own) {
 		log(`[reuse] The messages of ${key} changed but no session is saved under it; nothing to fork.`, 'debug');
@@ -134,6 +134,7 @@ export function rememberSession(saved: SavedSessionStore, key: string, session: 
 		cwd: session.context.cwd,
 		history: hashAll(fingerprints),
 		toolsHash: session.toolsHash,
+		toolPresentation: session.toolPresentation,
 		toolNames: [...session.openedTools].sort(),
 		guidanceHash: session.guidanceHash,
 		promptHash: session.promptHash,

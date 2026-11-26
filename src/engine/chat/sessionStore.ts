@@ -52,6 +52,7 @@ export interface SavedSession {
 	readonly history: readonly string[];
 	/** The tools, the guidance and the session prompt the session opened with; a cache hit needs all three unchanged. */
 	readonly toolsHash: string;
+	readonly toolPresentation?: 'catalog';
 	/** The tool names behind `toolsHash`, so a later window can say which tools were added or removed. */
 	readonly toolNames?: readonly string[];
 	readonly guidanceHash: string;
@@ -83,6 +84,7 @@ export function isPrefixOf(saved: readonly string[], incoming: readonly string[]
 export interface ReuseCheck {
 	readonly cwd: string;
 	readonly toolsHash: string;
+	readonly toolPresentation?: 'catalog';
 	readonly guidanceHash: string;
 }
 
@@ -95,6 +97,9 @@ export interface ReuseCheck {
  * request to the next, and the resumed session opens with the set of the request.
  */
 export function mismatchOf(saved: SavedSession, check: ReuseCheck, options?: { readonly ignoreGuidance?: boolean; readonly ignoreTools?: boolean }): string | undefined {
+	if (saved.toolPresentation !== check.toolPresentation) {
+		return 'the tool presentation changed';
+	}
 	if (saved.cwd !== check.cwd) {
 		return `folder changed (${saved.cwd} -> ${check.cwd})`;
 	}

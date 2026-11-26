@@ -29,7 +29,7 @@ export interface BridgeEndpoint {
  * the request's tools to the agent, and hands a call back to the engine.
  */
 export interface ToolBridge {
-	registerSession(tools: readonly ToolDef[], execute: (name: string, input: unknown, signal: AbortSignal) => Promise<ToolResult | undefined>, options?: { readonly maxResultChars?: number }): Promise<BridgeEndpoint>;
+	registerSession(tools: readonly ToolDef[], execute: (name: string, input: unknown, signal: AbortSignal) => Promise<ToolResult | undefined>, options?: { readonly maxResultChars?: number; readonly toolPresentation?: 'catalog' }): Promise<BridgeEndpoint>;
 	updateTools(token: string, tools: readonly ToolDef[]): void;
 	unregisterSession(token: string): void;
 	/** Closes every stream and its heartbeat and stops the loopback server, for a host that is going away. */
@@ -153,6 +153,7 @@ export interface ChatSession {
 	readonly hasPrompt: boolean;
 	/** Hashes of what the session opened with, saved so a later window can tell whether it may pick the session up again. */
 	toolsHash: string;
+	readonly toolPresentation?: 'catalog';
 	guidanceHash: string;
 	readonly promptHash: string;
 	/** Hash of the user and mode instructions the agent was last given, so each change is sent once. */

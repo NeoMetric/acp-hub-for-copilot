@@ -234,6 +234,7 @@ export interface AgentAdapter {
 	forker?: ConversationForker;
 	/** The most characters of text a tool result may carry to the agent; more is cut with a note on how to read the rest. Absent passes results whole. */
 	maxToolResultChars?: number;
+	toolPresentation?: 'catalog';
 	/** Whether the session that reads the model list must declare the tool bridge (the agent's own config names it). */
 	declaresBridgeOnModelLookup?: boolean;
 	/** Whether the agent's own tools must be turned off for this session (the chat's tools are used instead). */

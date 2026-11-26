@@ -51,6 +51,13 @@ describe('mismatchOf', () => {
 		expect(mismatchOf(saved('k', ['u1'], { guidanceHash: 'x', toolsHash: 'y' }), check, options)).toBeUndefined();
 		expect(mismatchOf(saved('k', ['u1'], { toolsHash: 'y', cwd: '/other' }), check, options)).toContain('folder');
 	});
+
+	it('rejects an incompatible tool presentation even when tool changes are allowed', () => {
+		const options = { ignoreGuidance: true, ignoreTools: true };
+		expect(mismatchOf(saved('k', ['u1']), { ...check, toolPresentation: 'catalog' }, options)).toContain('presentation');
+		expect(mismatchOf(saved('k', ['u1'], { toolPresentation: 'catalog' }), check, options)).toContain('presentation');
+		expect(mismatchOf(saved('k', ['u1'], { toolPresentation: 'catalog' }), { ...check, toolPresentation: 'catalog' }, options)).toBeUndefined();
+	});
 });
 
 describe('toolChangeOf', () => {
@@ -277,5 +284,17 @@ describe('resuming a session saved before prompt sections existed', () => {
 		expect(reuse?.guidanceChange?.added).toEqual(['Use spaces']);
 		expect(reuse?.guidanceChange?.removed).toBe(1);
 		expect(sectionsHashOf(prompt)).not.toBe('before');
+	});
+
+	it('rebuilds an old direct session and resumes a session with the current catalog presentation', () => {
+		const state = memento();
+		const old = saved('k', ['u1', 'a1'], { savedAt: Date.now() });
+		void state.update('test.savedSessions', [old]);
+		const store = new SavedSessionStore(state, 'test.savedSessions');
+		const context = { folders: undefined, cwd: '/work', prompt: undefined };
+		const find = () => findReusable(store, 'k', ['u1', 'a1', 'u2'], 2, tools, context, true, () => undefined, 'catalog');
+		expect(find()).toBeUndefined();
+		store.save({ ...old, toolPresentation: 'catalog' });
+		expect(find()?.kind).toBe('resume');
 	});
 });

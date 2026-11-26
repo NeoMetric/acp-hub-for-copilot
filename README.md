@@ -86,7 +86,10 @@ Configure each agent from its card or in `~/.acp-hub/config.json`. The cards sho
   - **Google (Antigravity)**: keep it off. With it on, Google gets Copilot's prompt as it is and answers every request with a 429.
   - **Tool names**: the extension's tools come from an MCP server named `hub`, so the model sees `mcp__hub__*` (Claude, Codex) or `mcp_hub_*` (Google).
 - **Tool search** (Claude): loads tool descriptions only when needed, shrinking large requests.
+- **Tool discovery** (Google): tool definitions are available on demand through `tool_catalog`; the model searches or lists tool names, reads a definition in pages, then uses `call_tool` with the original name. This adds discovery calls and avoids relying on Antigravity to load every original definition initially. Hub validates the original arguments and returns the original call to the client for execution and confirmation. Argument and lookup failures return tool errors so the model can correct its request. Existing Google sessions rebuild once when adopting this protocol.
 - **Default thinking effort**: used when a request names none. Claude starts at High; Codex and Antigravity leave it to the agent.
+
+Google tool argument validation supports JSON Schema draft-07, 2019-09 and 2020-12, including local references. Relative and absolute references to schemas in the same document use the same compatibility checks. A schema without `$schema` uses draft-07. Declare a supported `$schema` when using newer constraints such as `prefixItems` or `unevaluatedProperties`; Hub reports incompatible keywords rather than silently ignoring them. Unsupported or mixed dialects, asynchronous schemas and unresolved external references return tool errors. Numbers that overflow the supported finite range are rejected before forwarding, including in nested data without numeric constraints. Hub preserves the original definitions and argument values.
 
 ## Privacy and permissions
 
@@ -95,6 +98,8 @@ Requests (conversation, file contents, tool definitions and results) go to the s
 API keys are stored in `~/.acp-hub/secrets.json`, readable by your account only. Agent sign-ins are managed by the agents. Logs can contain diagnostic details.
 
 **ACP Hub automatically approves permission requests from an agent's own built-in tools**, which are off by default. Client tools are unaffected: the client's own confirmation flow decides. Use only agents and workspaces you trust.
+
+For Google, Antigravity sees MCP calls to `tool_catalog` and `call_tool`. Google-side MCP permission rules must address those entry points; rules naming an original tool such as `mcp(hub/bash)` no longer match its forwarded call. The client still receives `bash` with its original arguments and applies its own permissions. Hub never executes the command itself.
 
 ## Contributing
 
