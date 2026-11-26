@@ -10,6 +10,7 @@ import { TOOL_SERVER_NAME } from '../../core/toolServer';
 import { Emitter, type CancellationToken, type Disposable } from '../acp/emitter';
 import type { ToolDef } from '../model/chat';
 import type { Log } from '../ports/host';
+import { CATALOG_TOOLS, ToolCatalog, ToolCatalogError } from './toolCatalog';
 
 /** Where an ACP session reaches its own tool set. */
 export interface McpServerEndpoint {
@@ -59,11 +60,13 @@ interface McpSession {
 	readonly execute: McpToolExecutor;
 	/** The most characters of text a result may carry to the agent; absent passes results whole. */
 	readonly maxResultChars?: number;
+	readonly catalog?: ToolCatalog;
 }
 
 /** What an agent session needs from the bridge besides its tools. */
 export interface McpSessionOptions {
 	readonly maxResultChars?: number;
+	readonly toolPresentation?: 'catalog';
 }
 
 interface JsonRpcMessage {
@@ -155,7 +158,7 @@ export class McpBridge implements Disposable {
 		await this.ensureStarted();
 
 		const token = crypto.randomUUID();
-		this.sessions.set(token, { tools, listed: new Map(tools.map(tool => [tool.name, tool])), execute, maxResultChars: options.maxResultChars });
+		this.sessions.set(token, { tools, listed: new Map(tools.map(tool => [tool.name, tool])), execute, maxResultChars: options.maxResultChars, catalog: options.toolPresentation === 'catalog' ? new ToolCatalog(this.log, options.maxResultChars) : undefined });
 
 		const address = this.server?.address() as AddressInfo | null;
 		if (!address || typeof address === 'string') {
@@ -476,16 +479,20 @@ export class McpBridge implements Disposable {
 			case 'ping':
 				return {};
 
-			case 'tools/list':
+			case 'tools/list': {
 				this.log(`Listing ${session.listed.size} tool(s) for an agent session`, 'debug');
+				const tools = session.catalog
+					? session.listed.size > 0 ? CATALOG_TOOLS : []
+					: [...session.listed.values()].sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 				return {
 					// By name, so a request that lists the same tools in another order does not change the agent's tool block.
-					tools: [...session.listed.values()].sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)).map(tool => ({
+					tools: tools.map(tool => ({
 						name: tool.name,
 						description: tool.description,
 						inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
 					})),
 				};
+			}
 
 			case 'tools/call':
 				return this.callTool(message.params, session, response);
@@ -510,12 +517,37 @@ export class McpBridge implements Disposable {
 
 	private async callTool(params: unknown, session: McpSession, response: http.ServerResponse): Promise<unknown> {
 		const request = (params ?? {}) as { name?: unknown; arguments?: unknown };
-		const name = request.name;
-		if (typeof name !== 'string' || name.length === 0) {
+		const requestedName = request.name;
+		if (typeof requestedName !== 'string' || requestedName.length === 0) {
 			throw new McpError("tools/call requires a tool name", -32602);
 		}
+		let name = requestedName;
 		// Arguments can quote commands and file contents, so they are debug-level.
 		this.log(`tools/call ${name} arguments: ${stringify(request.arguments ?? {})}`, 'debug');
+		let input: unknown = request.arguments === undefined ? {} : request.arguments;
+		if (session.catalog) {
+			if (name !== 'tool_catalog' && name !== 'call_tool') {
+				throw new McpError('Use tool_catalog to read tool definitions and call_tool to execute them.', -32602);
+			}
+			try {
+				if (name === 'tool_catalog') {
+					return { content: [{ type: 'text', text: session.catalog.query(session.tools, input) }] };
+				}
+				const call = session.catalog.call(session.tools, input);
+				name = call.name;
+				input = call.input;
+				this.log(`Catalog call forwarded as ${name}`, 'debug');
+			} catch (error) {
+				if (!(error instanceof ToolCatalogError)) {
+					throw error;
+				}
+				this.log(error.message, 'warn');
+				const limit = Math.max(0, Math.min(session.maxResultChars ?? 3_000, 3_000));
+				return { content: [{ type: 'text', text: error.message.slice(0, limit) }], isError: true };
+			}
+		} else {
+			input ??= {};
+		}
 
 		if (!session.tools.some(tool => tool.name === name)) {
 			return { content: [{ type: 'text', text: `Tool ${name} is not available in this session.` }], isError: true };
@@ -533,7 +565,7 @@ export class McpBridge implements Disposable {
 			// The caller of the language model request owns tool execution: it can
 			// run tools this extension cannot see, such as the ones of a Copilot
 			// agent session.
-			const forwarded = await session.execute(name, request.arguments ?? {}, cancellation.token);
+			const forwarded = await session.execute(name, input, cancellation.token);
 			if (forwarded) {
 				this.log(`Returned tool ${name} to the caller of the request`, 'debug');
 				const content = toMcpContent(forwarded.content);

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Fix Google Agent losing tools such as Bash when many tools are offered. Hub now provides a searchable catalog with complete definitions in bounded pages and validates calls before forwarding their original names and arguments to the client. Existing Google sessions rebuild once. Antigravity-side MCP rules now address `tool_catalog` and `call_tool`; client permissions continue to use the original tool names.
+- Bound Google tool validator retention and reuse equivalent schemas across requests, including Ajv compiler ownership. Keep draft-07 as the default, explicitly support 2019-09 and 2020-12, and report incompatible constraints. Catalog invocation failures now return tool error results so a model can correct a call without losing the turn.
+- Reject overflowing numeric arguments before they can become null during forwarding. Apply schema compatibility checks consistently to relative, absolute and anchored references within the tool definition.
+
 ## 1.2.1
 
 - Fix **Manage sign-in** for Claude opening two browser tabs. The Claude login program opened a second sign-in page of its own next to the one the hub opens, and finishing in that tab did not give you the code to paste. Only the page that shows the code opens now.

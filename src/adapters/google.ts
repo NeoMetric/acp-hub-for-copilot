@@ -268,6 +268,7 @@ export const googleAdapter: AgentAdapter = {
 	// The agent saves a tool result of about 4,000 characters or more to a file and hands the model only its path. With its own
 	// file tools off the model then reasons for minutes about how to get at the content, so results are cut below that size.
 	maxToolResultChars: 3_500,
+	toolPresentation: 'catalog',
 	disableBuiltInTools: settings => !booleanSetting(settings, 'useAgentBuiltInTools'),
 	mapError: mapQuotaError,
 	mergeConfig,

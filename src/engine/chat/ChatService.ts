@@ -401,7 +401,7 @@ export class ChatService {
 			session = undefined;
 		}
 		if (!session) {
-			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, await this.canFork(client), this.log) : undefined;
+			const reuse = tools.length > 0 ? findReusable(this.saved, key, fingerprints, lastUser, tools, context, await this.canFork(client), this.log, this.deps.adapter.toolPresentation) : undefined;
 			session = await this.createChatSession(key, client, identity.owner ?? DEFAULT_CHAT_OWNER, modelId, tools, context, reuse, effort, lap);
 			lap('chat session created');
 		} else if (tools.length > 0 && promptsDiffer(session.context.prompt, context.prompt)) {
@@ -438,7 +438,7 @@ export class ChatService {
 			}
 			// The session is left for a fork of the turn the edit still agrees with; with none, or
 			// when the fork fails, the chat gets a new session and its messages restored.
-			const reuse = tools.length > 0 && await this.canFork(client) ? findEditFork(this.saved, key, fingerprints, lastUser, context, this.log) : undefined;
+			const reuse = tools.length > 0 && await this.canFork(client) ? findEditFork(this.saved, key, fingerprints, lastUser, context, this.log, this.deps.adapter.toolPresentation) : undefined;
 			this.log(reuse ? `[reuse] Chat ${key} was edited; forking from the checkpoint after ${reuse.checkpoint?.messages} message(s).` : `[reuse] Chat ${key} was edited and has no checkpoint to fork from; starting a fresh ACP session.`, 'debug');
 			await this.destroySession(key);
 			session = await this.createChatSession(key, client, identity.owner ?? DEFAULT_CHAT_OWNER, modelId, tools, context, reuse, effort);
@@ -725,7 +725,7 @@ export class ChatService {
 	}
 
 	private async createChatSession(key: string, agent: AgentApi, owner: string, modelId: string, tools: readonly ToolDef[], context: ChatContext, reuse?: Reuse, effort?: string, lap?: Lap): Promise<ChatSession> {
-		const endpoint = await this.deps.bridge.registerSession(tools, (name, input, signal) => this.executeTool(key, name, input, signal), { maxResultChars: this.deps.adapter.maxToolResultChars });
+		const endpoint = await this.deps.bridge.registerSession(tools, (name, input, signal) => this.executeTool(key, name, input, signal), { maxResultChars: this.deps.adapter.maxToolResultChars, toolPresentation: this.deps.adapter.toolPresentation });
 		lap?.(`tool bridge registered (${tools.length} tool(s))`);
 		try {
 			// A request that offers no tools is the host's own, such as a chat title: the
@@ -807,6 +807,7 @@ export class ChatService {
 				failures: 0,
 				lastActive: Date.now(),
 				toolsHash: toolsHashOf(toolNames),
+				toolPresentation: this.deps.adapter.toolPresentation,
 				guidanceHash: sectionsHashOf(context.prompt),
 				promptHash,
 				reused,

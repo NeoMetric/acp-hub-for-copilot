@@ -85,7 +85,7 @@ function thought(sessionId, value) {
  * Calls the MCP tool the host listed for the session, the way an agent does.
  * The call waits until the client that owns it returns its result.
  */
-async function callTool(sessionId) {
+async function callTool(sessionId, answer = 42) {
 	const servers = sessionMcpServers.get(sessionId) || [];
 	const endpoint = servers[0];
 	if (!endpoint) {
@@ -95,10 +95,13 @@ async function callTool(sessionId) {
 	for (const header of endpoint.headers || []) {
 		headers[header.name.toLowerCase()] = header.value;
 	}
+	const params = mode === 'catalog' || mode === 'catalog-recover'
+		? { name: 'call_tool', arguments: { name: 'do_a_thing', argumentsJson: JSON.stringify({ answer }) } }
+		: { name: 'do_a_thing', arguments: { answer } };
 	const response = await fetch(endpoint.url, {
 		method: 'POST',
 		headers,
-		body: JSON.stringify({ jsonrpc: '2.0', id: ++toolRequests, method: 'tools/call', params: { name: 'do_a_thing', arguments: { answer: 42 } } }),
+		body: JSON.stringify({ jsonrpc: '2.0', id: ++toolRequests, method: 'tools/call', params }),
 	});
 	const body = await response.json();
 	if (body.error) {
@@ -160,7 +163,15 @@ function handlePrompt(message) {
 			method: 'session/update',
 			params: { sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Run do_a_thing', kind: 'other', status: 'pending' } },
 		});
-		callTool(sessionId).then(async first => {
+		const firstCall = mode === 'catalog-recover'
+			? callTool(sessionId, 'invalid').then(result => {
+				if (!result.isError || !result.text.includes('number')) {
+					throw new Error('Expected a recoverable argument validation error');
+				}
+				return callTool(sessionId);
+			})
+			: callTool(sessionId);
+		firstCall.then(async first => {
 			// `tool2` calls the tool a second time, so one turn has two calls in a row.
 			const result = prompt === 'tool2' ? await callTool(sessionId) : first;
 			text(sessionId, `tool:${result.isError ? 'error:' : ''}${result.text}`);

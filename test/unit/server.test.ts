@@ -499,6 +499,43 @@ describe('the HTTP server', () => {
 		expect(body.choices[0].message.content).toBe('tool:the answer is 42');
 	});
 
+	it.each(['catalog', 'catalog-recover'])('returns the original catalog call after %s and resumes with its result', async mode => {
+		const url = await start({ adapter: { ...adapter, toolPresentation: 'catalog', launch: () => ({ command: process.execPath, args: [MOCK_AGENT], env: { MOCK_ACP_MODE: mode } }) } });
+		const model = await firstModel(url);
+		const first = await bodyOf(await post(`${url}/v1/chat/completions`, toolChat(model)));
+		const toolCall = first.choices[0].message.tool_calls[0];
+		expect(toolCall.function).toEqual({ name: 'do_a_thing', arguments: '{"answer":42}' });
+		const result = await bodyOf(await post(`${url}/v1/chat/completions`, {
+			model,
+			tools: [TOOL],
+			messages: [
+				{ role: 'user', content: 'tool' },
+				{ role: 'assistant', content: null, tool_calls: [toolCall] },
+				{ role: 'tool', tool_call_id: toolCall.id, content: 'client-approved result' },
+			],
+		}));
+		expect(result.choices[0].finish_reason).toBe('stop');
+		expect(result.choices[0].message.content).toBe('tool:client-approved result');
+	});
+
+	it('delivers a catalog client denial to the agent without retrying the original tool', async () => {
+		const url = await start({ adapter: { ...adapter, toolPresentation: 'catalog', launch: () => ({ command: process.execPath, args: [MOCK_AGENT], env: { MOCK_ACP_MODE: 'catalog' } }) } });
+		const model = await firstModel(url);
+		const toolCall = (await bodyOf(await post(`${url}/v1/chat/completions`, toolChat(model)))).choices[0].message.tool_calls[0];
+		const result = await bodyOf(await post(`${url}/v1/chat/completions`, {
+			model,
+			tools: [TOOL],
+			messages: [
+				{ role: 'user', content: 'tool' },
+				{ role: 'assistant', content: null, tool_calls: [toolCall] },
+				{ role: 'tool', tool_call_id: toolCall.id, content: 'error: Client denied this action' },
+			],
+		}));
+		expect(result.choices[0].finish_reason).toBe('stop');
+		expect(result.choices[0].message.tool_calls).toBeUndefined();
+		expect(result.choices[0].message.content).toBe('tool:error:error: Client denied this action');
+	});
+
 	it('continues a turn that calls tools one after another, whose history keeps the settled results', async () => {
 		const url = await start();
 		const model = await firstModel(url);
