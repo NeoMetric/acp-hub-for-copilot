@@ -238,6 +238,43 @@ describe('the link to the server', () => {
 		expect(seen?.args).toContain('--exit-with-parent');
 	});
 
+	it('starts the server with the proxy the window was configured with, which every agent inherits', async () => {
+		const root = storeRoot();
+		let seen: { command: string; args: readonly string[]; options: SpawnOptions } | undefined;
+		const spawn = ((command: string, args: readonly string[], options: SpawnOptions) => {
+			seen = { command, args, options };
+			const child = new EventEmitter() as unknown as ChildProcess;
+			Object.assign(child, { pid: undefined, exitCode: null, signalCode: null, stdin: null, stdout: null, stderr: null, kill: () => false });
+			setTimeout(() => child.emit('error', Object.assign(new Error('spawn acp-hub-server ENOENT'), { code: 'ENOENT' })), 0);
+			return child;
+		}) as unknown as ServerLinkDeps['spawn'];
+		const link = makeLink({ root, port: await freePort(), proxy: { url: '127.0.0.1:7897', noProxy: '127.0.0.1,localhost' }, spawn });
+
+		reasonOf(await link.ensure());
+
+		expect(seen?.options.env?.HTTP_PROXY).toBe('http://127.0.0.1:7897');
+		expect(seen?.options.env?.HTTPS_PROXY).toBe('http://127.0.0.1:7897');
+		expect(seen?.options.env?.NO_PROXY).toBe('127.0.0.1,localhost');
+	});
+
+	it('leaves the environment it starts the server with alone when no proxy is configured', async () => {
+		const root = storeRoot();
+		let seen: { command: string; args: readonly string[]; options: SpawnOptions } | undefined;
+		const spawn = ((command: string, args: readonly string[], options: SpawnOptions) => {
+			seen = { command, args, options };
+			const child = new EventEmitter() as unknown as ChildProcess;
+			Object.assign(child, { pid: undefined, exitCode: null, signalCode: null, stdin: null, stdout: null, stderr: null, kill: () => false });
+			setTimeout(() => child.emit('error', Object.assign(new Error('spawn acp-hub-server ENOENT'), { code: 'ENOENT' })), 0);
+			return child;
+		}) as unknown as ServerLinkDeps['spawn'];
+		const link = makeLink({ root, port: await freePort(), proxy: { url: '', noProxy: '' }, spawn });
+
+		reasonOf(await link.ensure());
+
+		expect(seen?.options.env?.HTTP_PROXY).toBe(process.env.HTTP_PROXY);
+		expect(seen?.options.env?.HTTPS_PROXY).toBe(process.env.HTTPS_PROXY);
+	});
+
 	it('two links race on one port: both end ready, exactly one owns', async () => {
 		const port = await freePort();
 		const root = storeRoot();
@@ -453,6 +490,24 @@ describe('a server that runs on its own', () => {
 		await delay(300);
 		expect(await answers(port), 'closing the window leaves the server it started').toBe(true);
 		expect(fs.readFileSync(path.join(root, 'server.log'), 'utf8')).toContain('stub-server listening');
+	});
+
+	it('gives a server that outlives the window the proxy too', async () => {
+		const port = await freePort();
+		const spawned: ChildProcess[] = [];
+		let seen: SpawnOptions | undefined;
+		const real = capturing(spawned) as unknown as (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+		const spawn = ((command: string, args: readonly string[], options: SpawnOptions) => {
+			seen = options;
+			return real(command, args, options);
+		}) as unknown as ServerLinkDeps['spawn'];
+		const link = makeLink({ root: storeRoot(), port, detached: true, proxy: { url: 'http://127.0.0.1:7897', noProxy: '127.0.0.1,localhost' }, spawn });
+
+		readyOf(await link.ensure());
+		await link.dispose();
+
+		expect(seen?.env?.HTTPS_PROXY).toBe('http://127.0.0.1:7897');
+		expect(seen?.env?.NO_PROXY).toBe('127.0.0.1,localhost');
 	});
 
 	it('runs on the Node it is given, not on the editor\'s binary', async () => {

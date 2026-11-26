@@ -12,9 +12,9 @@ import type { Log } from '../core/logging';
  * for each platform below (`windows_amd64`, `darwin_arm64`, `linux_amd64`, ...) and copy its
  * `version`, `url` and `sha512` here.
  */
-export const AGY_VERSION = '1.5.3';
+export const AGY_VERSION = '1.5.16';
 
-const RELEASE_ROOT = `https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_VERSION}-6604829099950080`;
+const RELEASE_ROOT = `https://storage.googleapis.com/antigravity-public/antigravity-cli/${AGY_VERSION}-5250855658717184`;
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 const EXTRACT_TIMEOUT_MS = 5 * 60_000;
 const MAX_REDIRECTS = 5;
@@ -33,17 +33,17 @@ export interface AgyRelease {
 export function agyReleaseFor(platform: NodeJS.Platform = process.platform, arch: string = process.arch): AgyRelease | undefined {
 	switch (`${platform}-${arch}`) {
 		case 'win32-x64':
-			return { url: `${RELEASE_ROOT}/windows-x64/cli_windows_x64.exe`, command: 'agy.exe', sha512: 'b282c10ca3266078806d7bcae66db8ec0c6e2953ee6e62de1da6499182d24c02fffa8a74c620817bd35b15cf5f5a18287fb1ab30bcb9c7a67592c248696ed909' };
+			return { url: `${RELEASE_ROOT}/windows-x64/cli_windows_x64.exe`, command: 'agy.exe', sha512: '058a85911c40a0beba24d0ae4e3227ea5060388060d4746aa6b48722ff43516c16fbffe6d30e31e2c266d5b47495a7886f072cc4e0143b26eb3cd9a007578c83' };
 		case 'win32-arm64':
-			return { url: `${RELEASE_ROOT}/windows-arm/cli_windows_arm64.exe`, command: 'agy.exe', sha512: '62f09bb3dc3c8bb142de2ad87c855c524ca0efb70bb9a54430121a021b14060fa3aa39d2a0e0b40b6198ee8ff26af59ca5911ff5ce19c70fd8ac2cf4e3c7d699' };
+			return { url: `${RELEASE_ROOT}/windows-arm/cli_windows_arm64.exe`, command: 'agy.exe', sha512: 'a3d961732875eedc8cf9b946c542290616d41508ebc9144cb38787615f95b48ddfc9d3edd5bee06eaae061a0fa000a03c3db9efafcd046d90ec021ec4c54eea9' };
 		case 'darwin-x64':
-			return { url: `${RELEASE_ROOT}/darwin-x64/cli_mac_x64.tar.gz`, command: 'agy', archiveEntry: 'antigravity', sha512: '865f6ec3d6a7bddff3a5bffda6df12db2df8abfedf3064acb4426db2ec0ce59de3d49d1378960df7a4646ffdbd74601f23184f0d23abfc1cd6717a1bd29e6922' };
+			return { url: `${RELEASE_ROOT}/darwin-x64/cli_mac_x64.tar.gz`, command: 'agy', archiveEntry: 'antigravity', sha512: 'b3eae073ee633032e9d473cdc7725c30bdfe2e09436bc36cfb3422e7e5fa3733de9591a7f78d02362294e7bf87e345d70e5d839689e526129a6f3fc041857a05' };
 		case 'darwin-arm64':
-			return { url: `${RELEASE_ROOT}/darwin-arm/cli_mac_arm64.tar.gz`, command: 'agy', archiveEntry: 'antigravity', sha512: '3215656cfe5336bce310365f61de7c85b4946a14de506747837106dfaf948dcff303c47e648e06fbbb73a8702538eae171e675f2910e4f49b280549018b46e95' };
+			return { url: `${RELEASE_ROOT}/darwin-arm/cli_mac_arm64.tar.gz`, command: 'agy', archiveEntry: 'antigravity', sha512: '33f5617dc74fea606d47b2483c6d271c850c9f3c9c55b724c664c3c0d4b82100d819fbcf55714f851765f6628d4296883ac8939b4fdeb55d5e6b9ce923135d18' };
 		case 'linux-x64':
-			return { url: `${RELEASE_ROOT}/linux-x64/cli_linux_x64.tar.gz`, command: 'agy', archiveEntry: 'antigravity', sha512: 'e363e1b17daaac2589f18e6973429c039fd5a5e5c15e9c0852fa349836f3992b10fe84732bc8d8c8208e149f0304f15aba9dec696d12efeed03917492c0580eb' };
+			return { url: `${RELEASE_ROOT}/linux-x64/cli_linux_x64.tar.gz`, command: 'agy', archiveEntry: 'antigravity', sha512: '3dee9f26e298156db673f6ce2a0f5dfed5b30006e04ceb9809c68070e7b717587b33a3da0f8bc2eda45af81a50bc8b14c82b28ae5832bcfe3e7fd49397117b31' };
 		case 'linux-arm64':
-			return { url: `${RELEASE_ROOT}/linux-arm/cli_linux_arm64.tar.gz`, command: 'agy', archiveEntry: 'antigravity', sha512: 'c2fac818b3c1bb224079df03a714ccba99728b6a3a41d86d247ab2feb8582a43840c5032f1c2b75e72667623d5503e7ffda2712c4f37b6ee19f99c3fcfb25bae' };
+			return { url: `${RELEASE_ROOT}/linux-arm/cli_linux_arm64.tar.gz`, command: 'agy', archiveEntry: 'antigravity', sha512: '23c193151499a4986fd5fa0d8132665cc8ffbad6cc0b3ff4fd53a2cb68abb76b149a992b836d53063443cd89add335f14d8134fb02abdcecbf6e1eaef6c53d33' };
 		default:
 			return undefined;
 	}
@@ -53,7 +53,7 @@ export type DownloadProgress = (received: number, total: number | undefined) => 
 export type FetchTo = (url: string, destination: string, onProgress?: DownloadProgress) => Promise<void>;
 
 /**
- * Keeps the Antigravity CLI in the agent's storage folder, one folder per version (`v1.5.3`).
+ * Keeps the Antigravity CLI in the agent's storage folder, one folder per version (`v1.5.16`).
  * Nothing is downloaded unless `install` is called.
  */
 export class AgyInstaller {

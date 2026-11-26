@@ -1,6 +1,10 @@
 # Changelog
 
+
 ## 1.2.1
+- New settings **`acpHub.proxy.url`** and **`acpHub.proxy.noProxy`**: the proxy every agent is given, such as `http://127.0.0.1:7897`. Empty sets no proxy variables at all, so a proxy the machine or the shell already sets is the one in charge; the default bypass list keeps `127.0.0.1` and `localhost` off the proxy, which is where the hub's own bridges answer. Both are machine settings and apply the next time the server starts.
+- Fix the command line the Google agent's hub is started with: an argument carrying a `cmd.exe` metacharacter (`&`, `|`, `%`, …) is now quoted, so a folder named `repo&calc` can no longer end the command and run another.
+- The Antigravity CLI is pinned to 1.5.16 (was 1.5.3), one version per platform as before, still checked against the SHA-512 Google publishes.
 
 - Fix **Manage sign-in** for Claude opening two browser tabs. The Claude login program opened a second sign-in page of its own next to the one the hub opens, and finishing in that tab did not give you the code to paste. Only the page that shows the code opens now.
 
